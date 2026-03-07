@@ -12,3 +12,8 @@ __pycache__/
 .DS_Store
 *.swp
 *.swo
+
+# Test private keys (regenerate with tests/gen_test_certs.sh)
+tests/*.key
+tests/ca.pem
+tests/ca.key
