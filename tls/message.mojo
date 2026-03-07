@@ -1,0 +1,429 @@
+# ============================================================================
+# tls/message.mojo — TLS 1.3 wire-format message builders and parsers
+# ============================================================================
+# Builders:
+#   build_client_hello(client_random, session_id, key_share_pub, sni) → bytes
+#   build_finished(verify_data)                                        → bytes
+#
+# Parsers:
+#   parse_handshake_msg(data, offset) → (HandshakeMsg, new_offset)
+#   parse_server_hello(body)          → ServerHello
+#   parse_server_hello_key_share(ext_bytes) → 32-byte x25519 public key
+#   parse_certificate_chain(body)     → List[List[UInt8]] (DER certs)
+#   parse_cert_verify(body)           → (sig_scheme: UInt16, sig_bytes)
+#   parse_finished(body)              → 32-byte verify_data
+# ============================================================================
+
+# ── TLS handshake message types ───────────────────────────────────────────────
+comptime HS_CLIENT_HELLO       : UInt8 = 0x01
+comptime HS_SERVER_HELLO       : UInt8 = 0x02
+comptime HS_NEW_SESSION_TICKET : UInt8 = 0x04
+comptime HS_ENCRYPTED_EXTS     : UInt8 = 0x08
+comptime HS_CERTIFICATE        : UInt8 = 0x0B
+comptime HS_CERT_VERIFY        : UInt8 = 0x0F
+comptime HS_FINISHED           : UInt8 = 0x14
+
+# ── TLS extension types ───────────────────────────────────────────────────────
+comptime EXT_SERVER_NAME         : UInt16 = 0x0000
+comptime EXT_SUPPORTED_GROUPS    : UInt16 = 0x000A
+comptime EXT_SIG_ALGS            : UInt16 = 0x000D
+comptime EXT_SUPPORTED_VERSIONS  : UInt16 = 0x002B
+comptime EXT_KEY_SHARE           : UInt16 = 0x0033
+
+# ── Named groups ──────────────────────────────────────────────────────────────
+comptime GROUP_X25519 : UInt16 = 0x001D
+
+# ── Cipher suites ─────────────────────────────────────────────────────────────
+comptime CIPHER_TLS_AES_128_GCM_SHA256       : UInt16 = 0x1301
+comptime CIPHER_TLS_AES_256_GCM_SHA384       : UInt16 = 0x1302
+comptime CIPHER_TLS_CHACHA20_POLY1305_SHA256 : UInt16 = 0x1303
+
+
+# ============================================================================
+# Parsed message structs
+# ============================================================================
+
+struct HandshakeMsg(Copyable, Movable):
+    var msg_type: UInt8
+    var body:     List[UInt8]
+
+    fn __init__(out self):
+        self.msg_type = 0
+        self.body = List[UInt8]()
+
+    fn __copyinit__(out self, copy: Self):
+        self.msg_type = copy.msg_type
+        self.body     = copy.body.copy()
+
+    fn __moveinit__(out self, deinit take: Self):
+        self.msg_type = take.msg_type
+        self.body     = take.body^
+
+
+struct ServerHello(Copyable, Movable):
+    var random:       List[UInt8]   # 32 bytes
+    var session_id:   List[UInt8]
+    var cipher_suite: UInt16
+    var extensions:   List[UInt8]   # raw extension bytes (after 2-byte length)
+
+    fn __init__(out self):
+        self.random       = List[UInt8]()
+        self.session_id   = List[UInt8]()
+        self.cipher_suite = 0
+        self.extensions   = List[UInt8]()
+
+    fn __copyinit__(out self, copy: Self):
+        self.random       = copy.random.copy()
+        self.session_id   = copy.session_id.copy()
+        self.cipher_suite = copy.cipher_suite
+        self.extensions   = copy.extensions.copy()
+
+    fn __moveinit__(out self, deinit take: Self):
+        self.random       = take.random^
+        self.session_id   = take.session_id^
+        self.cipher_suite = take.cipher_suite
+        self.extensions   = take.extensions^
+
+
+# ============================================================================
+# Internal helpers
+# ============================================================================
+
+fn _append_u8(mut out: List[UInt8], v: UInt8):
+    out.append(v)
+
+
+fn _append_u16be(mut out: List[UInt8], v: UInt16):
+    out.append(UInt8(v >> 8))
+    out.append(UInt8(v & 0xFF))
+
+
+fn _append_u24be(mut out: List[UInt8], v: Int):
+    out.append(UInt8((v >> 16) & 0xFF))
+    out.append(UInt8((v >> 8) & 0xFF))
+    out.append(UInt8(v & 0xFF))
+
+
+fn _append_bytes(mut out: List[UInt8], src: List[UInt8]):
+    for i in range(len(src)):
+        out.append(src[i])
+
+
+fn _read_u8(data: List[UInt8], off: Int) raises -> UInt8:
+    if off >= len(data):
+        raise Error("tls_msg: read_u8 out of bounds")
+    return data[off]
+
+
+fn _read_u16be(data: List[UInt8], off: Int) raises -> UInt16:
+    if off + 1 >= len(data):
+        raise Error("tls_msg: read_u16be out of bounds")
+    return (UInt16(data[off]) << 8) | UInt16(data[off + 1])
+
+
+fn _read_u24be(data: List[UInt8], off: Int) raises -> Int:
+    if off + 2 >= len(data):
+        raise Error("tls_msg: read_u24be out of bounds")
+    return (Int(data[off]) << 16) | (Int(data[off + 1]) << 8) | Int(data[off + 2])
+
+
+fn _slice(data: List[UInt8], start: Int, end: Int) raises -> List[UInt8]:
+    if end > len(data) or start > end:
+        raise Error("tls_msg: slice out of bounds start=" + String(start) + " end=" + String(end) + " len=" + String(len(data)))
+    var out = List[UInt8](capacity=end - start)
+    for i in range(start, end):
+        out.append(data[i])
+    return out^
+
+
+# ============================================================================
+# build_client_hello
+# ============================================================================
+
+fn build_client_hello(
+    client_random: List[UInt8],
+    session_id:    List[UInt8],
+    key_share_pub: List[UInt8],
+    sni:           String,
+) -> List[UInt8]:
+    """Build a TLS 1.3 ClientHello handshake message.
+
+    Returns raw Handshake bytes (type=0x01 + 3-byte length + body).
+    """
+    var body = List[UInt8](capacity=256)
+
+    # legacy_version = 0x0303
+    _append_u16be(body, 0x0303)
+
+    # random (32 bytes)
+    _append_bytes(body, client_random)
+
+    # session_id
+    _append_u8(body, UInt8(len(session_id)))
+    _append_bytes(body, session_id)
+
+    # cipher_suites: TLS 1.3 suites (preferred) + TLS 1.2 ECDHE+AEAD suites
+    _append_u16be(body, 14)  # length = 7 * 2 bytes
+    _append_u16be(body, CIPHER_TLS_AES_128_GCM_SHA256)        # 0x1301 TLS 1.3
+    _append_u16be(body, CIPHER_TLS_CHACHA20_POLY1305_SHA256)  # 0x1303 TLS 1.3
+    _append_u16be(body, CIPHER_TLS_AES_256_GCM_SHA384)        # 0x1302 TLS 1.3
+    _append_u16be(body, 0xC02F)  # TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+    _append_u16be(body, 0xC030)  # TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+    _append_u16be(body, 0xC02B)  # TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+    _append_u16be(body, 0xC02C)  # TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+
+    # compression_methods: [null]
+    _append_u8(body, 1)   # count
+    _append_u8(body, 0)   # null compression
+
+    # ── Build extensions ─────────────────────────────────────────────────────
+
+    var exts = List[UInt8](capacity=128)
+
+    # server_name (SNI)
+    var sni_bytes_span = sni.as_bytes()
+    var sni_bytes = List[UInt8](capacity=len(sni_bytes_span))
+    for i in range(len(sni_bytes_span)):
+        sni_bytes.append(sni_bytes_span[i])
+    var sni_name_len = len(sni_bytes)
+    # ServerNameList = type(1) + len(2) + name
+    var sni_list_len = 1 + 2 + sni_name_len
+    var sni_ext_data_len = 2 + sni_list_len
+    _append_u16be(exts, EXT_SERVER_NAME)
+    _append_u16be(exts, UInt16(sni_ext_data_len))
+    _append_u16be(exts, UInt16(sni_list_len))     # ServerNameList length
+    _append_u8(exts, 0)                            # name_type = host_name
+    _append_u16be(exts, UInt16(sni_name_len))
+    _append_bytes(exts, sni_bytes)
+
+    # supported_versions: TLS 1.3 (0x0304) + TLS 1.2 (0x0303)
+    _append_u16be(exts, EXT_SUPPORTED_VERSIONS)
+    _append_u16be(exts, 5)   # ext data length = 1 + 2*2
+    _append_u8(exts, 4)      # versions list length in bytes
+    _append_u16be(exts, 0x0304)  # TLS 1.3
+    _append_u16be(exts, 0x0303)  # TLS 1.2
+
+    # supported_groups: x25519, P-256 (secp256r1)
+    # P-256 is needed for TLS 1.2 ECDHE with ECDSA certs; P-384 omitted
+    # because TLS 1.2 ECDHE for P-384 is not implemented in connection12.mojo
+    _append_u16be(exts, EXT_SUPPORTED_GROUPS)
+    _append_u16be(exts, 6)    # ext data length = 2 + 2*2
+    _append_u16be(exts, 4)    # group list length in bytes
+    _append_u16be(exts, GROUP_X25519)  # 0x001D — TLS 1.3 preferred
+    _append_u16be(exts, 0x0017)        # secp256r1 (P-256) — TLS 1.2 ECDHE
+
+    # signature_algorithms: RSA-PSS + ECDSA P-256/P-384 + RSA-PKCS1
+    _append_u16be(exts, EXT_SIG_ALGS)
+    _append_u16be(exts, 14)  # ext data length = 2 + 6*2
+    _append_u16be(exts, 12)  # sig alg list length in bytes (6 algs)
+    _append_u16be(exts, 0x0403)  # ecdsa_secp256r1_sha256
+    _append_u16be(exts, 0x0502)  # ecdsa_secp384r1_sha384
+    _append_u16be(exts, 0x0401)  # rsa_pkcs1_sha256
+    _append_u16be(exts, 0x0804)  # rsa_pss_rsae_sha256
+    _append_u16be(exts, 0x0501)  # rsa_pkcs1_sha384
+    _append_u16be(exts, 0x0601)  # rsa_pkcs1_sha512
+
+    # key_share: x25519 public key
+    var ks_entry_len = 2 + 2 + 32  # group + key_len + key
+    var ks_list_len  = ks_entry_len
+    _append_u16be(exts, EXT_KEY_SHARE)
+    _append_u16be(exts, UInt16(2 + ks_list_len))  # ext data = 2-byte list length + entries
+    _append_u16be(exts, UInt16(ks_list_len))
+    _append_u16be(exts, GROUP_X25519)
+    _append_u16be(exts, 32)   # key length
+    _append_bytes(exts, key_share_pub)
+
+    # Append extensions length + extensions to body
+    _append_u16be(body, UInt16(len(exts)))
+    _append_bytes(body, exts)
+
+    # Wrap in Handshake header: type(1) + length(3)
+    var out = List[UInt8](capacity=4 + len(body))
+    _append_u8(out, HS_CLIENT_HELLO)
+    _append_u24be(out, len(body))
+    _append_bytes(out, body)
+    return out^
+
+
+# ============================================================================
+# build_finished
+# ============================================================================
+
+fn build_finished(verify_data: List[UInt8]) -> List[UInt8]:
+    """Build TLS 1.3 Finished handshake message. verify_data must be 32 bytes."""
+    var out = List[UInt8](capacity=4 + len(verify_data))
+    _append_u8(out, HS_FINISHED)
+    _append_u24be(out, len(verify_data))
+    _append_bytes(out, verify_data)
+    return out^
+
+
+# ============================================================================
+# parse_handshake_msg
+# ============================================================================
+
+fn parse_handshake_msg(data: List[UInt8], offset: Int) raises -> Tuple[HandshakeMsg, Int]:
+    """Parse one handshake message. Returns (msg, next_offset)."""
+    if offset + 4 > len(data):
+        raise Error("parse_handshake_msg: not enough bytes for header")
+    var msg_type = data[offset]
+    var body_len = _read_u24be(data, offset + 1)
+    var body_start = offset + 4
+    var body_end = body_start + body_len
+    if body_end > len(data):
+        raise Error("parse_handshake_msg: body truncated")
+    var msg = HandshakeMsg()
+    msg.msg_type = msg_type
+    msg.body     = _slice(data, body_start, body_end)
+    return (msg^, body_end)
+
+
+# ============================================================================
+# parse_server_hello
+# ============================================================================
+
+fn parse_server_hello(body: List[UInt8]) raises -> ServerHello:
+    """Parse ServerHello body. Returns ServerHello struct."""
+    var off = 0
+    if off + 2 > len(body):
+        raise Error("parse_server_hello: too short for legacy_version")
+    off += 2  # skip legacy_version
+
+    # random (32 bytes)
+    if off + 32 > len(body):
+        raise Error("parse_server_hello: too short for random")
+    var rand = _slice(body, off, off + 32)
+    off += 32
+
+    # session_id
+    if off >= len(body):
+        raise Error("parse_server_hello: too short for session_id_len")
+    var sid_len = Int(body[off])
+    off += 1
+    if off + sid_len > len(body):
+        raise Error("parse_server_hello: session_id truncated")
+    var sid = _slice(body, off, off + sid_len)
+    off += sid_len
+
+    # cipher_suite
+    if off + 2 > len(body):
+        raise Error("parse_server_hello: too short for cipher_suite")
+    var cs = _read_u16be(body, off)
+    off += 2
+
+    # compression method (skip)
+    off += 1
+
+    # extensions
+    var ext_bytes = List[UInt8]()
+    if off + 2 <= len(body):
+        var ext_len = Int(_read_u16be(body, off))
+        off += 2
+        if off + ext_len <= len(body):
+            ext_bytes = _slice(body, off, off + ext_len)
+
+    var sh = ServerHello()
+    sh.random       = rand^
+    sh.session_id   = sid^
+    sh.cipher_suite = cs
+    sh.extensions   = ext_bytes^
+    return sh^
+
+
+# ============================================================================
+# parse_server_hello_key_share
+# ============================================================================
+
+fn parse_server_hello_key_share(ext_bytes: List[UInt8]) raises -> List[UInt8]:
+    """Find key_share extension and return 32-byte x25519 server public key."""
+    var off = 0
+    while off + 4 <= len(ext_bytes):
+        var ext_type = _read_u16be(ext_bytes, off)
+        var ext_len  = Int(_read_u16be(ext_bytes, off + 2))
+        off += 4
+        if off + ext_len > len(ext_bytes):
+            raise Error("parse_server_hello_key_share: extension truncated")
+        if ext_type == EXT_KEY_SHARE:
+            # KeyShare: ServerHello has a single KeyShareEntry
+            # group(2) + key_len(2) + key_bytes
+            var ext_off = off
+            if ext_off + 4 > off + ext_len:
+                raise Error("parse_server_hello_key_share: key_share too short")
+            var group = _read_u16be(ext_bytes, ext_off)
+            if group != GROUP_X25519:
+                raise Error("parse_server_hello_key_share: unsupported group " + String(Int(group)))
+            var key_len = Int(_read_u16be(ext_bytes, ext_off + 2))
+            ext_off += 4
+            if key_len != 32:
+                raise Error("parse_server_hello_key_share: expected 32-byte key, got " + String(key_len))
+            return _slice(ext_bytes, ext_off, ext_off + 32)
+        off += ext_len
+
+    raise Error("parse_server_hello_key_share: key_share extension not found")
+
+
+# ============================================================================
+# parse_certificate_chain (TLS 1.3)
+# ============================================================================
+
+fn parse_certificate_chain(body: List[UInt8]) raises -> List[List[UInt8]]:
+    """Parse TLS 1.3 Certificate message body → list of DER cert bytes."""
+    var off = 0
+
+    # certificate_request_context (1-byte length + bytes)
+    if off >= len(body):
+        raise Error("parse_certificate_chain: body empty")
+    var ctx_len = Int(body[off])
+    off += 1 + ctx_len
+
+    # CertificateList: 3-byte length
+    if off + 3 > len(body):
+        raise Error("parse_certificate_chain: no cert_list length")
+    var list_len = _read_u24be(body, off)
+    off += 3
+
+    var list_end = off + list_len
+    var certs = List[List[UInt8]]()
+
+    while off + 3 <= list_end:
+        var cert_len = _read_u24be(body, off)
+        off += 3
+        if off + cert_len > list_end:
+            raise Error("parse_certificate_chain: cert data truncated")
+        var cert_der = _slice(body, off, off + cert_len)
+        certs.append(cert_der^)
+        off += cert_len
+
+        # Skip CertificateEntry extensions (2-byte length + bytes)
+        if off + 2 <= list_end:
+            var ext_len = Int(_read_u16be(body, off))
+            off += 2 + ext_len
+
+    return certs^
+
+
+# ============================================================================
+# parse_cert_verify
+# ============================================================================
+
+fn parse_cert_verify(body: List[UInt8]) raises -> Tuple[UInt16, List[UInt8]]:
+    """Parse CertificateVerify body → (sig_scheme, sig_bytes)."""
+    if len(body) < 4:
+        raise Error("parse_cert_verify: too short")
+    var scheme = _read_u16be(body, 0)
+    var sig_len = Int(_read_u16be(body, 2))
+    if 4 + sig_len > len(body):
+        raise Error("parse_cert_verify: signature truncated")
+    var sig = _slice(body, 4, 4 + sig_len)
+    return (scheme, sig^)
+
+
+# ============================================================================
+# parse_finished
+# ============================================================================
+
+fn parse_finished(body: List[UInt8]) raises -> List[UInt8]:
+    """Parse Finished body → 32-byte (SHA-256) or 48-byte (SHA-384) verify_data."""
+    if len(body) != 32 and len(body) != 48:
+        raise Error("parse_finished: expected 32 or 48 bytes, got " + String(len(body)))
+    return body.copy()

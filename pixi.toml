@@ -1,0 +1,43 @@
+[workspace]
+channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+name = "tls"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+test-hash = "mojo run -I . tests/test_hash.mojo"
+test-hmac = "mojo run -I . tests/test_hmac.mojo"
+test-hkdf = "mojo run -I . tests/test_hkdf.mojo"
+test-hkdf-sha384 = "mojo run -I . tests/test_hkdf_sha384.mojo"
+test-p384 = "mojo run -I . tests/test_p384.mojo"
+test-aes = "mojo run -I . tests/test_aes.mojo"
+test-gcm = "mojo run -I . tests/test_gcm.mojo"
+test-chacha20 = "mojo run -I . tests/test_chacha20.mojo"
+test-poly1305 = "mojo run -I . tests/test_poly1305.mojo"
+test-bigint = "mojo run -I . tests/test_bigint.mojo"
+test-rsa = "mojo run -I . tests/test_rsa.mojo"
+test-curve25519 = "mojo run -I . tests/test_curve25519.mojo"
+test-p256 = "mojo run -I . tests/test_p256.mojo"
+test-asn1 = "mojo run -I . tests/test_asn1.mojo"
+test-cert = "mojo run -I . tests/test_cert.mojo"
+test-cert-sha384 = "mojo run -I . tests/test_cert_sha384.mojo"
+test-record = "mojo run -I . tests/test_record.mojo"
+test-handshake = "mojo run -I . tests/test_handshake.mojo"
+test-random = "mojo run -I . tests/test_random.mojo"
+test-base64 = "mojo run -I . tests/test_base64.mojo"
+test-pem = "mojo run -I . tests/test_pem.mojo"
+test-cert-hostname = "mojo run -I . tests/test_cert_hostname.mojo"
+test-cert-chain = "mojo run -I . tests/test_cert_chain.mojo"
+test-message = "mojo run -I . tests/test_message.mojo"
+test-connection = "mojo run -I . tests/test_connection.mojo"
+test-socket = "mojo run -I . tests/test_socket.mojo"
+test-alert = "mojo run -I . tests/test_alert.mojo"
+test-sha1 = "mojo run -I . tests/test_sha1.mojo"
+test-prf = "mojo run -I . tests/test_prf.mojo"
+test-message12 = "mojo run -I . tests/test_message12.mojo"
+test-record12 = "mojo run -I . tests/test_record12.mojo"
+test-connection12 = "mojo run -I . tests/test_connection12.mojo"
+format-hash = "mblack crypto/hash.mojo tests/test_hash.mojo"
+
+[dependencies]
+mojo = ">=0.26.1"

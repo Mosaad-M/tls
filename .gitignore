@@ -1,0 +1,14 @@
+# Pixi environment
+.pixi/
+
+# Build artifacts
+.build/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+*.swp
+*.swo
