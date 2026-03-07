@@ -13,7 +13,6 @@ __pycache__/
 *.swp
 *.swo
 
-# Test private keys (regenerate with tests/gen_test_certs.sh)
+# Test certificates and keys (regenerate with tests/gen_test_certs.sh)
 tests/*.key
-tests/ca.pem
-tests/ca.key
+tests/*.pem
