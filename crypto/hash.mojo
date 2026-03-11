@@ -1,5 +1,5 @@
 # ============================================================================
-# crypto/hash.mojo — SHA-256 and SHA-384 (FIPS 180-4)
+# crypto/hash.mojo — SHA-256, SHA-384, and SHA-512 (FIPS 180-4)
 # ============================================================================
 #
 # SHA-256: 32-byte digest, 64-byte blocks, UInt32 words, 64 rounds
@@ -407,5 +407,118 @@ struct SHA384(Copyable, Movable):
 fn sha384(data: List[UInt8]) -> List[UInt8]:
     """One-shot SHA-384. Returns 48-byte digest."""
     var h = SHA384()
+    h.update(data)
+    return h.finalize()
+
+
+# ============================================================================
+# SHA-512
+# ============================================================================
+# Same compression function as SHA-384 (_compress384), different IVs,
+# and outputs all 8 UInt64 state words (64 bytes instead of 6/48).
+
+
+struct SHA512(Copyable, Movable):
+    """Streaming SHA-512 hash (FIPS 180-4).
+
+    Usage:
+        var h = SHA512()
+        h.update(chunk1)
+        var digest = h.finalize()   # 64 bytes; h is consumed after this
+    """
+
+    var _h: InlineArray[UInt64, 8]
+    var _buf: List[UInt8]
+    var _total: UInt64
+
+    fn __init__(out self):
+        # SHA-512 initial hash values (FIPS 180-4 §5.3.5)
+        # Fractional parts of square roots of 9th–16th primes
+        self._h = InlineArray[UInt64, 8](fill=UInt64(0))
+        self._h[0] = 0x6A09E667F3BCC908; self._h[1] = 0xBB67AE8584CAA73B
+        self._h[2] = 0x3C6EF372FE94F82B; self._h[3] = 0xA54FF53A5F1D36F1
+        self._h[4] = 0x510E527FADE682D1; self._h[5] = 0x9B05688C2B3E6C1F
+        self._h[6] = 0x1F83D9ABFB41BD6B; self._h[7] = 0x5BE0CD19137E2179
+        self._buf = List[UInt8](capacity=128)
+        self._total = 0
+
+    fn __copyinit__(out self, copy: Self):
+        self._h = copy._h.copy()
+        self._buf = copy._buf.copy()
+        self._total = copy._total
+
+    fn __moveinit__(out self, deinit take: Self):
+        self._h = take._h^
+        self._buf = take._buf^
+        self._total = take._total
+
+    fn update(mut self, data: List[UInt8]):
+        """Feed bytes into the hash."""
+        self._total += UInt64(len(data))
+        var pos = 0
+        var remaining = len(data)
+
+        if len(self._buf) > 0:
+            var need = 128 - len(self._buf)
+            var take_n = need if remaining >= need else remaining
+            for i in range(take_n):
+                self._buf.append(data[pos + i])
+            pos += take_n
+            remaining -= take_n
+            if len(self._buf) == 128:
+                var blk = self._buf.copy()
+                self._buf.clear()
+                _compress384(self._h, blk)
+
+        while remaining >= 128:
+            var block = List[UInt8](capacity=128)
+            for i in range(128):
+                block.append(data[pos + i])
+            _compress384(self._h, block)
+            pos += 128
+            remaining -= 128
+
+        for i in range(remaining):
+            self._buf.append(data[pos + i])
+
+    fn finalize(mut self) -> List[UInt8]:
+        """Pad, compress, and return 64-byte digest. State is consumed."""
+        var bit_len = self._total * 8
+
+        self._buf.append(0x80)
+        while len(self._buf) % 128 != 112:
+            self._buf.append(0x00)
+
+        # 128-bit big-endian length (high 64 bits always 0 for <2^64 byte messages)
+        for _ in range(8):
+            self._buf.append(0x00)
+        for i in range(7, -1, -1):
+            self._buf.append(UInt8((bit_len >> (UInt64(i) * 8)) & 0xFF))
+
+        var n_blocks = len(self._buf) // 128
+        for b in range(n_blocks):
+            var block = List[UInt8](capacity=128)
+            for i in range(128):
+                block.append(self._buf[b * 128 + i])
+            _compress384(self._h, block)
+
+        # SHA-512 outputs all 8 words (64 bytes); SHA-384 outputs only 6
+        var out = List[UInt8](capacity=64)
+        for i in range(8):
+            var word = self._h[i]
+            out.append(UInt8(word >> 56))
+            out.append(UInt8((word >> 48) & 0xFF))
+            out.append(UInt8((word >> 40) & 0xFF))
+            out.append(UInt8((word >> 32) & 0xFF))
+            out.append(UInt8((word >> 24) & 0xFF))
+            out.append(UInt8((word >> 16) & 0xFF))
+            out.append(UInt8((word >> 8) & 0xFF))
+            out.append(UInt8(word & 0xFF))
+        return out^
+
+
+fn sha512(data: List[UInt8]) -> List[UInt8]:
+    """One-shot SHA-512. Returns 64-byte digest."""
+    var h = SHA512()
     h.update(data)
     return h.finalize()

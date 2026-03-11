@@ -6,6 +6,7 @@ version = "0.1.0"
 
 [tasks]
 test-hash = "mojo run -I . tests/test_hash.mojo"
+test-ed25519 = "mojo run -I . tests/test_ed25519.mojo"
 test-hmac = "mojo run -I . tests/test_hmac.mojo"
 test-hkdf = "mojo run -I . tests/test_hkdf.mojo"
 test-hkdf-sha384 = "mojo run -I . tests/test_hkdf_sha384.mojo"

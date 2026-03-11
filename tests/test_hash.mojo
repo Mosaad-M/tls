@@ -2,7 +2,7 @@
 # test_hash.mojo — SHA-256 / SHA-384 known-answer tests
 # ============================================================================
 
-from crypto.hash import sha256, sha384, SHA256, SHA384
+from crypto.hash import sha256, sha384, sha512, SHA256, SHA384, SHA512
 
 
 # ============================================================================
@@ -225,6 +225,69 @@ fn test_sha384_streaming() raises:
 
 
 # ============================================================================
+# SHA-512 Tests (FIPS 180-4 known-answer vectors)
+# ============================================================================
+
+
+fn test_sha512_empty() raises:
+    var result = sha512(List[UInt8]())
+    assert_hex_eq(
+        result,
+        "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e",
+        "sha512_empty",
+    )
+
+
+fn test_sha512_abc() raises:
+    var data = str_to_bytes("abc")
+    var result = sha512(data)
+    assert_hex_eq(
+        result,
+        "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
+        "sha512_abc",
+    )
+
+
+fn test_sha512_448bit() raises:
+    var data = str_to_bytes(
+        "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+    )
+    var result = sha512(data)
+    assert_hex_eq(
+        result,
+        "204a8fc6dda82f0a0ced7beb8e08a41657c16ef468b228a8279be331a703c33596fd15c13b1b07f9aa1d3bea57789ca031ad85c7a71dd70354ec631238ca3445",
+        "sha512_448bit",
+    )
+
+
+fn test_sha512_896bit() raises:
+    var data = str_to_bytes(
+        "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"
+    )
+    var result = sha512(data)
+    assert_hex_eq(
+        result,
+        "8e959b75dae313da8cf4f72814fc143f8f7779c6eb9f7fa17299aeadb6889018501d289e4900f7e4331b99dec4b5433ac7d329eeb6dd26545e96e55b874be909",
+        "sha512_896bit",
+    )
+
+
+fn test_sha512_streaming() raises:
+    var h = SHA512()
+    var data = str_to_bytes("abc")
+    for i in range(len(data)):
+        var chunk = List[UInt8](capacity=1)
+        chunk.append(data[i])
+        h.update(chunk)
+    var result = h.finalize()
+    assert_hex_eq(
+        result,
+        "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
+        "sha512_streaming",
+    )
+
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -233,7 +296,7 @@ fn main() raises:
     var passed = 0
     var failed = 0
 
-    print("=== SHA-256 / SHA-384 Tests ===")
+    print("=== SHA-256 / SHA-384 / SHA-512 Tests ===")
     print()
 
     run_test("SHA-256 empty string", passed, failed, test_sha256_empty)
@@ -250,6 +313,12 @@ fn main() raises:
     run_test("SHA-384 896-bit message", passed, failed, test_sha384_896bit)
     run_test("SHA-384 1,000,000 x 'a'", passed, failed, test_sha384_one_million_a)
     run_test("SHA-384 streaming (1-byte)", passed, failed, test_sha384_streaming)
+
+    run_test("SHA-512 empty string", passed, failed, test_sha512_empty)
+    run_test("SHA-512 'abc'", passed, failed, test_sha512_abc)
+    run_test("SHA-512 448-bit message", passed, failed, test_sha512_448bit)
+    run_test("SHA-512 896-bit message", passed, failed, test_sha512_896bit)
+    run_test("SHA-512 streaming (1-byte)", passed, failed, test_sha512_streaming)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")
