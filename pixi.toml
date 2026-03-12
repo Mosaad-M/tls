@@ -40,5 +40,17 @@ test-record12 = "mojo run -I . tests/test_record12.mojo"
 test-connection12 = "mojo run -I . tests/test_connection12.mojo"
 format-hash = "mblack crypto/hash.mojo tests/test_hash.mojo"
 
+# Composite task — excludes test-connection, test-connection12, test-socket
+# (those require local cert files and a running Python TLS server)
+test = { depends-on = [
+  "test-hash", "test-hmac", "test-hkdf", "test-hkdf-sha384",
+  "test-aes", "test-gcm", "test-chacha20", "test-poly1305",
+  "test-bigint", "test-rsa", "test-curve25519", "test-p256", "test-p384",
+  "test-asn1", "test-cert", "test-cert-sha384", "test-cert-hostname", "test-cert-chain",
+  "test-base64", "test-pem", "test-random", "test-sha1", "test-ed25519",
+  "test-record", "test-record12", "test-handshake",
+  "test-message", "test-message12", "test-prf", "test-alert"
+] }
+
 [dependencies]
 mojo = ">=0.26.1"
