@@ -53,4 +53,4 @@ test = { depends-on = [
 ] }
 
 [dependencies]
-mojo = ">=0.26.1"
+mojo = ">=0.26.2"
