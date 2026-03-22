@@ -15,8 +15,8 @@
 #       def close(mut self) raises
 # ============================================================================
 
-from ffi import external_call
-from memory.unsafe_pointer import alloc
+from std.ffi import external_call
+from std.memory.unsafe_pointer import alloc
 from crypto.cert import X509Cert, cert_parse
 from crypto.pem import pem_decode
 from crypto.hash import SHA256, SHA384

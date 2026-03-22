@@ -9,7 +9,7 @@
 #   sha256WithRSAEncryption (PKCS#1 v1.5) and ecdsa-with-SHA256 (P-256)
 # ============================================================================
 
-from ffi import external_call
+from std.ffi import external_call
 
 from crypto.asn1 import (
     DerElem, der_parse, der_raw_bytes, der_children, der_bit_str, der_oid_eq,

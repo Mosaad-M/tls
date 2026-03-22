@@ -10,7 +10,7 @@
 # Scalar multiply: constant-time Montgomery ladder
 # ============================================================================
 
-from collections import InlineArray
+from std.collections import InlineArray
 
 # ============================================================================
 # Field element

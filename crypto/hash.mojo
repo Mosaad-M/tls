@@ -8,7 +8,7 @@
 # No side-channel concerns: hash functions have no secret-dependent branches.
 # ============================================================================
 
-from collections import InlineArray
+from std.collections import InlineArray
 
 
 # ============================================================================

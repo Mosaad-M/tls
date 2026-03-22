@@ -5,8 +5,8 @@
 # Uses the same local Python TLS 1.3 server infrastructure as test_connection.
 # ============================================================================
 
-from ffi import external_call
-from memory.unsafe_pointer import alloc
+from std.ffi import external_call
+from std.memory.unsafe_pointer import alloc
 from crypto.cert import X509Cert, cert_parse
 from crypto.record import CIPHER_AES_128_GCM
 from tls.socket import TlsSocket, load_system_ca_bundle

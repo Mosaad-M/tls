@@ -12,7 +12,7 @@
 # implementation. Documented limitation — out of scope for initial version.
 # ============================================================================
 
-from collections import InlineArray
+from std.collections import InlineArray
 
 
 # ============================================================================

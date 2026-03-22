@@ -5,8 +5,8 @@
 # Reuses the same ECDSA P-256 test certificates as test_connection.mojo.
 # ============================================================================
 
-from ffi import external_call
-from memory.unsafe_pointer import alloc
+from std.ffi import external_call
+from std.memory.unsafe_pointer import alloc
 from crypto.cert import X509Cert, cert_parse
 from tls.connection12 import tls12_client_handshake, TlsKeys12
 from tls.socket import TlsSocket

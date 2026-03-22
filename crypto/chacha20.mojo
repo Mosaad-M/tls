@@ -14,7 +14,7 @@
 #                c += d; b ^= c; b <<<= 7
 # ============================================================================
 
-from collections import InlineArray
+from std.collections import InlineArray
 
 
 def _rotl32(v: UInt32, n: Int) -> UInt32:

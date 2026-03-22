@@ -8,8 +8,8 @@
 # TlsKeys struct holds all post-handshake keying material.
 # ============================================================================
 
-from ffi import external_call
-from memory.unsafe_pointer import alloc
+from std.ffi import external_call
+from std.memory.unsafe_pointer import alloc
 from crypto.hash import SHA256, SHA384, sha256, sha384
 from crypto.handshake import (
     tls13_early_secret, tls13_handshake_secret, tls13_master_secret,

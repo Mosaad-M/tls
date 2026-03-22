@@ -10,7 +10,7 @@
 # authentication). No secret-dependent branches.
 # ============================================================================
 
-from collections import InlineArray
+from std.collections import InlineArray
 
 
 @always_inline

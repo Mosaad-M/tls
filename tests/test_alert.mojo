@@ -5,8 +5,8 @@
 # Output capture uses a temp file to avoid needing global mutable state.
 # ============================================================================
 
-from ffi import external_call
-from memory.unsafe_pointer import alloc
+from std.ffi import external_call
+from std.memory.unsafe_pointer import alloc
 from tls.connection import (
     tls_send_alert,
     tls_handle_incoming_alert,

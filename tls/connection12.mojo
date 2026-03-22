@@ -17,7 +17,7 @@
 #   0xC02C  TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 (prf_sha384, key_len=32)
 # ============================================================================
 
-from ffi import external_call
+from std.ffi import external_call
 from crypto.hash import SHA256, SHA384, sha256, sha384
 from crypto.prf import (
     tls12_master_secret, tls12_key_block, tls12_key_block_sha384,

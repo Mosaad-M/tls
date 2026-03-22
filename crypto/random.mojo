@@ -6,8 +6,8 @@
 #       Reads n cryptographically-secure random bytes from /dev/urandom.
 # ============================================================================
 
-from ffi import external_call
-from memory.unsafe_pointer import alloc
+from std.ffi import external_call
+from std.memory.unsafe_pointer import alloc
 
 
 def csprng_bytes(n: Int) raises -> List[UInt8]:
