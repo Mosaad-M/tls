@@ -17,41 +17,41 @@ from collections import InlineArray
 
 
 @always_inline
-fn _rotr32(x: UInt32, n: UInt32) -> UInt32:
+def _rotr32(x: UInt32, n: UInt32) -> UInt32:
     return (x >> n) | (x << (32 - n))
 
 
 @always_inline
-fn _ch32(e: UInt32, f: UInt32, g: UInt32) -> UInt32:
+def _ch32(e: UInt32, f: UInt32, g: UInt32) -> UInt32:
     return (e & f) ^ (~e & g)
 
 
 @always_inline
-fn _maj32(a: UInt32, b: UInt32, c: UInt32) -> UInt32:
+def _maj32(a: UInt32, b: UInt32, c: UInt32) -> UInt32:
     return (a & b) ^ (a & c) ^ (b & c)
 
 
 @always_inline
-fn _Sigma0_32(x: UInt32) -> UInt32:
+def _Sigma0_32(x: UInt32) -> UInt32:
     return _rotr32(x, 2) ^ _rotr32(x, 13) ^ _rotr32(x, 22)
 
 
 @always_inline
-fn _Sigma1_32(x: UInt32) -> UInt32:
+def _Sigma1_32(x: UInt32) -> UInt32:
     return _rotr32(x, 6) ^ _rotr32(x, 11) ^ _rotr32(x, 25)
 
 
 @always_inline
-fn _sigma0_32(x: UInt32) -> UInt32:
+def _sigma0_32(x: UInt32) -> UInt32:
     return _rotr32(x, 7) ^ _rotr32(x, 18) ^ (x >> 3)
 
 
 @always_inline
-fn _sigma1_32(x: UInt32) -> UInt32:
+def _sigma1_32(x: UInt32) -> UInt32:
     return _rotr32(x, 17) ^ _rotr32(x, 19) ^ (x >> 10)
 
 
-fn _compress256(mut h: InlineArray[UInt32, 8], block: List[UInt8]):
+def _compress256(mut h: InlineArray[UInt32, 8], block: List[UInt8]):
     """Run the SHA-256 compression function on one 64-byte block."""
     # Round constants: first 32 bits of fractional cube roots of first 64 primes
     var k = InlineArray[UInt32, 64](fill=UInt32(0))
@@ -111,7 +111,7 @@ struct SHA256(Copyable, Movable):
     var _buf: List[UInt8]
     var _total: UInt64
 
-    fn __init__(out self):
+    def __init__(out self):
         self._h = InlineArray[UInt32, 8](fill=UInt32(0))
         self._h[0] = 0x6A09E667; self._h[1] = 0xBB67AE85
         self._h[2] = 0x3C6EF372; self._h[3] = 0xA54FF53A
@@ -120,17 +120,17 @@ struct SHA256(Copyable, Movable):
         self._buf = List[UInt8](capacity=64)
         self._total = 0
 
-    fn __copyinit__(out self, copy: Self):
+    def __copyinit__(out self, copy: Self):
         self._h = copy._h.copy()
         self._buf = copy._buf.copy()
         self._total = copy._total
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self._h = take._h^
         self._buf = take._buf^
         self._total = take._total
 
-    fn update(mut self, data: List[UInt8]):
+    def update(mut self, data: List[UInt8]):
         """Feed bytes into the hash."""
         self._total += UInt64(len(data))
         var pos = 0
@@ -159,7 +159,7 @@ struct SHA256(Copyable, Movable):
         for i in range(remaining):
             self._buf.append(data[pos + i])
 
-    fn finalize(mut self) -> List[UInt8]:
+    def finalize(mut self) -> List[UInt8]:
         """Pad, compress, and return 32-byte digest. State is consumed."""
         var bit_len = self._total * 8
 
@@ -186,7 +186,7 @@ struct SHA256(Copyable, Movable):
         return out^
 
 
-fn sha256(data: List[UInt8]) -> List[UInt8]:
+def sha256(data: List[UInt8]) -> List[UInt8]:
     """One-shot SHA-256. Returns 32-byte digest."""
     var h = SHA256()
     h.update(data)
@@ -199,41 +199,41 @@ fn sha256(data: List[UInt8]) -> List[UInt8]:
 
 
 @always_inline
-fn _rotr64(x: UInt64, n: UInt64) -> UInt64:
+def _rotr64(x: UInt64, n: UInt64) -> UInt64:
     return (x >> n) | (x << (64 - n))
 
 
 @always_inline
-fn _ch64(e: UInt64, f: UInt64, g: UInt64) -> UInt64:
+def _ch64(e: UInt64, f: UInt64, g: UInt64) -> UInt64:
     return (e & f) ^ (~e & g)
 
 
 @always_inline
-fn _maj64(a: UInt64, b: UInt64, c: UInt64) -> UInt64:
+def _maj64(a: UInt64, b: UInt64, c: UInt64) -> UInt64:
     return (a & b) ^ (a & c) ^ (b & c)
 
 
 @always_inline
-fn _Sigma0_64(x: UInt64) -> UInt64:
+def _Sigma0_64(x: UInt64) -> UInt64:
     return _rotr64(x, 28) ^ _rotr64(x, 34) ^ _rotr64(x, 39)
 
 
 @always_inline
-fn _Sigma1_64(x: UInt64) -> UInt64:
+def _Sigma1_64(x: UInt64) -> UInt64:
     return _rotr64(x, 14) ^ _rotr64(x, 18) ^ _rotr64(x, 41)
 
 
 @always_inline
-fn _sigma0_64(x: UInt64) -> UInt64:
+def _sigma0_64(x: UInt64) -> UInt64:
     return _rotr64(x, 1) ^ _rotr64(x, 8) ^ (x >> 7)
 
 
 @always_inline
-fn _sigma1_64(x: UInt64) -> UInt64:
+def _sigma1_64(x: UInt64) -> UInt64:
     return _rotr64(x, 19) ^ _rotr64(x, 61) ^ (x >> 6)
 
 
-fn _compress384(mut h: InlineArray[UInt64, 8], block: List[UInt8]):
+def _compress384(mut h: InlineArray[UInt64, 8], block: List[UInt8]):
     """Run the SHA-384/512 compression function on one 128-byte block."""
     # Round constants: first 64 bits of fractional cube roots of first 80 primes
     var k = InlineArray[UInt64, 80](fill=UInt64(0))
@@ -320,7 +320,7 @@ struct SHA384(Copyable, Movable):
     var _buf: List[UInt8]
     var _total: UInt64
 
-    fn __init__(out self):
+    def __init__(out self):
         self._h = InlineArray[UInt64, 8](fill=UInt64(0))
         self._h[0] = 0xCBBB9D5DC1059ED8; self._h[1] = 0x629A292A367CD507
         self._h[2] = 0x9159015A3070DD17; self._h[3] = 0x152FECD8F70E5939
@@ -329,17 +329,17 @@ struct SHA384(Copyable, Movable):
         self._buf = List[UInt8](capacity=128)
         self._total = 0
 
-    fn __copyinit__(out self, copy: Self):
+    def __copyinit__(out self, copy: Self):
         self._h = copy._h.copy()
         self._buf = copy._buf.copy()
         self._total = copy._total
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self._h = take._h^
         self._buf = take._buf^
         self._total = take._total
 
-    fn update(mut self, data: List[UInt8]):
+    def update(mut self, data: List[UInt8]):
         """Feed bytes into the hash."""
         self._total += UInt64(len(data))
         var pos = 0
@@ -368,7 +368,7 @@ struct SHA384(Copyable, Movable):
         for i in range(remaining):
             self._buf.append(data[pos + i])
 
-    fn finalize(mut self) -> List[UInt8]:
+    def finalize(mut self) -> List[UInt8]:
         """Pad, compress, and return 48-byte digest. State is consumed."""
         var bit_len = self._total * 8
 
@@ -404,7 +404,7 @@ struct SHA384(Copyable, Movable):
         return out^
 
 
-fn sha384(data: List[UInt8]) -> List[UInt8]:
+def sha384(data: List[UInt8]) -> List[UInt8]:
     """One-shot SHA-384. Returns 48-byte digest."""
     var h = SHA384()
     h.update(data)
@@ -431,7 +431,7 @@ struct SHA512(Copyable, Movable):
     var _buf: List[UInt8]
     var _total: UInt64
 
-    fn __init__(out self):
+    def __init__(out self):
         # SHA-512 initial hash values (FIPS 180-4 §5.3.5)
         # Fractional parts of square roots of 9th–16th primes
         self._h = InlineArray[UInt64, 8](fill=UInt64(0))
@@ -442,17 +442,17 @@ struct SHA512(Copyable, Movable):
         self._buf = List[UInt8](capacity=128)
         self._total = 0
 
-    fn __copyinit__(out self, copy: Self):
+    def __copyinit__(out self, copy: Self):
         self._h = copy._h.copy()
         self._buf = copy._buf.copy()
         self._total = copy._total
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self._h = take._h^
         self._buf = take._buf^
         self._total = take._total
 
-    fn update(mut self, data: List[UInt8]):
+    def update(mut self, data: List[UInt8]):
         """Feed bytes into the hash."""
         self._total += UInt64(len(data))
         var pos = 0
@@ -481,7 +481,7 @@ struct SHA512(Copyable, Movable):
         for i in range(remaining):
             self._buf.append(data[pos + i])
 
-    fn finalize(mut self) -> List[UInt8]:
+    def finalize(mut self) -> List[UInt8]:
         """Pad, compress, and return 64-byte digest. State is consumed."""
         var bit_len = self._total * 8
 
@@ -517,7 +517,7 @@ struct SHA512(Copyable, Movable):
         return out^
 
 
-fn sha512(data: List[UInt8]) -> List[UInt8]:
+def sha512(data: List[UInt8]) -> List[UInt8]:
     """One-shot SHA-512. Returns 64-byte digest."""
     var h = SHA512()
     h.update(data)

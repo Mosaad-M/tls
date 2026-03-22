@@ -47,7 +47,7 @@ struct X509Cert(Copyable, Movable):
     var rsa_e:       List[UInt8]   # RSA public exponent (empty for EC keys)
     var ec_point:    List[UInt8]   # 65 or 97-byte uncompressed EC point (empty for RSA)
 
-    fn __init__(out self):
+    def __init__(out self):
         self.tbs_raw     = List[UInt8]()
         self.sig_alg     = String("")
         self.sig_hash    = String("sha256")
@@ -58,7 +58,7 @@ struct X509Cert(Copyable, Movable):
         self.rsa_e       = List[UInt8]()
         self.ec_point    = List[UInt8]()
 
-    fn __copyinit__(out self, copy: Self):
+    def __copyinit__(out self, copy: Self):
         self.tbs_raw     = copy.tbs_raw.copy()
         self.sig_alg     = copy.sig_alg
         self.sig_hash    = copy.sig_hash
@@ -69,7 +69,7 @@ struct X509Cert(Copyable, Movable):
         self.rsa_e       = copy.rsa_e.copy()
         self.ec_point    = copy.ec_point.copy()
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self.tbs_raw     = take.tbs_raw^
         self.sig_alg     = take.sig_alg^
         self.sig_hash    = take.sig_hash^
@@ -85,7 +85,7 @@ struct X509Cert(Copyable, Movable):
 # Internal helpers
 # ============================================================================
 
-fn _child_offset(content: List[UInt8], idx: Int) raises -> Int:
+def _child_offset(content: List[UInt8], idx: Int) raises -> Int:
     """Return the byte offset of child at index `idx` within `content`."""
     var off = 0
     for _ in range(idx):
@@ -98,7 +98,7 @@ fn _child_offset(content: List[UInt8], idx: Int) raises -> Int:
 # cert_parse — parse a DER-encoded X.509 certificate into X509Cert
 # ============================================================================
 
-fn cert_parse(der: List[UInt8]) raises -> X509Cert:
+def cert_parse(der: List[UInt8]) raises -> X509Cert:
     """Parse a DER X.509 certificate. Raises on malformed or unsupported input."""
 
     # Certificate ::= SEQUENCE { tbsCertificate, signatureAlgorithm, signature }
@@ -231,7 +231,7 @@ fn cert_parse(der: List[UInt8]) raises -> X509Cert:
 # cert_verify_sig — verify cert's signature against issuer's public key
 # ============================================================================
 
-fn cert_verify_sig(cert: X509Cert, issuer: X509Cert) raises:
+def cert_verify_sig(cert: X509Cert, issuer: X509Cert) raises:
     """Verify cert's digital signature using issuer's public key. Raises on invalid."""
     var tbs_hash: List[UInt8]
     if cert.sig_hash == "sha384":
@@ -284,7 +284,7 @@ fn cert_verify_sig(cert: X509Cert, issuer: X509Cert) raises:
 # Internal: parse TBSCertificate children from tbs_raw
 # ============================================================================
 
-fn _tbs_children(tbs_raw: List[UInt8]) raises -> List[DerElem]:
+def _tbs_children(tbs_raw: List[UInt8]) raises -> List[DerElem]:
     """Parse TBSCertificate TLV bytes into its children."""
     var elem = der_parse(tbs_raw, 0)
     if elem[0] != TAG_SEQUENCE:
@@ -292,13 +292,13 @@ fn _tbs_children(tbs_raw: List[UInt8]) raises -> List[DerElem]:
     return der_children(elem[1])
 
 
-fn _bytes_to_string(b: List[UInt8]) -> String:
+def _bytes_to_string(b: List[UInt8]) -> String:
     """Convert byte list to String (assumes valid UTF-8)."""
     var copy = b.copy()
     return String(unsafe_from_utf8=copy^)
 
 
-fn _bytes_lower_eq(a: List[UInt8], b: List[UInt8]) -> Bool:
+def _bytes_lower_eq(a: List[UInt8], b: List[UInt8]) -> Bool:
     """Case-insensitive byte comparison (ASCII only)."""
     if len(a) != len(b):
         return False
@@ -315,7 +315,7 @@ fn _bytes_lower_eq(a: List[UInt8], b: List[UInt8]) -> Bool:
     return True
 
 
-fn _string_lower_bytes(s: String) -> List[UInt8]:
+def _string_lower_bytes(s: String) -> List[UInt8]:
     """Return lowercase ASCII bytes of string."""
     var span = s.as_bytes()
     var out = List[UInt8](capacity=len(span))
@@ -332,7 +332,7 @@ fn _string_lower_bytes(s: String) -> List[UInt8]:
 # Falls back to Subject CN if no SAN extension present.
 # ============================================================================
 
-fn cert_san_names(cert: X509Cert) raises -> List[String]:
+def cert_san_names(cert: X509Cert) raises -> List[String]:
     """Parse SubjectAltName dNSName entries. Falls back to Subject CN."""
     var tbs_ch = _tbs_children(cert.tbs_raw)
 
@@ -411,7 +411,7 @@ fn cert_san_names(cert: X509Cert) raises -> List[String]:
 # cert_hostname_match — RFC 6125 hostname matching
 # ============================================================================
 
-fn cert_hostname_match(cert: X509Cert, hostname: String) raises:
+def cert_hostname_match(cert: X509Cert, hostname: String) raises:
     """Verify hostname matches cert SAN/CN. Raises if no match found."""
     var names = cert_san_names(cert)
     var host_lower = _string_lower_bytes(hostname)
@@ -460,7 +460,7 @@ fn cert_hostname_match(cert: X509Cert, hostname: String) raises:
 # Certificate validity period checking
 # ============================================================================
 
-fn _parse_asn1_time(content: List[UInt8], is_generalized: Bool) -> Int64:
+def _parse_asn1_time(content: List[UInt8], is_generalized: Bool) -> Int64:
     """Parse UTCTime or GeneralizedTime content bytes to Unix epoch seconds.
 
     UTCTime format:       YYMMDDHHMMSSZ (13 bytes)
@@ -507,7 +507,7 @@ fn _parse_asn1_time(content: List[UInt8], is_generalized: Bool) -> Int64:
     return Int64(days) * 86400 + Int64(hour) * 3600 + Int64(minu) * 60 + Int64(sec)
 
 
-fn _check_cert_validity(tbs_raw: List[UInt8]) raises:
+def _check_cert_validity(tbs_raw: List[UInt8]) raises:
     """Check certificate notBefore/notAfter against current time. Raises if expired."""
     var tbs_elem = der_parse(tbs_raw, 0)
     if tbs_elem[0] != TAG_SEQUENCE:
@@ -556,7 +556,7 @@ fn _check_cert_validity(tbs_raw: List[UInt8]) raises:
 # cert_chain_verify — verify a certificate chain against trust anchors
 # ============================================================================
 
-fn cert_chain_verify(
+def cert_chain_verify(
     chain:         List[X509Cert],
     trust_anchors: List[X509Cert],
     hostname:      String,

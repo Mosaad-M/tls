@@ -2,7 +2,7 @@
 from crypto.ed25519 import _ed_base_mul, _ed_compress
 
 
-fn hex_bytes(s: List[UInt8]) -> String:
+def hex_bytes(s: List[UInt8]) -> String:
     var result = String()
     for i in range(len(s)):
         var b = Int(s[i])
@@ -13,7 +13,7 @@ fn hex_bytes(s: List[UInt8]) -> String:
     return result
 
 
-fn main() raises:
+def main() raises:
     # Vec1 nonce scalar = f38907308c893deaf244787db4af53682249107418afc2edc58f75ac58a07404
     # Expected R (from RFC) = e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155
     var nonce = List[UInt8](capacity=32)

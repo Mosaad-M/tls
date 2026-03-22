@@ -9,11 +9,11 @@
 from crypto.pem import pem_decode
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -24,7 +24,7 @@ fn run_test(
         failed += 1
 
 
-fn bytes_eq(a: List[UInt8], b: List[UInt8]) -> Bool:
+def bytes_eq(a: List[UInt8], b: List[UInt8]) -> Bool:
     if len(a) != len(b):
         return False
     for i in range(len(a)):
@@ -33,7 +33,7 @@ fn bytes_eq(a: List[UInt8], b: List[UInt8]) -> Bool:
     return True
 
 
-fn hex_to_bytes(h: String) -> List[UInt8]:
+def hex_to_bytes(h: String) -> List[UInt8]:
     var raw = h.as_bytes()
     var n = len(raw) // 2
     var out = List[UInt8](capacity=n)
@@ -48,7 +48,7 @@ fn hex_to_bytes(h: String) -> List[UInt8]:
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-fn test_single_cert() raises:
+def test_single_cert() raises:
     # Single CERTIFICATE block; DER = bytes.fromhex("3082029f30820187")
     var pem = String(
         "-----BEGIN CERTIFICATE-----\nMIICnzCCAYc=\n-----END CERTIFICATE-----\n"
@@ -61,7 +61,7 @@ fn test_single_cert() raises:
         raise Error("DER mismatch in single cert test")
 
 
-fn test_two_certs() raises:
+def test_two_certs() raises:
     # Two CERTIFICATE blocks
     var pem = String(
         "-----BEGIN CERTIFICATE-----\nMIICnzCCAYc=\n-----END CERTIFICATE-----\n"
@@ -78,7 +78,7 @@ fn test_two_certs() raises:
         raise Error("DER mismatch in cert 1")
 
 
-fn test_wrong_label_raises() raises:
+def test_wrong_label_raises() raises:
     var pem = String(
         "-----BEGIN CERTIFICATE-----\nMIICnzCCAYc=\n-----END CERTIFICATE-----\n"
     )
@@ -91,7 +91,7 @@ fn test_wrong_label_raises() raises:
         raise Error("expected raise for wrong label")
 
 
-fn test_malformed_base64_raises() raises:
+def test_malformed_base64_raises() raises:
     # Bad base64 content
     var pem = String(
         "-----BEGIN CERTIFICATE-----\nZ!==\n-----END CERTIFICATE-----\n"
@@ -105,7 +105,7 @@ fn test_malformed_base64_raises() raises:
         raise Error("expected raise for malformed base64")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

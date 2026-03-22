@@ -5,11 +5,11 @@
 from crypto.random import csprng_bytes
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -22,25 +22,25 @@ fn run_test(
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-fn test_16_bytes() raises:
+def test_16_bytes() raises:
     var b = csprng_bytes(16)
     if len(b) != 16:
         raise Error("expected 16 bytes, got " + String(len(b)))
 
 
-fn test_32_bytes() raises:
+def test_32_bytes() raises:
     var b = csprng_bytes(32)
     if len(b) != 32:
         raise Error("expected 32 bytes, got " + String(len(b)))
 
 
-fn test_64_bytes() raises:
+def test_64_bytes() raises:
     var b = csprng_bytes(64)
     if len(b) != 64:
         raise Error("expected 64 bytes, got " + String(len(b)))
 
 
-fn test_two_calls_differ() raises:
+def test_two_calls_differ() raises:
     var a = csprng_bytes(32)
     var b = csprng_bytes(32)
     var same = True
@@ -52,13 +52,13 @@ fn test_two_calls_differ() raises:
         raise Error("two 32-byte random draws were identical (astronomically unlikely)")
 
 
-fn test_zero_bytes() raises:
+def test_zero_bytes() raises:
     var b = csprng_bytes(0)
     if len(b) != 0:
         raise Error("expected empty list, got " + String(len(b)))
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

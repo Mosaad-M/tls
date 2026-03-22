@@ -1,6 +1,6 @@
 from crypto.rsa import rsa_pkcs1_verify
 
-fn hex_to_bytes(h: String) -> List[UInt8]:
+def hex_to_bytes(h: String) -> List[UInt8]:
     var raw = h.as_bytes()
     var n = len(raw) // 2
     var out = List[UInt8](capacity=n)
@@ -12,7 +12,7 @@ fn hex_to_bytes(h: String) -> List[UInt8]:
         out.append((h_val << 4) | l_val)
     return out^
 
-fn main() raises:
+def main() raises:
     # USERTrust RSA CA 4096-bit key (n, e)
     var n = hex_to_bytes(
         "80126517360ec3db08b3d0ac570d76ed"

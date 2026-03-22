@@ -2,7 +2,7 @@
 from crypto.ed25519 import _scalar_reduce
 
 
-fn hex_bytes(s: List[UInt8]) -> String:
+def hex_bytes(s: List[UInt8]) -> String:
     var result = String()
     for i in range(len(s)):
         var b = Int(s[i])
@@ -13,7 +13,7 @@ fn hex_bytes(s: List[UInt8]) -> String:
     return result
 
 
-fn main() raises:
+def main() raises:
     # r_hash = sha512(h[32:64]) for Vec1
     # = b6b19cd8e0426f5983fa112d89a143aa97dab8bc5deb8d5b6253c928b65272f
     #   4044098c2a990039cde5b6a4818df0bfb6e40dc5dee54248032962323e701352d

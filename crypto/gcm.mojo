@@ -29,7 +29,7 @@ from crypto.hmac import hmac_equal
 # Reduction polynomial: x^128 + x^7 + x^2 + x + 1
 # ============================================================================
 
-fn _gf128_mul_x(hi: UInt64, lo: UInt64) -> Tuple[UInt64, UInt64]:
+def _gf128_mul_x(hi: UInt64, lo: UInt64) -> Tuple[UInt64, UInt64]:
     """Multiply GF(2^128) element by x (right-shift by 1 bit with conditional reduction)."""
     var lsb = lo & 1
     var r_lo = (lo >> 1) | (hi << 63)
@@ -39,7 +39,7 @@ fn _gf128_mul_x(hi: UInt64, lo: UInt64) -> Tuple[UInt64, UInt64]:
     return r_hi, r_lo
 
 
-fn _gf128_mul_x4(hi: UInt64, lo: UInt64) -> Tuple[UInt64, UInt64]:
+def _gf128_mul_x4(hi: UInt64, lo: UInt64) -> Tuple[UInt64, UInt64]:
     """Multiply GF(2^128) element by x^4 (four applications of mul_x)."""
     var r = _gf128_mul_x(hi, lo)
     r = _gf128_mul_x(r[0], r[1])
@@ -51,7 +51,7 @@ fn _gf128_mul_x4(hi: UInt64, lo: UInt64) -> Tuple[UInt64, UInt64]:
 # Precomputed 16-entry H-table for 4-bit GHASH
 # ============================================================================
 
-fn _build_h_table(h_hi: UInt64, h_lo: UInt64) -> Tuple[List[UInt64], List[UInt64]]:
+def _build_h_table(h_hi: UInt64, h_lo: UInt64) -> Tuple[List[UInt64], List[UInt64]]:
     """Build H_table[0..15] where H_table[v] = v * H in GF(2^128).
 
     Nibble bits are in MSB-first order: bit3=weight8, bit2=weight4, bit1=weight2, bit0=weight1.
@@ -84,7 +84,7 @@ fn _build_h_table(h_hi: UInt64, h_lo: UInt64) -> Tuple[List[UInt64], List[UInt64
     return hi_table^, lo_table^
 
 
-fn _ghash_mul_block(
+def _ghash_mul_block(
     hi_table: List[UInt64], lo_table: List[UInt64],
     y_hi: UInt64, y_lo: UInt64,
 ) -> Tuple[UInt64, UInt64]:
@@ -114,7 +114,7 @@ fn _ghash_mul_block(
 # GHASH — polynomial hash over GF(2^128)
 # ============================================================================
 
-fn _ghash(
+def _ghash(
     h_hi: UInt64, h_lo: UInt64,
     data: List[UInt8],
 ) -> Tuple[UInt64, UInt64]:
@@ -150,7 +150,7 @@ fn _ghash(
 # CTR-mode helpers
 # ============================================================================
 
-fn _inc32(ctr: List[UInt8]) -> List[UInt8]:
+def _inc32(ctr: List[UInt8]) -> List[UInt8]:
     """Increment the 32-bit big-endian counter in the last 4 bytes of ctr."""
     var out = ctr.copy()
     var i = 15
@@ -162,7 +162,7 @@ fn _inc32(ctr: List[UInt8]) -> List[UInt8]:
     return out^
 
 
-fn _aes_ctr(aes: AES, j0: List[UInt8], data: List[UInt8]) raises -> List[UInt8]:
+def _aes_ctr(aes: AES, j0: List[UInt8], data: List[UInt8]) raises -> List[UInt8]:
     """XOR data with AES-CTR keystream starting at counter = inc32(j0)."""
     var out = List[UInt8](capacity=len(data))
     var ctr = _inc32(j0)
@@ -182,7 +182,7 @@ fn _aes_ctr(aes: AES, j0: List[UInt8], data: List[UInt8]) raises -> List[UInt8]:
 # GHASH input construction
 # ============================================================================
 
-fn _pad16(data: List[UInt8]) -> List[UInt8]:
+def _pad16(data: List[UInt8]) -> List[UInt8]:
     """Zero-pad data to a multiple of 16 bytes."""
     var n = len(data)
     var padded_n = ((n + 15) // 16) * 16
@@ -194,7 +194,7 @@ fn _pad16(data: List[UInt8]) -> List[UInt8]:
     return out^
 
 
-fn _build_ghash_input(aad: List[UInt8], ct: List[UInt8]) -> List[UInt8]:
+def _build_ghash_input(aad: List[UInt8], ct: List[UInt8]) -> List[UInt8]:
     """Build GHASH input: pad(AAD) || pad(CT) || len(AAD)_bits64 || len(CT)_bits64."""
     var aad_padded = _pad16(aad)
     var ct_padded  = _pad16(ct)
@@ -219,7 +219,7 @@ fn _build_ghash_input(aad: List[UInt8], ct: List[UInt8]) -> List[UInt8]:
 # Shared key-setup helper (used by both encrypt and decrypt)
 # ============================================================================
 
-fn _gcm_setup(
+def _gcm_setup(
     aes: AES,
     iv: List[UInt8],
 ) raises -> Tuple[UInt64, UInt64, List[UInt8], List[UInt64], List[UInt64]]:
@@ -249,7 +249,7 @@ fn _gcm_setup(
     return h_hi, h_lo, j0^, hi_tbl^, lo_tbl^
 
 
-fn _compute_tag(
+def _compute_tag(
     aes: AES,
     hi_table: List[UInt64], lo_table: List[UInt64],
     j0: List[UInt8],
@@ -289,7 +289,7 @@ fn _compute_tag(
 # Public API
 # ============================================================================
 
-fn gcm_encrypt(
+def gcm_encrypt(
     key: List[UInt8],
     iv: List[UInt8],
     plaintext: List[UInt8],
@@ -321,7 +321,7 @@ fn gcm_encrypt(
     return ciphertext^, tag^
 
 
-fn gcm_decrypt(
+def gcm_decrypt(
     key: List[UInt8],
     iv: List[UInt8],
     ciphertext: List[UInt8],

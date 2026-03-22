@@ -20,7 +20,7 @@ comptime CA_DER_HEX = "3082019230820138a0030201020214573f65a34f1eda3f679a037a6e6
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
-fn hex_to_bytes(h: String) -> List[UInt8]:
+def hex_to_bytes(h: String) -> List[UInt8]:
     var raw = h.as_bytes()
     var n = len(raw) // 2
     var out = List[UInt8](capacity=n)
@@ -33,7 +33,7 @@ fn hex_to_bytes(h: String) -> List[UInt8]:
     return out^
 
 
-fn _tcp_connect(port: Int) raises -> Int32:
+def _tcp_connect(port: Int) raises -> Int32:
     """Open a TCP connection to 127.0.0.1:port."""
     var AF_INET: Int32 = 2
     var SOCK_STREAM: Int32 = 1
@@ -59,7 +59,7 @@ fn _tcp_connect(port: Int) raises -> Int32:
     return fd
 
 
-fn _run_server(port: Int, certfile: String, keyfile: String, max_conns: Int = 1):
+def _run_server(port: Int, certfile: String, keyfile: String, max_conns: Int = 1):
     """Spawn a background Python TLS 1.2 test server."""
     var cmd = (
         String("python3 tests/tls12_test_server.py ")
@@ -75,7 +75,7 @@ fn _run_server(port: Int, certfile: String, keyfile: String, max_conns: Int = 1)
     _ = external_call["system", Int32](cmd.unsafe_ptr())
 
 
-fn _run_tls13_server(port: Int, certfile: String, keyfile: String):
+def _run_tls13_server(port: Int, certfile: String, keyfile: String):
     """Spawn a background Python TLS 1.3 test server."""
     var cmd = (
         String("python3 tests/tls_test_server.py ")
@@ -89,19 +89,19 @@ fn _run_tls13_server(port: Int, certfile: String, keyfile: String):
     _ = external_call["system", Int32](cmd.unsafe_ptr())
 
 
-fn _kill_server(port: Int):
+def _kill_server(port: Int):
     """Kill the test server for the given port."""
     var cmd = String("pkill -f 'test.*server.py ") + String(port) + String("'")
     _ = external_call["system", Int32](cmd.unsafe_ptr())
 
 
-fn _make_trust_anchors() raises -> List[X509Cert]:
+def _make_trust_anchors() raises -> List[X509Cert]:
     var anchors = List[X509Cert]()
     anchors.append(cert_parse(hex_to_bytes(CA_DER_HEX)))
     return anchors^
 
 
-fn bytes_equal(a: List[UInt8], b: List[UInt8]) -> Bool:
+def bytes_equal(a: List[UInt8], b: List[UInt8]) -> Bool:
     if len(a) != len(b):
         return False
     for i in range(len(a)):
@@ -110,11 +110,11 @@ fn bytes_equal(a: List[UInt8], b: List[UInt8]) -> Bool:
     return True
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -127,7 +127,7 @@ fn run_test(
 
 # ── Tests ──────────────────────────────────────────────────────────────────
 
-fn test_tls12_handshake_success() raises:
+def test_tls12_handshake_success() raises:
     """Full TLS 1.2 handshake with ECDSA P-256 cert → succeeds."""
     _run_server(14445, "tests/server.pem", "tests/server.key")
     _ = external_call["usleep", Int32](UInt32(800000))
@@ -139,7 +139,7 @@ fn test_tls12_handshake_success() raises:
     _kill_server(14445)
 
 
-fn test_tls12_send_recv_roundtrip() raises:
+def test_tls12_send_recv_roundtrip() raises:
     """TLS 1.2: send HTTP request, recv response, verify content."""
     _run_server(14446, "tests/server.pem", "tests/server.key")
     _ = external_call["usleep", Int32](UInt32(800000))
@@ -175,7 +175,7 @@ fn test_tls12_send_recv_roundtrip() raises:
             raise Error("response does not start with HTTP/1.1 200 OK")
 
 
-fn test_tls12_wrong_hostname_raises() raises:
+def test_tls12_wrong_hostname_raises() raises:
     """TLS 1.2: wrong hostname cert raises cert_chain_verify."""
     _run_server(14447, "tests/wronghost.pem", "tests/wronghost.key")
     _ = external_call["usleep", Int32](UInt32(800000))
@@ -193,7 +193,7 @@ fn test_tls12_wrong_hostname_raises() raises:
         raise Error("expected raise for hostname mismatch")
 
 
-fn test_version_negotiation_tls13_preferred() raises:
+def test_version_negotiation_tls13_preferred() raises:
     """TLS version negotiation: TLS 1.3 server → TLS 1.3 is negotiated."""
     _run_tls13_server(14448, "tests/server.pem", "tests/server.key")
     _ = external_call["usleep", Int32](UInt32(800000))
@@ -210,7 +210,7 @@ fn test_version_negotiation_tls13_preferred() raises:
     _kill_server(14448)
 
 
-fn test_version_negotiation_tls12_fallback() raises:
+def test_version_negotiation_tls12_fallback() raises:
     """TLS version negotiation: TLS 1.2-only server → TLS 1.2 is negotiated."""
     _run_server(14449, "tests/server.pem", "tests/server.key")
     _ = external_call["usleep", Int32](UInt32(800000))
@@ -227,7 +227,7 @@ fn test_version_negotiation_tls12_fallback() raises:
     _kill_server(14449)
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

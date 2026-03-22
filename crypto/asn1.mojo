@@ -63,15 +63,15 @@ struct DerElem(Copyable, Movable):
     var tag:     UInt8
     var content: List[UInt8]   # value bytes (excluding tag+length)
 
-    fn __init__(out self):
+    def __init__(out self):
         self.tag     = 0
         self.content = List[UInt8]()
 
-    fn __copyinit__(out self, copy: Self):
+    def __copyinit__(out self, copy: Self):
         self.tag     = copy.tag
         self.content = copy.content.copy()
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self.tag     = take.tag
         self.content = take.content^
 
@@ -80,7 +80,7 @@ struct DerElem(Copyable, Movable):
 # Core: parse one TLV element at `offset` in `data`
 # ============================================================================
 
-fn der_parse(data: List[UInt8], offset: Int) raises -> Tuple[UInt8, List[UInt8], Int]:
+def der_parse(data: List[UInt8], offset: Int) raises -> Tuple[UInt8, List[UInt8], Int]:
     """Parse one DER element. Returns (tag, content_bytes, next_offset)."""
     if offset >= len(data):
         raise Error("asn1: unexpected end of data at offset " + String(offset))
@@ -113,7 +113,7 @@ fn der_parse(data: List[UInt8], offset: Int) raises -> Tuple[UInt8, List[UInt8],
     return (tag, content^, pos + length)
 
 
-fn der_raw_bytes(data: List[UInt8], offset: Int) raises -> List[UInt8]:
+def der_raw_bytes(data: List[UInt8], offset: Int) raises -> List[UInt8]:
     """Return full TLV bytes (tag + length encoding + value) at `offset`."""
     var start = offset
     var res = der_parse(data, offset)
@@ -128,7 +128,7 @@ fn der_raw_bytes(data: List[UInt8], offset: Int) raises -> List[UInt8]:
 # Parse all children of a constructed element (SEQUENCE, SET, ctx tags)
 # ============================================================================
 
-fn der_children(content: List[UInt8]) raises -> List[DerElem]:
+def der_children(content: List[UInt8]) raises -> List[DerElem]:
     """Parse all TLV children inside a SEQUENCE/SET content."""
     var result = List[DerElem]()
     var offset = 0
@@ -146,7 +146,7 @@ fn der_children(content: List[UInt8]) raises -> List[DerElem]:
 # Helpers
 # ============================================================================
 
-fn der_int_bytes(content: List[UInt8]) -> List[UInt8]:
+def der_int_bytes(content: List[UInt8]) -> List[UInt8]:
     """Return INTEGER value bytes with leading 0x00 (sign byte) stripped."""
     var start = 0
     var n = len(content)
@@ -158,7 +158,7 @@ fn der_int_bytes(content: List[UInt8]) -> List[UInt8]:
     return out^
 
 
-fn der_bit_str(content: List[UInt8]) raises -> List[UInt8]:
+def der_bit_str(content: List[UInt8]) raises -> List[UInt8]:
     """Return BIT STRING payload (skip the leading unused-bits count byte)."""
     if len(content) == 0:
         raise Error("asn1: empty BIT STRING content")
@@ -170,7 +170,7 @@ fn der_bit_str(content: List[UInt8]) raises -> List[UInt8]:
     return out^
 
 
-fn der_oid_eq(content: List[UInt8], oid_hex: String) raises -> Bool:
+def der_oid_eq(content: List[UInt8], oid_hex: String) raises -> Bool:
     """Compare OID content bytes against expected hex string."""
     var raw = oid_hex.as_bytes()
     if len(raw) % 2 != 0:
@@ -188,7 +188,7 @@ fn der_oid_eq(content: List[UInt8], oid_hex: String) raises -> Bool:
     return True
 
 
-fn _pad32(b: List[UInt8]) -> List[UInt8]:
+def _pad32(b: List[UInt8]) -> List[UInt8]:
     """Zero-pad or right-trim byte slice to exactly 32 bytes."""
     var out = List[UInt8](capacity=32)
     var n = len(b)
@@ -203,7 +203,7 @@ fn _pad32(b: List[UInt8]) -> List[UInt8]:
     return out^
 
 
-fn _pad48(b: List[UInt8]) -> List[UInt8]:
+def _pad48(b: List[UInt8]) -> List[UInt8]:
     """Zero-pad or right-trim byte slice to exactly 48 bytes."""
     var out = List[UInt8](capacity=48)
     var n = len(b)
@@ -224,7 +224,7 @@ fn _pad48(b: List[UInt8]) -> List[UInt8]:
 #              SEQUENCE { INTEGER(n), INTEGER(e) } } }
 # ============================================================================
 
-fn asn1_parse_rsa_spki(der: List[UInt8]) raises -> Tuple[List[UInt8], List[UInt8]]:
+def asn1_parse_rsa_spki(der: List[UInt8]) raises -> Tuple[List[UInt8], List[UInt8]]:
     """Extract RSA modulus n and exponent e from SubjectPublicKeyInfo DER."""
     # Outer SEQUENCE
     var outer = der_parse(der, 0)
@@ -271,7 +271,7 @@ fn asn1_parse_rsa_spki(der: List[UInt8]) raises -> Tuple[List[UInt8], List[UInt8
 #                       BIT STRING { 04 || Qx || Qy } }
 # ============================================================================
 
-fn asn1_parse_ec_spki(der: List[UInt8]) raises -> List[UInt8]:
+def asn1_parse_ec_spki(der: List[UInt8]) raises -> List[UInt8]:
     """Extract 65-byte uncompressed EC point from SubjectPublicKeyInfo DER."""
     var outer = der_parse(der, 0)
     if outer[0] != TAG_SEQUENCE:
@@ -307,7 +307,7 @@ fn asn1_parse_ec_spki(der: List[UInt8]) raises -> List[UInt8]:
 # Both r and s are returned zero-padded to 32 bytes.
 # ============================================================================
 
-fn asn1_parse_ecdsa_sig(der: List[UInt8]) raises -> Tuple[List[UInt8], List[UInt8]]:
+def asn1_parse_ecdsa_sig(der: List[UInt8]) raises -> Tuple[List[UInt8], List[UInt8]]:
     """Parse DER ECDSA signature. Returns (r, s) each 32 bytes."""
     var outer = der_parse(der, 0)
     if outer[0] != TAG_SEQUENCE:
@@ -327,7 +327,7 @@ fn asn1_parse_ecdsa_sig(der: List[UInt8]) raises -> Tuple[List[UInt8], List[UInt
 # Both r and s are returned zero-padded to 48 bytes.
 # ============================================================================
 
-fn asn1_parse_ecdsa_sig_48(der: List[UInt8]) raises -> Tuple[List[UInt8], List[UInt8]]:
+def asn1_parse_ecdsa_sig_48(der: List[UInt8]) raises -> Tuple[List[UInt8], List[UInt8]]:
     """Parse DER ECDSA signature. Returns (r, s) each 48 bytes (for P-384)."""
     var outer = der_parse(der, 0)
     if outer[0] != TAG_SEQUENCE:

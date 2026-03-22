@@ -1,13 +1,13 @@
 """Trace _scalar_reduce intermediate values to find bug."""
 
-fn load3(b: List[UInt8], off: Int) -> Int64:
+def load3(b: List[UInt8], off: Int) -> Int64:
     return Int64(UInt64(b[off]) | (UInt64(b[off+1]) << 8) | (UInt64(b[off+2]) << 16))
 
-fn load4(b: List[UInt8], off: Int) -> Int64:
+def load4(b: List[UInt8], off: Int) -> Int64:
     return Int64(UInt64(b[off]) | (UInt64(b[off+1]) << 8) | (UInt64(b[off+2]) << 16) | (UInt64(b[off+3]) << 24))
 
 
-fn main() raises:
+def main() raises:
     # r_hash for Vec1
     var inp = List[UInt8](capacity=64)
     inp.append(0xb6); inp.append(0xb1); inp.append(0x9c); inp.append(0xd8)

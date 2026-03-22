@@ -23,7 +23,7 @@
 from crypto.hmac import hmac_sha256, hmac_sha384
 
 
-fn _concat(a: List[UInt8], b: List[UInt8]) -> List[UInt8]:
+def _concat(a: List[UInt8], b: List[UInt8]) -> List[UInt8]:
     """Concatenate two byte lists."""
     var out = List[UInt8](capacity=len(a) + len(b))
     for i in range(len(a)):
@@ -33,7 +33,7 @@ fn _concat(a: List[UInt8], b: List[UInt8]) -> List[UInt8]:
     return out^
 
 
-fn p_hash_sha256(secret: List[UInt8], seed: List[UInt8], length: Int) -> List[UInt8]:
+def p_hash_sha256(secret: List[UInt8], seed: List[UInt8], length: Int) -> List[UInt8]:
     """RFC 5246 §5 P_hash using HMAC-SHA-256.
 
     A(0) = seed
@@ -55,7 +55,7 @@ fn p_hash_sha256(secret: List[UInt8], seed: List[UInt8], length: Int) -> List[UI
     return out^
 
 
-fn p_hash_sha384(secret: List[UInt8], seed: List[UInt8], length: Int) -> List[UInt8]:
+def p_hash_sha384(secret: List[UInt8], seed: List[UInt8], length: Int) -> List[UInt8]:
     """RFC 5246 §5 P_hash using HMAC-SHA-384.
 
     A(0) = seed
@@ -77,7 +77,7 @@ fn p_hash_sha384(secret: List[UInt8], seed: List[UInt8], length: Int) -> List[UI
     return out^
 
 
-fn prf_sha256(secret: List[UInt8], label: String, seed: List[UInt8], length: Int) -> List[UInt8]:
+def prf_sha256(secret: List[UInt8], label: String, seed: List[UInt8], length: Int) -> List[UInt8]:
     """TLS 1.2 PRF using SHA-256: P_SHA256(secret, label || seed, length)."""
     var label_bytes_span = label.as_bytes()
     var label_bytes = List[UInt8](capacity=len(label_bytes_span))
@@ -87,7 +87,7 @@ fn prf_sha256(secret: List[UInt8], label: String, seed: List[UInt8], length: Int
     return p_hash_sha256(secret, combined_seed, length)
 
 
-fn prf_sha384(secret: List[UInt8], label: String, seed: List[UInt8], length: Int) -> List[UInt8]:
+def prf_sha384(secret: List[UInt8], label: String, seed: List[UInt8], length: Int) -> List[UInt8]:
     """TLS 1.2 PRF using SHA-384: P_SHA384(secret, label || seed, length)."""
     var label_bytes_span = label.as_bytes()
     var label_bytes = List[UInt8](capacity=len(label_bytes_span))
@@ -97,7 +97,7 @@ fn prf_sha384(secret: List[UInt8], label: String, seed: List[UInt8], length: Int
     return p_hash_sha384(secret, combined_seed, length)
 
 
-fn tls12_master_secret(
+def tls12_master_secret(
     pre_master: List[UInt8],
     client_random: List[UInt8],
     server_random: List[UInt8],
@@ -111,7 +111,7 @@ fn tls12_master_secret(
     return prf_sha256(pre_master, "master secret", randoms, 48)
 
 
-fn tls12_key_block(
+def tls12_key_block(
     master: List[UInt8],
     server_random: List[UInt8],
     client_random: List[UInt8],
@@ -126,7 +126,7 @@ fn tls12_key_block(
     return prf_sha256(master, "key expansion", randoms, length)
 
 
-fn tls12_key_block_sha384(
+def tls12_key_block_sha384(
     master: List[UInt8],
     server_random: List[UInt8],
     client_random: List[UInt8],
@@ -137,7 +137,7 @@ fn tls12_key_block_sha384(
     return prf_sha384(master, "key expansion", randoms, length)
 
 
-fn tls12_verify_data(
+def tls12_verify_data(
     master: List[UInt8],
     label: String,
     handshake_hash: List[UInt8],
@@ -150,7 +150,7 @@ fn tls12_verify_data(
     return prf_sha256(master, label, handshake_hash, 12)
 
 
-fn tls12_verify_data_sha384(
+def tls12_verify_data_sha384(
     master: List[UInt8],
     label: String,
     handshake_hash: List[UInt8],

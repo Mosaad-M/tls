@@ -8,13 +8,13 @@
 from crypto.cert import X509Cert, cert_parse, cert_verify_sig
 
 
-fn _hex_nibble(b: UInt8) raises -> UInt8:
+def _hex_nibble(b: UInt8) raises -> UInt8:
     if b >= 48 and b <= 57: return b - 48
     if b >= 97 and b <= 102: return b - 87
     raise Error("bad hex char")
 
 
-fn hex_to_bytes(hex: String) raises -> List[UInt8]:
+def hex_to_bytes(hex: String) raises -> List[UInt8]:
     var raw = hex.as_bytes()
     var n = len(raw)
     if n % 2 != 0: raise Error("odd hex length")
@@ -24,7 +24,7 @@ fn hex_to_bytes(hex: String) raises -> List[UInt8]:
     return out^
 
 
-fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raises -> None):
+def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
     try:
         test_fn()
         print("  PASS:", name)
@@ -39,7 +39,7 @@ fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raise
 # 675 bytes, generated with Python cryptography library
 # ============================================================================
 
-fn _rsa_cert_der() raises -> List[UInt8]:
+def _rsa_cert_der() raises -> List[UInt8]:
     return hex_to_bytes(
         "3082029f30820187a003020102020101300d06092a864886f70d01010b050030"
         "133111300f06035504030c085465737420525341301e170d3230303130313030"
@@ -66,7 +66,7 @@ fn _rsa_cert_der() raises -> List[UInt8]:
     )
 
 
-fn _rsa_tampered_der() raises -> List[UInt8]:
+def _rsa_tampered_der() raises -> List[UInt8]:
     # Same cert but byte [-10] flipped: ...e32a... → ...e32b...
     return hex_to_bytes(
         "3082029f30820187a003020102020101300d06092a864886f70d01010b050030"
@@ -99,7 +99,7 @@ fn _rsa_tampered_der() raises -> List[UInt8]:
 # 277 bytes, generated with Python cryptography library
 # ============================================================================
 
-fn _ec_cert_der() raises -> List[UInt8]:
+def _ec_cert_der() raises -> List[UInt8]:
     return hex_to_bytes(
         "308201113081b7a003020102020101300a06082a8648ce3d04030230123110300e"
         "06035504030c0754657374204543301e170d3230303130313030303030305a170d"
@@ -113,7 +113,7 @@ fn _ec_cert_der() raises -> List[UInt8]:
     )
 
 
-fn _ec_tampered_der() raises -> List[UInt8]:
+def _ec_tampered_der() raises -> List[UInt8]:
     # Same cert but last r-byte flipped: ...caa2c... → ...caa2d...
     return hex_to_bytes(
         "308201113081b7a003020102020101300a06082a8648ce3d04030230123110300e"
@@ -132,7 +132,7 @@ fn _ec_tampered_der() raises -> List[UInt8]:
 # Tests
 # ============================================================================
 
-fn test_parse_rsa_cert() raises:
+def test_parse_rsa_cert() raises:
     var der = _rsa_cert_der()
     var cert = cert_parse(der)
     if cert.pub_key_alg != "rsa":
@@ -145,7 +145,7 @@ fn test_parse_rsa_cert() raises:
         raise Error("rsa_cert: ec_point should be empty for RSA cert")
 
 
-fn test_parse_ec_cert() raises:
+def test_parse_ec_cert() raises:
     var der = _ec_cert_der()
     var cert = cert_parse(der)
     if cert.pub_key_alg != "ec":
@@ -160,19 +160,19 @@ fn test_parse_ec_cert() raises:
         raise Error("ec_cert: rsa_n should be empty for EC cert")
 
 
-fn test_verify_rsa_self_signed() raises:
+def test_verify_rsa_self_signed() raises:
     var der = _rsa_cert_der()
     var cert = cert_parse(der)
     cert_verify_sig(cert, cert)
 
 
-fn test_verify_ec_self_signed() raises:
+def test_verify_ec_self_signed() raises:
     var der = _ec_cert_der()
     var cert = cert_parse(der)
     cert_verify_sig(cert, cert)
 
 
-fn test_reject_tampered_rsa() raises:
+def test_reject_tampered_rsa() raises:
     var der = _rsa_tampered_der()
     var cert = cert_parse(der)
     var raised = False
@@ -184,7 +184,7 @@ fn test_reject_tampered_rsa() raises:
         raise Error("tampered_rsa: tampered cert should not verify")
 
 
-fn test_reject_tampered_ec() raises:
+def test_reject_tampered_ec() raises:
     var der = _ec_tampered_der()
     var cert = cert_parse(der)
     var raised = False
@@ -196,7 +196,7 @@ fn test_reject_tampered_ec() raises:
         raise Error("tampered_ec: tampered cert should not verify")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
     print("=== X.509 Certificate Tests ===")

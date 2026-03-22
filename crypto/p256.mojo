@@ -22,7 +22,7 @@ from crypto.bigint import (
 # P-256 constants (returned as BigInt on demand)
 # ============================================================================
 
-fn _p256_p() -> BigInt:
+def _p256_p() -> BigInt:
     """Field prime p = 2^256 - 2^224 + 2^192 + 2^96 - 1."""
     var b = List[UInt8](capacity=32)
     b.append(0xFF); b.append(0xFF); b.append(0xFF); b.append(0xFF)
@@ -36,7 +36,7 @@ fn _p256_p() -> BigInt:
     return bigint_from_bytes(b)
 
 
-fn _p256_n() -> BigInt:
+def _p256_n() -> BigInt:
     """Curve order n."""
     var b = List[UInt8](capacity=32)
     b.append(0xFF); b.append(0xFF); b.append(0xFF); b.append(0xFF)
@@ -50,7 +50,7 @@ fn _p256_n() -> BigInt:
     return bigint_from_bytes(b)
 
 
-fn _p256_gx() -> BigInt:
+def _p256_gx() -> BigInt:
     """Generator x-coordinate."""
     var b = List[UInt8](capacity=32)
     b.append(0x6B); b.append(0x17); b.append(0xD1); b.append(0xF2)
@@ -64,7 +64,7 @@ fn _p256_gx() -> BigInt:
     return bigint_from_bytes(b)
 
 
-fn _p256_gy() -> BigInt:
+def _p256_gy() -> BigInt:
     """Generator y-coordinate."""
     var b = List[UInt8](capacity=32)
     b.append(0x4F); b.append(0xE3); b.append(0x42); b.append(0xE2)
@@ -82,7 +82,7 @@ fn _p256_gy() -> BigInt:
 # Field arithmetic — all operands in [0, p-1]
 # ============================================================================
 
-fn _fadd(a: BigInt, b: BigInt, p: BigInt) -> BigInt:
+def _fadd(a: BigInt, b: BigInt, p: BigInt) -> BigInt:
     """(a + b) mod p. Single conditional subtraction (a,b < p)."""
     var r = bigint_add(a, b)
     if bigint_cmp(r, p) >= 0:
@@ -90,14 +90,14 @@ fn _fadd(a: BigInt, b: BigInt, p: BigInt) -> BigInt:
     return r^
 
 
-fn _fsub(a: BigInt, b: BigInt, p: BigInt) -> BigInt:
+def _fsub(a: BigInt, b: BigInt, p: BigInt) -> BigInt:
     """(a - b) mod p. Single conditional addition."""
     if bigint_cmp(a, b) >= 0:
         return bigint_sub(a, b)
     return bigint_sub(bigint_add(a, p), b)
 
 
-fn _p256_nist_reduce(t: BigInt) -> BigInt:
+def _p256_nist_reduce(t: BigInt) -> BigInt:
     """Reduce a 512-bit product mod P-256 prime using NIST FIPS 186-4 D.1.2.3.
 
     t must be < p^2 (true for products of field elements).
@@ -202,39 +202,39 @@ fn _p256_nist_reduce(t: BigInt) -> BigInt:
     return r^
 
 
-fn _p256_fmul_fast(a: BigInt, b: BigInt) -> BigInt:
+def _p256_fmul_fast(a: BigInt, b: BigInt) -> BigInt:
     """(a * b) mod p256 using NIST fast reduction."""
     return _p256_nist_reduce(bigint_mul(a, b))
 
 
-fn _p256_fsq_fast(a: BigInt) -> BigInt:
+def _p256_fsq_fast(a: BigInt) -> BigInt:
     """a^2 mod p256 using NIST fast reduction."""
     return _p256_nist_reduce(bigint_mul(a, a.copy()))
 
 
-fn _fmul(a: BigInt, b: BigInt, p: BigInt) -> BigInt:
+def _fmul(a: BigInt, b: BigInt, p: BigInt) -> BigInt:
     """(a * b) mod p."""
     return _p256_fmul_fast(a, b)
 
 
-fn _fsq(a: BigInt, p: BigInt) -> BigInt:
+def _fsq(a: BigInt, p: BigInt) -> BigInt:
     """a^2 mod p."""
     return _p256_fsq_fast(a)
 
 
-fn _fneg(a: BigInt, p: BigInt) -> BigInt:
+def _fneg(a: BigInt, p: BigInt) -> BigInt:
     """-a mod p."""
     if bigint_is_zero(a):
         return bigint_zero()
     return bigint_sub(p, a)
 
 
-fn _finv(a: BigInt, p: BigInt) raises -> BigInt:
+def _finv(a: BigInt, p: BigInt) raises -> BigInt:
     """a^(-1) mod p using binary extended GCD (fast, safe for public Z coord)."""
     return bigint_modinv(a, p)
 
 
-fn _fk(a: BigInt, k: UInt64, p: BigInt) -> BigInt:
+def _fk(a: BigInt, k: UInt64, p: BigInt) -> BigInt:
     """k*a mod p for small constant k using repeated doubling."""
     if k == 2:
         return _fadd(a, a.copy(), p)
@@ -262,27 +262,27 @@ struct P256Point(Copyable, Movable):
     var z: BigInt
     var inf: Bool  # True = point at infinity
 
-    fn __init__(out self):
+    def __init__(out self):
         """Construct the point at infinity."""
         self.x = bigint_zero()
         self.y = bigint_zero()
         self.z = bigint_zero()
         self.inf = True
 
-    fn __copyinit__(out self, copy: Self):
+    def __copyinit__(out self, copy: Self):
         self.x = copy.x.copy()
         self.y = copy.y.copy()
         self.z = copy.z.copy()
         self.inf = copy.inf
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self.x = take.x^
         self.y = take.y^
         self.z = take.z^
         self.inf = take.inf
 
 
-fn _from_affine(x: BigInt, y: BigInt) -> P256Point:
+def _from_affine(x: BigInt, y: BigInt) -> P256Point:
     """Jacobian point from affine (x, y) with Z=1."""
     var P = P256Point()
     P.x = x.copy()
@@ -292,7 +292,7 @@ fn _from_affine(x: BigInt, y: BigInt) -> P256Point:
     return P^
 
 
-fn _to_affine(P: P256Point, p: BigInt) raises -> Tuple[BigInt, BigInt]:
+def _to_affine(P: P256Point, p: BigInt) raises -> Tuple[BigInt, BigInt]:
     """Convert Jacobian to affine: (X/Z^2, Y/Z^3) mod p."""
     var zinv = _finv(P.z, p)
     var zinv2 = _fsq(zinv.copy(), p)
@@ -308,7 +308,7 @@ fn _to_affine(P: P256Point, p: BigInt) raises -> Tuple[BigInt, BigInt]:
 # Cost: 3M + 5S + 8add
 # ============================================================================
 
-fn _pdbl(P: P256Point, p: BigInt) -> P256Point:
+def _pdbl(P: P256Point, p: BigInt) -> P256Point:
     if P.inf or bigint_is_zero(P.y):
         return P256Point()
 
@@ -348,7 +348,7 @@ fn _pdbl(P: P256Point, p: BigInt) -> P256Point:
 # Cost: 7M + 4S + 9add  (Z2 = 1 assumed)
 # ============================================================================
 
-fn _pmadd(P: P256Point, qx: BigInt, qy: BigInt, p: BigInt) -> P256Point:
+def _pmadd(P: P256Point, qx: BigInt, qy: BigInt, p: BigInt) -> P256Point:
     """P + Q where Q is in affine coordinates."""
     if P.inf:
         return _from_affine(qx, qy)
@@ -402,7 +402,7 @@ fn _pmadd(P: P256Point, qx: BigInt, qy: BigInt, p: BigInt) -> P256Point:
 # Cost: 11M + 5S
 # ============================================================================
 
-fn _padd(P: P256Point, Q: P256Point, p: BigInt) -> P256Point:
+def _padd(P: P256Point, Q: P256Point, p: BigInt) -> P256Point:
     """Full Jacobian + Jacobian point addition."""
     if P.inf:
         return Q.copy()
@@ -449,7 +449,7 @@ fn _padd(P: P256Point, Q: P256Point, p: BigInt) -> P256Point:
 # Scalar multiplication: Montgomery ladder (constant-time structure)
 # ============================================================================
 
-fn _p256_point_cswap(mut a: P256Point, mut b: P256Point, swap: Int):
+def _p256_point_cswap(mut a: P256Point, mut b: P256Point, swap: Int):
     """Conditionally swap two P-256 points in constant time (swap if swap==1)."""
     var mask: UInt32 = ~UInt32(0) if swap == 1 else UInt32(0)
     bigint_cswap_inplace(a.x, b.x, mask)
@@ -464,7 +464,7 @@ fn _p256_point_cswap(mut a: P256Point, mut b: P256Point, swap: Int):
     b.inf = (bi == 1)
 
 
-fn _scalar_mul_affine(scalar: BigInt, px: BigInt, py: BigInt, p: BigInt) -> P256Point:
+def _scalar_mul_affine(scalar: BigInt, px: BigInt, py: BigInt, p: BigInt) -> P256Point:
     """Compute scalar * P where P = (px, py) in affine coords, using Montgomery ladder."""
     var r0 = P256Point()  # point at infinity
     var r1 = P256Point()
@@ -485,7 +485,7 @@ fn _scalar_mul_affine(scalar: BigInt, px: BigInt, py: BigInt, p: BigInt) -> P256
     return r0^
 
 
-fn _scalar_mul(scalar: BigInt, P: P256Point, p: BigInt) -> P256Point:
+def _scalar_mul(scalar: BigInt, P: P256Point, p: BigInt) -> P256Point:
     """Compute scalar * P where P is in Jacobian coords, using Montgomery ladder."""
     var r0 = P256Point()  # point at infinity
     var r1 = P.copy()
@@ -506,7 +506,7 @@ fn _scalar_mul(scalar: BigInt, P: P256Point, p: BigInt) -> P256Point:
 # Point validation
 # ============================================================================
 
-fn _point_on_curve(x: BigInt, y: BigInt, p: BigInt) -> Bool:
+def _point_on_curve(x: BigInt, y: BigInt, p: BigInt) -> Bool:
     """Check y² ≡ x³ − 3x + b (mod p)."""
     # b = 5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b
     var bv = List[UInt8](capacity=32)
@@ -530,7 +530,7 @@ fn _point_on_curve(x: BigInt, y: BigInt, p: BigInt) -> Bool:
 # Parse uncompressed public key (65 bytes: 0x04 || X || Y)
 # ============================================================================
 
-fn _parse_pub(pub: List[UInt8]) raises -> Tuple[BigInt, BigInt]:
+def _parse_pub(pub: List[UInt8]) raises -> Tuple[BigInt, BigInt]:
     """Parse 65-byte uncompressed P-256 public key → (Qx, Qy)."""
     if len(pub) != 65 or pub[0] != 0x04:
         raise Error("p256: invalid public key format (need 65-byte uncompressed)")
@@ -546,7 +546,7 @@ fn _parse_pub(pub: List[UInt8]) raises -> Tuple[BigInt, BigInt]:
 # Public API
 # ============================================================================
 
-fn p256_public_key(private_key: List[UInt8]) raises -> List[UInt8]:
+def p256_public_key(private_key: List[UInt8]) raises -> List[UInt8]:
     """Derive 65-byte uncompressed P-256 public key from 32-byte private scalar."""
     if len(private_key) != 32:
         raise Error("p256: private key must be 32 bytes")
@@ -574,7 +574,7 @@ fn p256_public_key(private_key: List[UInt8]) raises -> List[UInt8]:
     return out^
 
 
-fn p256_ecdh(private_key: List[UInt8], peer_public_key: List[UInt8]) raises -> List[UInt8]:
+def p256_ecdh(private_key: List[UInt8], peer_public_key: List[UInt8]) raises -> List[UInt8]:
     """Compute 32-byte P-256 ECDH shared secret (x-coordinate only)."""
     if len(private_key) != 32:
         raise Error("p256: private key must be 32 bytes")
@@ -595,7 +595,7 @@ fn p256_ecdh(private_key: List[UInt8], peer_public_key: List[UInt8]) raises -> L
     return bigint_to_bytes(affine[0], 32)
 
 
-fn p256_ecdsa_verify(
+def p256_ecdsa_verify(
     pub_key:  List[UInt8],   # 65-byte uncompressed P-256 public key
     msg_hash: List[UInt8],   # 32-byte message hash
     sig_r:    List[UInt8],   # 32-byte r component

@@ -10,17 +10,17 @@
 struct BigInt(Copyable, Movable):
     var limbs: List[UInt32]
 
-    fn __init__(out self):
+    def __init__(out self):
         self.limbs = List[UInt32]()
         self.limbs.append(0)
 
-    fn __copyinit__(out self, copy: Self):
+    def __copyinit__(out self, copy: Self):
         self.limbs = copy.limbs.copy()
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self.limbs = take.limbs^
 
-    fn copy(self) -> BigInt:
+    def copy(self) -> BigInt:
         var b = BigInt()
         b.limbs = self.limbs.copy()
         return b^
@@ -30,7 +30,7 @@ struct BigInt(Copyable, Movable):
 # Internal helpers
 # ============================================================================
 
-fn _bigint_trim(mut a: BigInt):
+def _bigint_trim(mut a: BigInt):
     """Remove leading zero limbs (keep at least one limb)."""
     while len(a.limbs) > 1 and a.limbs[len(a.limbs) - 1] == 0:
         _ = a.limbs.pop()
@@ -40,17 +40,17 @@ fn _bigint_trim(mut a: BigInt):
 # Constructors
 # ============================================================================
 
-fn bigint_zero() -> BigInt:
+def bigint_zero() -> BigInt:
     return BigInt()
 
 
-fn bigint_one() -> BigInt:
+def bigint_one() -> BigInt:
     var b = BigInt()
     b.limbs[0] = 1
     return b^
 
 
-fn bigint_from_u64(v: UInt64) -> BigInt:
+def bigint_from_u64(v: UInt64) -> BigInt:
     var b = BigInt()
     b.limbs[0] = UInt32(v & 0xFFFFFFFF)
     var hi = UInt32(v >> 32)
@@ -59,7 +59,7 @@ fn bigint_from_u64(v: UInt64) -> BigInt:
     return b^
 
 
-fn bigint_from_bytes(b: List[UInt8]) -> BigInt:
+def bigint_from_bytes(b: List[UInt8]) -> BigInt:
     """Create BigInt from big-endian byte array."""
     var n = len(b)
     # Strip leading zeros
@@ -82,7 +82,7 @@ fn bigint_from_bytes(b: List[UInt8]) -> BigInt:
     return result^
 
 
-fn bigint_to_bytes(a: BigInt, n_bytes: Int) -> List[UInt8]:
+def bigint_to_bytes(a: BigInt, n_bytes: Int) -> List[UInt8]:
     """Serialize BigInt to big-endian byte array of exactly n_bytes."""
     var out = List[UInt8](capacity=n_bytes)
     for _ in range(n_bytes):
@@ -97,7 +97,7 @@ fn bigint_to_bytes(a: BigInt, n_bytes: Int) -> List[UInt8]:
     return out^
 
 
-fn bigint_is_zero(a: BigInt) -> Bool:
+def bigint_is_zero(a: BigInt) -> Bool:
     return len(a.limbs) == 1 and a.limbs[0] == 0
 
 
@@ -105,7 +105,7 @@ fn bigint_is_zero(a: BigInt) -> Bool:
 # Comparison
 # ============================================================================
 
-fn bigint_cmp(a: BigInt, b: BigInt) -> Int:
+def bigint_cmp(a: BigInt, b: BigInt) -> Int:
     """Compare a and b. Returns -1 if a<b, 0 if a==b, 1 if a>b."""
     var an = len(a.limbs)
     var bn = len(b.limbs)
@@ -123,7 +123,7 @@ fn bigint_cmp(a: BigInt, b: BigInt) -> Int:
 # Addition / Subtraction
 # ============================================================================
 
-fn bigint_add(a: BigInt, b: BigInt) -> BigInt:
+def bigint_add(a: BigInt, b: BigInt) -> BigInt:
     """Return a + b."""
     var an = len(a.limbs)
     var bn = len(b.limbs)
@@ -144,7 +144,7 @@ fn bigint_add(a: BigInt, b: BigInt) -> BigInt:
     return result^
 
 
-fn bigint_sub(a: BigInt, b: BigInt) -> BigInt:
+def bigint_sub(a: BigInt, b: BigInt) -> BigInt:
     """Return a - b. Requires a >= b (undefined behaviour otherwise)."""
     var an = len(a.limbs)
     var result = BigInt()
@@ -170,7 +170,7 @@ fn bigint_sub(a: BigInt, b: BigInt) -> BigInt:
 # Multiplication (schoolbook O(n²))
 # ============================================================================
 
-fn bigint_mul(a: BigInt, b: BigInt) -> BigInt:
+def bigint_mul(a: BigInt, b: BigInt) -> BigInt:
     """Return a * b."""
     var an = len(a.limbs)
     var bn = len(b.limbs)
@@ -195,7 +195,7 @@ fn bigint_mul(a: BigInt, b: BigInt) -> BigInt:
 # Bit operations
 # ============================================================================
 
-fn bigint_bit_len(a: BigInt) -> Int:
+def bigint_bit_len(a: BigInt) -> Int:
     """Number of bits needed to represent a (0 returns 0)."""
     var n = len(a.limbs)
     var top = a.limbs[n - 1]
@@ -208,7 +208,7 @@ fn bigint_bit_len(a: BigInt) -> Int:
     return bits
 
 
-fn bigint_get_bit(a: BigInt, i: Int) -> UInt32:
+def bigint_get_bit(a: BigInt, i: Int) -> UInt32:
     """Return bit i of a (0 = LSB)."""
     var limb_idx = i // 32
     if limb_idx >= len(a.limbs):
@@ -216,7 +216,7 @@ fn bigint_get_bit(a: BigInt, i: Int) -> UInt32:
     return (a.limbs[limb_idx] >> UInt32(i % 32)) & 1
 
 
-fn bigint_shr1(a: BigInt) -> BigInt:
+def bigint_shr1(a: BigInt) -> BigInt:
     """Return a >> 1."""
     var n = len(a.limbs)
     var result = BigInt()
@@ -233,7 +233,7 @@ fn bigint_shr1(a: BigInt) -> BigInt:
     return result^
 
 
-fn bigint_shl(a: BigInt, shift: Int) -> BigInt:
+def bigint_shl(a: BigInt, shift: Int) -> BigInt:
     """Return a << shift."""
     if bigint_is_zero(a) or shift == 0:
         return a.copy()
@@ -258,7 +258,7 @@ fn bigint_shl(a: BigInt, shift: Int) -> BigInt:
 # Modular reduction (binary shift-subtract)
 # ============================================================================
 
-fn _bigint_shr1_inplace(mut a: BigInt):
+def _bigint_shr1_inplace(mut a: BigInt):
     """Shift a right by 1 in-place (no allocation)."""
     var n = len(a.limbs)
     for i in range(n):
@@ -270,7 +270,7 @@ fn _bigint_shr1_inplace(mut a: BigInt):
     _bigint_trim(a)
 
 
-fn bigint_mod(a: BigInt, n: BigInt) -> BigInt:
+def bigint_mod(a: BigInt, n: BigInt) -> BigInt:
     """Return a mod n."""
     if bigint_cmp(a, n) < 0:
         return a.copy()
@@ -288,7 +288,7 @@ fn bigint_mod(a: BigInt, n: BigInt) -> BigInt:
     return r^
 
 
-fn bigint_modmul(a: BigInt, b: BigInt, n: BigInt) -> BigInt:
+def bigint_modmul(a: BigInt, b: BigInt, n: BigInt) -> BigInt:
     """Return a * b mod n."""
     var p = bigint_mul(a, b)
     return bigint_mod(p, n)
@@ -298,7 +298,7 @@ fn bigint_modmul(a: BigInt, b: BigInt, n: BigInt) -> BigInt:
 # Modular exponentiation (left-to-right binary method)
 # ============================================================================
 
-fn bigint_modexp(base: BigInt, exp: BigInt, n: BigInt) -> BigInt:
+def bigint_modexp(base: BigInt, exp: BigInt, n: BigInt) -> BigInt:
     """Return base^exp mod n (constant-time: always computes both branches)."""
     if bigint_is_zero(n):
         return bigint_zero()
@@ -321,7 +321,7 @@ fn bigint_modexp(base: BigInt, exp: BigInt, n: BigInt) -> BigInt:
 # Modular inverse — binary extended GCD
 # ============================================================================
 
-fn bigint_modinv(a: BigInt, n: BigInt) raises -> BigInt:
+def bigint_modinv(a: BigInt, n: BigInt) raises -> BigInt:
     """Compute a^(-1) mod n where n is odd. Raises if a ≡ 0 mod n or gcd != 1.
 
     Uses binary extended GCD. NOT constant-time (safe for public data only).
@@ -379,7 +379,7 @@ fn bigint_modinv(a: BigInt, n: BigInt) raises -> BigInt:
 # Constant-time conditional swap
 # ============================================================================
 
-fn bigint_cswap_inplace(mut a: BigInt, mut b: BigInt, mask: UInt32):
+def bigint_cswap_inplace(mut a: BigInt, mut b: BigInt, mask: UInt32):
     """Conditionally swap limbs of a and b in constant time.
 
     mask = 0xFFFFFFFF → swap a and b

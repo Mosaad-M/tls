@@ -10,7 +10,7 @@ from crypto.gcm import gcm_encrypt, gcm_decrypt
 # ============================================================================
 
 
-fn _hex_nibble(b: UInt8) raises -> UInt8:
+def _hex_nibble(b: UInt8) raises -> UInt8:
     if b >= 48 and b <= 57:
         return b - 48
     if b >= 97 and b <= 102:
@@ -18,7 +18,7 @@ fn _hex_nibble(b: UInt8) raises -> UInt8:
     raise Error("bad hex char")
 
 
-fn hex_to_bytes(hex: String) raises -> List[UInt8]:
+def hex_to_bytes(hex: String) raises -> List[UInt8]:
     var raw = hex.as_bytes()
     var n = len(raw)
     if n % 2 != 0:
@@ -29,7 +29,7 @@ fn hex_to_bytes(hex: String) raises -> List[UInt8]:
     return out^
 
 
-fn bytes_to_hex(b: List[UInt8]) -> String:
+def bytes_to_hex(b: List[UInt8]) -> String:
     var digits = "0123456789abcdef".as_bytes()
     var result = List[UInt8](capacity=len(b) * 2)
     for i in range(len(b)):
@@ -39,17 +39,17 @@ fn bytes_to_hex(b: List[UInt8]) -> String:
     return String(unsafe_from_utf8=result^)
 
 
-fn assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
+def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
     var got_hex = bytes_to_hex(got)
     if got_hex != expected_hex:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -65,7 +65,7 @@ fn run_test(
 # ============================================================================
 
 
-fn test_gcm128_tc1_empty() raises:
+def test_gcm128_tc1_empty() raises:
     # TC1: zero key/IV, empty PT and AAD
     var key = hex_to_bytes("00000000000000000000000000000000")
     var iv  = hex_to_bytes("000000000000000000000000")
@@ -76,7 +76,7 @@ fn test_gcm128_tc1_empty() raises:
     assert_hex_eq(tag, "58e2fccefa7e3061367f1d57a4e7455a", "gcm128_tc1_tag")
 
 
-fn test_gcm128_tc2_zero_pt() raises:
+def test_gcm128_tc2_zero_pt() raises:
     # TC2: zero key/IV, 16-byte zero PT, no AAD
     var key = hex_to_bytes("00000000000000000000000000000000")
     var iv  = hex_to_bytes("000000000000000000000000")
@@ -90,7 +90,7 @@ fn test_gcm128_tc2_zero_pt() raises:
     assert_hex_eq(tag, "ab6e47d42cec13bdf53a67b21257bddf", "gcm128_tc2_tag")
 
 
-fn test_gcm128_tc3_known_key() raises:
+def test_gcm128_tc3_known_key() raises:
     # TC3: real key/IV, 64-byte PT, no AAD
     var key = hex_to_bytes("feffe9928665731c6d6a8f9467308308")
     var iv  = hex_to_bytes("cafebabefacedbaddecaf888")
@@ -110,7 +110,7 @@ fn test_gcm128_tc3_known_key() raises:
     assert_hex_eq(tag, "4d5c2af327cd64a62cf35abd2ba6fab4", "gcm128_tc3_tag")
 
 
-fn test_gcm128_tc4_with_aad() raises:
+def test_gcm128_tc4_with_aad() raises:
     # TC4: real key/IV, 60-byte PT, 20-byte AAD
     var key = hex_to_bytes("feffe9928665731c6d6a8f9467308308")
     var iv  = hex_to_bytes("cafebabefacedbaddecaf888")
@@ -136,7 +136,7 @@ fn test_gcm128_tc4_with_aad() raises:
 # ============================================================================
 
 
-fn test_gcm256_tc1_empty() raises:
+def test_gcm256_tc1_empty() raises:
     var key = hex_to_bytes("00000000000000000000000000000000"
                            "00000000000000000000000000000000")
     var iv  = hex_to_bytes("000000000000000000000000")
@@ -147,7 +147,7 @@ fn test_gcm256_tc1_empty() raises:
     assert_hex_eq(tag, "530f8afbc74536b9a963b4f1c4cb738b", "gcm256_tc1_tag")
 
 
-fn test_gcm256_tc2_zero_pt() raises:
+def test_gcm256_tc2_zero_pt() raises:
     var key = hex_to_bytes("00000000000000000000000000000000"
                            "00000000000000000000000000000000")
     var iv  = hex_to_bytes("000000000000000000000000")
@@ -161,7 +161,7 @@ fn test_gcm256_tc2_zero_pt() raises:
     assert_hex_eq(tag, "d0d1c8a799996bf0265b98b5d48ab919", "gcm256_tc2_tag")
 
 
-fn test_gcm256_tc4_with_aad() raises:
+def test_gcm256_tc4_with_aad() raises:
     var key = hex_to_bytes(
         "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308"
     )
@@ -188,7 +188,7 @@ fn test_gcm256_tc4_with_aad() raises:
 # ============================================================================
 
 
-fn test_gcm_decrypt_roundtrip() raises:
+def test_gcm_decrypt_roundtrip() raises:
     # Encrypt then decrypt, compare to original plaintext
     var key = hex_to_bytes("feffe9928665731c6d6a8f9467308308")
     var iv  = hex_to_bytes("cafebabefacedbaddecaf888")
@@ -201,7 +201,7 @@ fn test_gcm_decrypt_roundtrip() raises:
     assert_hex_eq(recovered, "d9313225f88406e5a55909c5aff5269a", "roundtrip")
 
 
-fn test_gcm_reject_tampered_ct() raises:
+def test_gcm_reject_tampered_ct() raises:
     var key = hex_to_bytes("feffe9928665731c6d6a8f9467308308")
     var iv  = hex_to_bytes("cafebabefacedbaddecaf888")
     var pt  = hex_to_bytes("d9313225f88406e5a55909c5aff5269a")
@@ -218,7 +218,7 @@ fn test_gcm_reject_tampered_ct() raises:
         raise Error("tampered CT was not rejected")
 
 
-fn test_gcm_reject_tampered_tag() raises:
+def test_gcm_reject_tampered_tag() raises:
     var key = hex_to_bytes("feffe9928665731c6d6a8f9467308308")
     var iv  = hex_to_bytes("cafebabefacedbaddecaf888")
     var pt  = hex_to_bytes("d9313225f88406e5a55909c5aff5269a")
@@ -235,7 +235,7 @@ fn test_gcm_reject_tampered_tag() raises:
         raise Error("tampered tag was not rejected")
 
 
-fn test_gcm_reject_tampered_aad() raises:
+def test_gcm_reject_tampered_aad() raises:
     var key = hex_to_bytes("feffe9928665731c6d6a8f9467308308")
     var iv  = hex_to_bytes("cafebabefacedbaddecaf888")
     var pt  = hex_to_bytes("d9313225f88406e5a55909c5aff5269a")
@@ -258,7 +258,7 @@ fn test_gcm_reject_tampered_aad() raises:
 # ============================================================================
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

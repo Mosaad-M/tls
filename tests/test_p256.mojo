@@ -5,13 +5,13 @@
 from crypto.p256 import p256_public_key, p256_ecdh, p256_ecdsa_verify
 
 
-fn _hex_nibble(b: UInt8) raises -> UInt8:
+def _hex_nibble(b: UInt8) raises -> UInt8:
     if b >= 48 and b <= 57: return b - 48
     if b >= 97 and b <= 102: return b - 87
     raise Error("bad hex char")
 
 
-fn hex_to_bytes(hex: String) raises -> List[UInt8]:
+def hex_to_bytes(hex: String) raises -> List[UInt8]:
     var raw = hex.as_bytes()
     var n = len(raw)
     if n % 2 != 0: raise Error("odd hex length")
@@ -21,7 +21,7 @@ fn hex_to_bytes(hex: String) raises -> List[UInt8]:
     return out^
 
 
-fn bytes_to_hex(b: List[UInt8]) -> String:
+def bytes_to_hex(b: List[UInt8]) -> String:
     var digits = "0123456789abcdef".as_bytes()
     var result = List[UInt8](capacity=len(b) * 2)
     for i in range(len(b)):
@@ -31,13 +31,13 @@ fn bytes_to_hex(b: List[UInt8]) -> String:
     return String(unsafe_from_utf8=result^)
 
 
-fn assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
+def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
     var got_hex = bytes_to_hex(got)
     if got_hex != expected_hex:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raises -> None):
+def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
     try:
         test_fn()
         print("  PASS:", name)
@@ -51,7 +51,7 @@ fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raise
 # Generator validation — scalar = 1 must return the generator itself
 # ============================================================================
 
-fn test_generator_identity() raises:
+def test_generator_identity() raises:
     var priv = List[UInt8](capacity=32)
     for _ in range(31): priv.append(0)
     priv.append(1)  # scalar = 1
@@ -76,7 +76,7 @@ fn test_generator_identity() raises:
 #   Qy = 7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299
 # ============================================================================
 
-fn test_public_key_alice() raises:
+def test_public_key_alice() raises:
     var d = hex_to_bytes(
         "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
     )
@@ -104,7 +104,7 @@ fn test_public_key_alice() raises:
 #   Qy = bfa86404a2e9ffe67d47c587ef7a97a7f456b863b4d02cfc6928973ab5b1cb39
 # ============================================================================
 
-fn test_public_key_bob() raises:
+def test_public_key_bob() raises:
     var d = hex_to_bytes(
         "0f56db78ca460b055c500064824bed999a25aaf48ebb519ac201537b85479813"
     )
@@ -130,7 +130,7 @@ fn test_public_key_bob() raises:
 #   shared = 90223373f75e989ab8965d8cc88f01ceb4c622875861771da7bf1a0faccae374
 # ============================================================================
 
-fn test_ecdh_shared_secret() raises:
+def test_ecdh_shared_secret() raises:
     var d_alice = hex_to_bytes(
         "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
     )
@@ -157,7 +157,7 @@ fn test_ecdh_shared_secret() raises:
 #   s = f329be41981bd8ff57968566f3f399c9a397fc409b3e4890f655b5d226a04790
 # ============================================================================
 
-fn test_ecdsa_verify() raises:
+def test_ecdsa_verify() raises:
     var pub = hex_to_bytes(
         "04"
         "60fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6"
@@ -175,7 +175,7 @@ fn test_ecdsa_verify() raises:
     p256_ecdsa_verify(pub, hash, r, s)  # raises on failure
 
 
-fn test_ecdsa_reject_bad_sig() raises:
+def test_ecdsa_reject_bad_sig() raises:
     var pub = hex_to_bytes(
         "04"
         "60fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6"
@@ -200,7 +200,7 @@ fn test_ecdsa_reject_bad_sig() raises:
         raise Error("ecdsa_reject: tampered signature was not rejected")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
     print("=== P-256 Tests ===")

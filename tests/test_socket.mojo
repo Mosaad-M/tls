@@ -19,7 +19,7 @@ comptime CA_DER_HEX = "3082019230820138a0030201020214573f65a34f1eda3f679a037a6e6
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
-fn hex_to_bytes(h: String) -> List[UInt8]:
+def hex_to_bytes(h: String) -> List[UInt8]:
     var raw = h.as_bytes()
     var n = len(raw) // 2
     var out = List[UInt8](capacity=n)
@@ -32,7 +32,7 @@ fn hex_to_bytes(h: String) -> List[UInt8]:
     return out^
 
 
-fn _tcp_connect(port: Int) raises -> Int32:
+def _tcp_connect(port: Int) raises -> Int32:
     """Open a TCP connection to 127.0.0.1:port."""
     var AF_INET: Int32 = 2
     var SOCK_STREAM: Int32 = 1
@@ -58,7 +58,7 @@ fn _tcp_connect(port: Int) raises -> Int32:
     return fd
 
 
-fn _run_server(port: Int, certfile: String, keyfile: String):
+def _run_server(port: Int, certfile: String, keyfile: String):
     var cmd = (
         String("python3 tests/tls_test_server.py ")
         + String(port)
@@ -71,7 +71,7 @@ fn _run_server(port: Int, certfile: String, keyfile: String):
     _ = external_call["system", Int32](cmd.unsafe_ptr())
 
 
-fn _kill_server(port: Int):
+def _kill_server(port: Int):
     var cmd = (
         String("pkill -f 'tls_test_server.py ")
         + String(port)
@@ -80,17 +80,17 @@ fn _kill_server(port: Int):
     _ = external_call["system", Int32](cmd.unsafe_ptr())
 
 
-fn _make_trust_anchors() raises -> List[X509Cert]:
+def _make_trust_anchors() raises -> List[X509Cert]:
     var anchors = List[X509Cert]()
     anchors.append(cert_parse(hex_to_bytes(CA_DER_HEX)))
     return anchors^
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -103,7 +103,7 @@ fn run_test(
 
 # ── Tests ──────────────────────────────────────────────────────────────────
 
-fn test_load_system_ca_bundle() raises:
+def test_load_system_ca_bundle() raises:
     """load_system_ca_bundle() returns at least 40 trusted CA certs.
 
     Note: only SHA-256-compatible certs (P-256 ECDSA or RSA) are parsed;
@@ -116,7 +116,7 @@ fn test_load_system_ca_bundle() raises:
         )
 
 
-fn test_socket_connect() raises:
+def test_socket_connect() raises:
     """TlsSocket.connect() succeeds with valid server cert."""
     _run_server(14446, "tests/server.pem", "tests/server.key")
     _ = external_call["usleep", Int32](UInt32(1000000))  # 1s startup wait
@@ -128,7 +128,7 @@ fn test_socket_connect() raises:
     _kill_server(14446)
 
 
-fn test_socket_send_recv() raises:
+def test_socket_send_recv() raises:
     """TlsSocket send+recv: HTTP GET returns 200 OK response."""
     _run_server(14447, "tests/server.pem", "tests/server.key")
     _ = external_call["usleep", Int32](UInt32(1000000))
@@ -169,7 +169,7 @@ fn test_socket_send_recv() raises:
         raise Error("expected HTTP/1.1 200 response")
 
 
-fn test_socket_wrong_cert_raises() raises:
+def test_socket_wrong_cert_raises() raises:
     """TlsSocket.connect() raises when server cert has wrong hostname."""
     _run_server(14448, "tests/wronghost.pem", "tests/wronghost.key")
     _ = external_call["usleep", Int32](UInt32(1000000))
@@ -187,7 +187,7 @@ fn test_socket_wrong_cert_raises() raises:
         raise Error("expected raise for hostname mismatch")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

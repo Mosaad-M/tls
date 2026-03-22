@@ -16,7 +16,7 @@
 from crypto.hmac import hmac_sha256, hmac_sha384
 
 
-fn hkdf_extract(salt: List[UInt8], ikm: List[UInt8]) -> List[UInt8]:
+def hkdf_extract(salt: List[UInt8], ikm: List[UInt8]) -> List[UInt8]:
     """HKDF-Extract using SHA-256. Returns 32-byte PRK.
 
     If no salt is available, pass salt = 0x00 * 32.
@@ -24,7 +24,7 @@ fn hkdf_extract(salt: List[UInt8], ikm: List[UInt8]) -> List[UInt8]:
     return hmac_sha256(salt, ikm)
 
 
-fn hkdf_expand(prk: List[UInt8], info: List[UInt8], length: Int) raises -> List[UInt8]:
+def hkdf_expand(prk: List[UInt8], info: List[UInt8], length: Int) raises -> List[UInt8]:
     """HKDF-Expand using SHA-256. Returns `length` bytes of keying material.
 
     Requires: length <= 255 * 32 (255 * HashLen).
@@ -57,7 +57,7 @@ fn hkdf_expand(prk: List[UInt8], info: List[UInt8], length: Int) raises -> List[
     return result^
 
 
-fn hkdf_expand_label(
+def hkdf_expand_label(
     secret: List[UInt8],
     label: String,
     context: List[UInt8],
@@ -99,7 +99,7 @@ fn hkdf_expand_label(
 # HKDF-SHA384 variants (for TLS_AES_256_GCM_SHA384 / cipher suite 0x1302)
 # ============================================================================
 
-fn hkdf_extract_sha384(salt: List[UInt8], ikm: List[UInt8]) -> List[UInt8]:
+def hkdf_extract_sha384(salt: List[UInt8], ikm: List[UInt8]) -> List[UInt8]:
     """HKDF-Extract using SHA-384. Returns 48-byte PRK.
 
     If no salt is available, pass salt = 0x00 * 48.
@@ -107,7 +107,7 @@ fn hkdf_extract_sha384(salt: List[UInt8], ikm: List[UInt8]) -> List[UInt8]:
     return hmac_sha384(salt, ikm)
 
 
-fn hkdf_expand_sha384(prk: List[UInt8], info: List[UInt8], length: Int) raises -> List[UInt8]:
+def hkdf_expand_sha384(prk: List[UInt8], info: List[UInt8], length: Int) raises -> List[UInt8]:
     """HKDF-Expand using SHA-384. Returns `length` bytes of keying material.
 
     Requires: length <= 255 * 48 (255 * HashLen).
@@ -140,7 +140,7 @@ fn hkdf_expand_sha384(prk: List[UInt8], info: List[UInt8], length: Int) raises -
     return result^
 
 
-fn hkdf_expand_label_sha384(
+def hkdf_expand_label_sha384(
     secret: List[UInt8],
     label: String,
     context: List[UInt8],

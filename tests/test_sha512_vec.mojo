@@ -2,7 +2,7 @@
 from crypto.hash import sha512
 
 
-fn hex_bytes(s: List[UInt8]) -> String:
+def hex_bytes(s: List[UInt8]) -> String:
     var result = String()
     for i in range(len(s)):
         var b = Int(s[i])
@@ -13,7 +13,7 @@ fn hex_bytes(s: List[UInt8]) -> String:
     return result
 
 
-fn main() raises:
+def main() raises:
     # Vec1 from RFC 8032:
     # sk = 9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60
     # h = sha512(sk)

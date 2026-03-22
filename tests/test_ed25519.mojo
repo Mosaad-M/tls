@@ -10,7 +10,7 @@ from crypto.ed25519 import ed25519_public_key, ed25519_sign, ed25519_verify
 # ============================================================================
 
 
-fn hex_to_bytes(s: String) raises -> List[UInt8]:
+def hex_to_bytes(s: String) raises -> List[UInt8]:
     """Decode lowercase hex string to byte list."""
     if len(s) % 2 != 0:
         raise Error("hex_to_bytes: odd length")
@@ -23,7 +23,7 @@ fn hex_to_bytes(s: String) raises -> List[UInt8]:
     return out^
 
 
-fn _nibble(b: UInt8) raises -> UInt8:
+def _nibble(b: UInt8) raises -> UInt8:
     if b >= 48 and b <= 57:
         return b - 48
     if b >= 97 and b <= 102:
@@ -31,7 +31,7 @@ fn _nibble(b: UInt8) raises -> UInt8:
     raise Error("hex_to_bytes: bad char")
 
 
-fn bytes_to_hex(b: List[UInt8]) -> String:
+def bytes_to_hex(b: List[UInt8]) -> String:
     var digits = "0123456789abcdef".as_bytes()
     var result = List[UInt8](capacity=len(b) * 2)
     for i in range(len(b)):
@@ -41,17 +41,17 @@ fn bytes_to_hex(b: List[UInt8]) -> String:
     return String(unsafe_from_utf8=result^)
 
 
-fn assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
+def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
     var got_hex = bytes_to_hex(got)
     if got_hex != expected_hex:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -69,7 +69,7 @@ fn run_test(
 #              message, expected signature (64 bytes)
 
 
-fn test_vec1_public_key() raises:
+def test_vec1_public_key() raises:
     # Test vector 1 — empty message
     var priv = hex_to_bytes(
         "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
@@ -81,7 +81,7 @@ fn test_vec1_public_key() raises:
     assert_hex_eq(pub, bytes_to_hex(expected_pub), "vec1_pubkey")
 
 
-fn test_vec1_sign() raises:
+def test_vec1_sign() raises:
     var priv = hex_to_bytes(
         "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
     )
@@ -93,7 +93,7 @@ fn test_vec1_sign() raises:
     assert_hex_eq(sig, bytes_to_hex(expected_sig), "vec1_sign")
 
 
-fn test_vec1_verify() raises:
+def test_vec1_verify() raises:
     var pub = hex_to_bytes(
         "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
     )
@@ -106,7 +106,7 @@ fn test_vec1_verify() raises:
         raise Error("vec1_verify: expected True")
 
 
-fn test_vec2_public_key() raises:
+def test_vec2_public_key() raises:
     # Test vector 2 — 1-byte message
     var priv = hex_to_bytes(
         "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"
@@ -118,7 +118,7 @@ fn test_vec2_public_key() raises:
     assert_hex_eq(pub, bytes_to_hex(expected_pub), "vec2_pubkey")
 
 
-fn test_vec2_sign() raises:
+def test_vec2_sign() raises:
     var priv = hex_to_bytes(
         "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"
     )
@@ -130,7 +130,7 @@ fn test_vec2_sign() raises:
     assert_hex_eq(sig, bytes_to_hex(expected_sig), "vec2_sign")
 
 
-fn test_vec2_verify() raises:
+def test_vec2_verify() raises:
     var pub = hex_to_bytes(
         "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
     )
@@ -143,7 +143,7 @@ fn test_vec2_verify() raises:
         raise Error("vec2_verify: expected True")
 
 
-fn test_vec3_public_key() raises:
+def test_vec3_public_key() raises:
     # Test vector 3 — 2-byte message
     var priv = hex_to_bytes(
         "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7"
@@ -155,7 +155,7 @@ fn test_vec3_public_key() raises:
     assert_hex_eq(pub, bytes_to_hex(expected_pub), "vec3_pubkey")
 
 
-fn test_vec3_sign() raises:
+def test_vec3_sign() raises:
     var priv = hex_to_bytes(
         "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7"
     )
@@ -167,7 +167,7 @@ fn test_vec3_sign() raises:
     assert_hex_eq(sig, bytes_to_hex(expected_sig), "vec3_sign")
 
 
-fn test_vec3_verify() raises:
+def test_vec3_verify() raises:
     var pub = hex_to_bytes(
         "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025"
     )
@@ -180,7 +180,7 @@ fn test_vec3_verify() raises:
         raise Error("vec3_verify: expected True")
 
 
-fn test_vec4_public_key() raises:
+def test_vec4_public_key() raises:
     # Test vector 4 — 1023-byte message (SHA-512 test; heavy)
     var priv = hex_to_bytes(
         "f5e5767cf153319517630f226876b86c8160cc583bc013744c6bf255f5cc0ee5"
@@ -192,7 +192,7 @@ fn test_vec4_public_key() raises:
     assert_hex_eq(pub, bytes_to_hex(expected_pub), "vec4_pubkey")
 
 
-fn test_vec4_sign() raises:
+def test_vec4_sign() raises:
     var priv = hex_to_bytes(
         "f5e5767cf153319517630f226876b86c8160cc583bc013744c6bf255f5cc0ee5"
     )
@@ -270,7 +270,7 @@ fn test_vec4_sign() raises:
     assert_hex_eq(sig, bytes_to_hex(expected_sig), "vec4_sign")
 
 
-fn test_vec4_verify() raises:
+def test_vec4_verify() raises:
     var pub = hex_to_bytes(
         "278117fc144c72340f67d0f2316e8386ceffbf2b2428c9c51fef7c597f1d426e"
     )
@@ -348,7 +348,7 @@ fn test_vec4_verify() raises:
         raise Error("vec4_verify: expected True")
 
 
-fn test_invalid_sig() raises:
+def test_invalid_sig() raises:
     """A flipped bit in the signature must fail verification."""
     var pub = hex_to_bytes(
         "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
@@ -363,7 +363,7 @@ fn test_invalid_sig() raises:
         raise Error("invalid_sig: expected False (should reject bad sig)")
 
 
-fn test_roundtrip() raises:
+def test_roundtrip() raises:
     """Sign then verify with a synthetic private key."""
     var priv = List[UInt8](capacity=32)
     for i in range(32):
@@ -385,7 +385,7 @@ fn test_roundtrip() raises:
 # ============================================================================
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

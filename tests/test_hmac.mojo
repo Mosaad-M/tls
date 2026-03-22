@@ -10,7 +10,7 @@ from crypto.hmac import hmac_sha256, hmac_sha384, hmac_equal
 # ============================================================================
 
 
-fn _hex_nibble(b: UInt8) raises -> UInt8:
+def _hex_nibble(b: UInt8) raises -> UInt8:
     if b >= 48 and b <= 57:
         return b - 48
     if b >= 97 and b <= 102:
@@ -18,7 +18,7 @@ fn _hex_nibble(b: UInt8) raises -> UInt8:
     raise Error("bad hex char")
 
 
-fn hex_to_bytes(hex: String) raises -> List[UInt8]:
+def hex_to_bytes(hex: String) raises -> List[UInt8]:
     var raw = hex.as_bytes()
     var n = len(raw)
     if n % 2 != 0:
@@ -29,7 +29,7 @@ fn hex_to_bytes(hex: String) raises -> List[UInt8]:
     return out^
 
 
-fn bytes_to_hex(b: List[UInt8]) -> String:
+def bytes_to_hex(b: List[UInt8]) -> String:
     var digits = "0123456789abcdef".as_bytes()
     var result = List[UInt8](capacity=len(b) * 2)
     for i in range(len(b)):
@@ -39,7 +39,7 @@ fn bytes_to_hex(b: List[UInt8]) -> String:
     return String(unsafe_from_utf8=result^)
 
 
-fn str_to_bytes(s: String) -> List[UInt8]:
+def str_to_bytes(s: String) -> List[UInt8]:
     var raw = s.as_bytes()
     var out = List[UInt8](capacity=len(raw))
     for i in range(len(raw)):
@@ -47,24 +47,24 @@ fn str_to_bytes(s: String) -> List[UInt8]:
     return out^
 
 
-fn repeat_byte(b: UInt8, n: Int) -> List[UInt8]:
+def repeat_byte(b: UInt8, n: Int) -> List[UInt8]:
     var out = List[UInt8](capacity=n)
     for _ in range(n):
         out.append(b)
     return out^
 
 
-fn assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
+def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
     var got_hex = bytes_to_hex(got)
     if got_hex != expected_hex:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -80,7 +80,7 @@ fn run_test(
 # ============================================================================
 
 
-fn test_hmac256_tc1() raises:
+def test_hmac256_tc1() raises:
     # key = 0x0b * 20, data = "Hi There"
     var key = repeat_byte(0x0B, 20)
     var data = str_to_bytes("Hi There")
@@ -92,7 +92,7 @@ fn test_hmac256_tc1() raises:
     )
 
 
-fn test_hmac256_tc2() raises:
+def test_hmac256_tc2() raises:
     # key = "Jefe", data = "what do ya want for nothing?"
     var key = str_to_bytes("Jefe")
     var data = str_to_bytes("what do ya want for nothing?")
@@ -104,7 +104,7 @@ fn test_hmac256_tc2() raises:
     )
 
 
-fn test_hmac256_tc3() raises:
+def test_hmac256_tc3() raises:
     # key = 0xaa * 20, data = 0xdd * 50
     var key = repeat_byte(0xAA, 20)
     var data = repeat_byte(0xDD, 50)
@@ -116,7 +116,7 @@ fn test_hmac256_tc3() raises:
     )
 
 
-fn test_hmac256_tc4() raises:
+def test_hmac256_tc4() raises:
     # key = 0x01..0x19 (25 bytes), data = 0xcd * 50
     var key = List[UInt8](capacity=25)
     for i in range(1, 26):
@@ -130,7 +130,7 @@ fn test_hmac256_tc4() raises:
     )
 
 
-fn test_hmac256_tc5() raises:
+def test_hmac256_tc5() raises:
     # key = 0x0c * 20, data = "Test With Truncation"
     var key = repeat_byte(0x0C, 20)
     var data = str_to_bytes("Test With Truncation")
@@ -142,7 +142,7 @@ fn test_hmac256_tc5() raises:
     )
 
 
-fn test_hmac256_tc6() raises:
+def test_hmac256_tc6() raises:
     # key = 0xaa * 131 (longer than block size), data = "Test Using Larger..."
     var key = repeat_byte(0xAA, 131)
     var data = str_to_bytes(
@@ -156,7 +156,7 @@ fn test_hmac256_tc6() raises:
     )
 
 
-fn test_hmac256_tc7() raises:
+def test_hmac256_tc7() raises:
     # key = 0xaa * 131, data = long string
     var key = repeat_byte(0xAA, 131)
     var data = str_to_bytes(
@@ -175,7 +175,7 @@ fn test_hmac256_tc7() raises:
 # ============================================================================
 
 
-fn test_hmac384_tc1() raises:
+def test_hmac384_tc1() raises:
     var key = repeat_byte(0x0B, 20)
     var data = str_to_bytes("Hi There")
     var result = hmac_sha384(key, data)
@@ -186,7 +186,7 @@ fn test_hmac384_tc1() raises:
     )
 
 
-fn test_hmac384_tc2() raises:
+def test_hmac384_tc2() raises:
     var key = str_to_bytes("Jefe")
     var data = str_to_bytes("what do ya want for nothing?")
     var result = hmac_sha384(key, data)
@@ -197,7 +197,7 @@ fn test_hmac384_tc2() raises:
     )
 
 
-fn test_hmac384_tc3() raises:
+def test_hmac384_tc3() raises:
     var key = repeat_byte(0xAA, 20)
     var data = repeat_byte(0xDD, 50)
     var result = hmac_sha384(key, data)
@@ -208,7 +208,7 @@ fn test_hmac384_tc3() raises:
     )
 
 
-fn test_hmac384_tc4() raises:
+def test_hmac384_tc4() raises:
     var key = List[UInt8](capacity=25)
     for i in range(1, 26):
         key.append(UInt8(i))
@@ -221,7 +221,7 @@ fn test_hmac384_tc4() raises:
     )
 
 
-fn test_hmac384_tc6() raises:
+def test_hmac384_tc6() raises:
     var key = repeat_byte(0xAA, 131)
     var data = str_to_bytes(
         "Test Using Larger Than Block-Size Key - Hash Key First"
@@ -234,7 +234,7 @@ fn test_hmac384_tc6() raises:
     )
 
 
-fn test_hmac384_tc7() raises:
+def test_hmac384_tc7() raises:
     var key = repeat_byte(0xAA, 131)
     var data = str_to_bytes(
         "This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm."
@@ -252,28 +252,28 @@ fn test_hmac384_tc7() raises:
 # ============================================================================
 
 
-fn test_hmac_equal_same() raises:
+def test_hmac_equal_same() raises:
     var a = repeat_byte(0x42, 32)
     var b = repeat_byte(0x42, 32)
     if not hmac_equal(a, b):
         raise Error("hmac_equal: same bytes returned False")
 
 
-fn test_hmac_equal_diff() raises:
+def test_hmac_equal_diff() raises:
     var a = repeat_byte(0x42, 32)
     var b = repeat_byte(0x43, 32)
     if hmac_equal(a, b):
         raise Error("hmac_equal: different bytes returned True")
 
 
-fn test_hmac_equal_length_mismatch() raises:
+def test_hmac_equal_length_mismatch() raises:
     var a = repeat_byte(0x42, 32)
     var b = repeat_byte(0x42, 31)
     if hmac_equal(a, b):
         raise Error("hmac_equal: different lengths returned True")
 
 
-fn test_hmac_equal_one_bit() raises:
+def test_hmac_equal_one_bit() raises:
     # Differ by a single bit in the last byte
     var a = repeat_byte(0x00, 32)
     var b = repeat_byte(0x00, 32)
@@ -287,7 +287,7 @@ fn test_hmac_equal_one_bit() raises:
 # ============================================================================
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

@@ -14,26 +14,26 @@ from collections import InlineArray
 
 
 @always_inline
-fn _rotl32(x: UInt32, n: UInt32) -> UInt32:
+def _rotl32(x: UInt32, n: UInt32) -> UInt32:
     return (x << n) | (x >> (32 - n))
 
 
 @always_inline
-fn _sha1_ch(b: UInt32, c: UInt32, d: UInt32) -> UInt32:
+def _sha1_ch(b: UInt32, c: UInt32, d: UInt32) -> UInt32:
     return (b & c) | (~b & d)
 
 
 @always_inline
-fn _sha1_parity(b: UInt32, c: UInt32, d: UInt32) -> UInt32:
+def _sha1_parity(b: UInt32, c: UInt32, d: UInt32) -> UInt32:
     return b ^ c ^ d
 
 
 @always_inline
-fn _sha1_maj(b: UInt32, c: UInt32, d: UInt32) -> UInt32:
+def _sha1_maj(b: UInt32, c: UInt32, d: UInt32) -> UInt32:
     return (b & c) | (b & d) | (c & d)
 
 
-fn _compress1(mut h: InlineArray[UInt32, 5], block: List[UInt8]):
+def _compress1(mut h: InlineArray[UInt32, 5], block: List[UInt8]):
     """Run the SHA-1 compression function on one 64-byte block."""
     # Round constants
     var K0: UInt32 = 0x5A827999  # rounds  0-19
@@ -94,7 +94,7 @@ struct SHA1(Copyable, Movable):
     var _buf: List[UInt8]
     var _total: UInt64
 
-    fn __init__(out self):
+    def __init__(out self):
         self._h = InlineArray[UInt32, 5](fill=UInt32(0))
         self._h[0] = 0x67452301
         self._h[1] = 0xEFCDAB89
@@ -104,17 +104,17 @@ struct SHA1(Copyable, Movable):
         self._buf = List[UInt8](capacity=64)
         self._total = 0
 
-    fn __copyinit__(out self, copy: Self):
+    def __copyinit__(out self, copy: Self):
         self._h = copy._h.copy()
         self._buf = copy._buf.copy()
         self._total = copy._total
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self._h = take._h^
         self._buf = take._buf^
         self._total = take._total
 
-    fn update(mut self, data: List[UInt8]):
+    def update(mut self, data: List[UInt8]):
         """Feed bytes into the hash."""
         self._total += UInt64(len(data))
         var pos = 0
@@ -143,7 +143,7 @@ struct SHA1(Copyable, Movable):
         for i in range(remaining):
             self._buf.append(data[pos + i])
 
-    fn finalize(mut self) -> List[UInt8]:
+    def finalize(mut self) -> List[UInt8]:
         """Pad, compress, and return 20-byte digest. State is consumed."""
         var bit_len = self._total * 8
 
@@ -171,7 +171,7 @@ struct SHA1(Copyable, Movable):
         return out^
 
 
-fn sha1(data: List[UInt8]) -> List[UInt8]:
+def sha1(data: List[UInt8]) -> List[UInt8]:
     """One-shot SHA-1. Returns 20-byte digest."""
     var h = SHA1()
     h.update(data)

@@ -3,7 +3,7 @@ from crypto.hash import sha512
 from crypto.ed25519 import _scalar_reduce, _ed_base_mul, _ed_compress, ed25519_public_key, ed25519_sign
 
 
-fn hex_bytes(s: List[UInt8]) -> String:
+def hex_bytes(s: List[UInt8]) -> String:
     var result = String()
     for i in range(len(s)):
         var b = Int(s[i])
@@ -14,7 +14,7 @@ fn hex_bytes(s: List[UInt8]) -> String:
     return result
 
 
-fn clamp(h: List[UInt8]) -> List[UInt8]:
+def clamp(h: List[UInt8]) -> List[UInt8]:
     var scalar = List[UInt8](capacity=32)
     for i in range(32):
         scalar.append(h[i])
@@ -24,7 +24,7 @@ fn clamp(h: List[UInt8]) -> List[UInt8]:
     return scalar^
 
 
-fn main() raises:
+def main() raises:
     # Vec1: sk = 9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60
     var sk = List[UInt8](capacity=32)
     sk.append(0x9d); sk.append(0x61); sk.append(0xb1); sk.append(0x9d)

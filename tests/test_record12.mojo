@@ -25,7 +25,7 @@ from crypto.record import (
 )
 
 
-fn hex_to_bytes(h: String) -> List[UInt8]:
+def hex_to_bytes(h: String) -> List[UInt8]:
     var raw = h.as_bytes()
     var n = len(raw) // 2
     var out = List[UInt8](capacity=n)
@@ -38,14 +38,14 @@ fn hex_to_bytes(h: String) -> List[UInt8]:
     return out^
 
 
-fn make_bytes(value: UInt8, count: Int) -> List[UInt8]:
+def make_bytes(value: UInt8, count: Int) -> List[UInt8]:
     var out = List[UInt8](capacity=count)
     for i in range(count):
         out.append(value)
     return out^
 
 
-fn bytes_equal(a: List[UInt8], b: List[UInt8]) -> Bool:
+def bytes_equal(a: List[UInt8], b: List[UInt8]) -> Bool:
     if len(a) != len(b):
         return False
     for i in range(len(a)):
@@ -54,11 +54,11 @@ fn bytes_equal(a: List[UInt8], b: List[UInt8]) -> Bool:
     return True
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -71,7 +71,7 @@ fn run_test(
 
 # ── Tests ──────────────────────────────────────────────────────────────────
 
-fn test_seal_12_aes128_seqno0() raises:
+def test_seal_12_aes128_seqno0() raises:
     """record_seal_12 AES-128-GCM, seqno=0 matches Python vector."""
     var key  = make_bytes(0x01, 16)
     var iv4  = make_bytes(0x02, 4)
@@ -88,7 +88,7 @@ fn test_seal_12_aes128_seqno0() raises:
         raise Error("AES-128 seqno=0 mismatch")
 
 
-fn test_seal_12_aes128_seqno1() raises:
+def test_seal_12_aes128_seqno1() raises:
     """record_seal_12 AES-128-GCM, seqno=1: explicit nonce differs."""
     var key  = make_bytes(0x01, 16)
     var iv4  = make_bytes(0x02, 4)
@@ -105,7 +105,7 @@ fn test_seal_12_aes128_seqno1() raises:
         raise Error("AES-128 seqno=1 mismatch")
 
 
-fn test_seal_12_aes256_seqno0() raises:
+def test_seal_12_aes256_seqno0() raises:
     """record_seal_12 AES-256-GCM, seqno=0 matches Python vector."""
     var key  = make_bytes(0x03, 32)
     var iv4  = make_bytes(0x02, 4)
@@ -122,7 +122,7 @@ fn test_seal_12_aes256_seqno0() raises:
         raise Error("AES-256 seqno=0 mismatch")
 
 
-fn test_open_12_roundtrip() raises:
+def test_open_12_roundtrip() raises:
     """record_open_12 roundtrip: seal then open → original plaintext."""
     var key  = make_bytes(0x01, 16)
     var iv4  = make_bytes(0x02, 4)
@@ -133,7 +133,7 @@ fn test_open_12_roundtrip() raises:
         raise Error("roundtrip plaintext mismatch")
 
 
-fn test_open_12_tampered_tag_raises() raises:
+def test_open_12_tampered_tag_raises() raises:
     """record_open_12: tampered tag raises authentication error."""
     var key  = make_bytes(0x01, 16)
     var iv4  = make_bytes(0x02, 4)
@@ -150,7 +150,7 @@ fn test_open_12_tampered_tag_raises() raises:
         raise Error("expected raise for tampered tag")
 
 
-fn test_open_12_wrong_seqno_raises() raises:
+def test_open_12_wrong_seqno_raises() raises:
     """record_open_12: decrypting with wrong seqno raises (AAD mismatch)."""
     var key  = make_bytes(0x01, 16)
     var iv4  = make_bytes(0x02, 4)
@@ -166,7 +166,7 @@ fn test_open_12_wrong_seqno_raises() raises:
         raise Error("expected raise for wrong seqno")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

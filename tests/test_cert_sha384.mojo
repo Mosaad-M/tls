@@ -8,7 +8,7 @@
 from crypto.cert import X509Cert, cert_parse, cert_verify_sig, cert_chain_verify
 
 
-fn hex_to_bytes(hex: String) -> List[UInt8]:
+def hex_to_bytes(hex: String) -> List[UInt8]:
     var raw = hex.as_bytes()
     var n = len(raw) // 2
     var out = List[UInt8](capacity=n)
@@ -21,11 +21,11 @@ fn hex_to_bytes(hex: String) -> List[UInt8]:
     return out^
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -62,7 +62,7 @@ comptime RSA_PSS_LEAF = "3082031b308201d302145f883361efa34c31cd238646e63a36c3007
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-fn test1_parse_sha384_rsa_cert() raises:
+def test1_parse_sha384_rsa_cert() raises:
     var der = hex_to_bytes(RSA_CA_SHA384)
     var cert = cert_parse(der)
     if cert.sig_alg != "rsa":
@@ -73,7 +73,7 @@ fn test1_parse_sha384_rsa_cert() raises:
         raise Error("expected pub_key_alg=rsa, got " + cert.pub_key_alg)
 
 
-fn test2_parse_sha384_ecdsa_cert() raises:
+def test2_parse_sha384_ecdsa_cert() raises:
     var der = hex_to_bytes(EC_CA_SHA384)
     var cert = cert_parse(der)
     if cert.sig_alg != "ecdsa":
@@ -84,7 +84,7 @@ fn test2_parse_sha384_ecdsa_cert() raises:
         raise Error("expected pub_key_alg=ec, got " + cert.pub_key_alg)
 
 
-fn test3_parse_rsa_pss_cert() raises:
+def test3_parse_rsa_pss_cert() raises:
     var der = hex_to_bytes(RSA_PSS_CA)
     var cert = cert_parse(der)
     if cert.sig_alg != "rsa-pss":
@@ -95,7 +95,7 @@ fn test3_parse_rsa_pss_cert() raises:
         raise Error("expected pub_key_alg=rsa, got " + cert.pub_key_alg)
 
 
-fn test4_verify_sha384_rsa_chain() raises:
+def test4_verify_sha384_rsa_chain() raises:
     var ca_der = hex_to_bytes(RSA_CA_SHA384)
     var leaf_der = hex_to_bytes(RSA_LEAF_SHA384)
     var ca = cert_parse(ca_der)
@@ -104,7 +104,7 @@ fn test4_verify_sha384_rsa_chain() raises:
     cert_verify_sig(leaf, ca)
 
 
-fn test5_verify_sha384_ecdsa_chain() raises:
+def test5_verify_sha384_ecdsa_chain() raises:
     var ca_der = hex_to_bytes(EC_CA_SHA384)
     var leaf_der = hex_to_bytes(EC_LEAF_SHA384)
     var ca = cert_parse(ca_der)
@@ -113,7 +113,7 @@ fn test5_verify_sha384_ecdsa_chain() raises:
     cert_verify_sig(leaf, ca)
 
 
-fn test6_chain_verify_sha384_rsa() raises:
+def test6_chain_verify_sha384_rsa() raises:
     var ca_der = hex_to_bytes(RSA_CA_SHA384)
     var leaf_der = hex_to_bytes(RSA_LEAF_SHA384)
     var ca = cert_parse(ca_der)
@@ -126,7 +126,7 @@ fn test6_chain_verify_sha384_rsa() raises:
     cert_chain_verify(chain, trust, "rsa-sha384.example.com")
 
 
-fn test7_chain_verify_rsa_pss() raises:
+def test7_chain_verify_rsa_pss() raises:
     var ca_der = hex_to_bytes(RSA_PSS_CA)
     var leaf_der = hex_to_bytes(RSA_PSS_LEAF)
     var ca = cert_parse(ca_der)
@@ -139,7 +139,7 @@ fn test7_chain_verify_rsa_pss() raises:
     cert_chain_verify(chain, trust, "pss-leaf.example.com")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
     print("=== SHA-384 Cert Signature + RSA-PSS Tests ===")

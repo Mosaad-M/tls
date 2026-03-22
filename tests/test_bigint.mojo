@@ -13,13 +13,13 @@ from crypto.bigint import (
 )
 
 
-fn _hex_nibble(b: UInt8) raises -> UInt8:
+def _hex_nibble(b: UInt8) raises -> UInt8:
     if b >= 48 and b <= 57: return b - 48
     if b >= 97 and b <= 102: return b - 87
     raise Error("bad hex char")
 
 
-fn hex_to_bytes(hex: String) raises -> List[UInt8]:
+def hex_to_bytes(hex: String) raises -> List[UInt8]:
     var raw = hex.as_bytes()
     var n = len(raw)
     if n % 2 != 0: raise Error("odd hex length")
@@ -29,7 +29,7 @@ fn hex_to_bytes(hex: String) raises -> List[UInt8]:
     return out^
 
 
-fn bytes_to_hex(b: List[UInt8]) -> String:
+def bytes_to_hex(b: List[UInt8]) -> String:
     var digits = "0123456789abcdef".as_bytes()
     var result = List[UInt8](capacity=len(b) * 2)
     for i in range(len(b)):
@@ -39,28 +39,28 @@ fn bytes_to_hex(b: List[UInt8]) -> String:
     return String(unsafe_from_utf8=result^)
 
 
-fn assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
+def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
     var got_hex = bytes_to_hex(got)
     if got_hex != expected_hex:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-fn bigint_to_hex(a: BigInt, n_bytes: Int) raises -> String:
+def bigint_to_hex(a: BigInt, n_bytes: Int) raises -> String:
     return bytes_to_hex(bigint_to_bytes(a, n_bytes))
 
 
-fn assert_bigint_eq(a: BigInt, b: BigInt, label: String) raises:
+def assert_bigint_eq(a: BigInt, b: BigInt, label: String) raises:
     if bigint_cmp(a, b) != 0:
         raise Error(label + ": values not equal")
 
 
-fn assert_bigint_val(a: BigInt, expected_hex: String, n_bytes: Int, label: String) raises:
+def assert_bigint_val(a: BigInt, expected_hex: String, n_bytes: Int, label: String) raises:
     var got = bytes_to_hex(bigint_to_bytes(a, n_bytes))
     if got != expected_hex:
         raise Error(label + ": got " + got + ", want " + expected_hex)
 
 
-fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raises -> None):
+def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
     try:
         test_fn()
         print("  PASS:", name)
@@ -74,7 +74,7 @@ fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raise
 # Construction tests
 # ============================================================================
 
-fn test_zero_one() raises:
+def test_zero_one() raises:
     var z = bigint_zero()
     var o = bigint_one()
     if not bigint_is_zero(z):
@@ -89,14 +89,14 @@ fn test_zero_one() raises:
         raise Error("one != one copy")
 
 
-fn test_from_u64() raises:
+def test_from_u64() raises:
     var a = bigint_from_u64(0xDEADBEEFCAFEBABE)
     var b = bigint_from_bytes(hex_to_bytes("deadbeefcafebabe"))
     if bigint_cmp(a, b) != 0:
         raise Error("from_u64 vs from_bytes mismatch")
 
 
-fn test_from_to_bytes_roundtrip() raises:
+def test_from_to_bytes_roundtrip() raises:
     # 32-byte big-endian value
     var hex = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
     var b = hex_to_bytes(hex)
@@ -106,7 +106,7 @@ fn test_from_to_bytes_roundtrip() raises:
         raise Error("roundtrip: got " + got + ", want " + hex)
 
 
-fn test_from_to_bytes_leading_zeros() raises:
+def test_from_to_bytes_leading_zeros() raises:
     # Leading zeros in byte array should be stripped, but to_bytes should pad
     var b = hex_to_bytes("000000ff")
     var a = bigint_from_bytes(b)
@@ -120,7 +120,7 @@ fn test_from_to_bytes_leading_zeros() raises:
 # Arithmetic tests
 # ============================================================================
 
-fn test_add_carry() raises:
+def test_add_carry() raises:
     # 0xFFFFFFFF + 1 = 0x100000000
     var a = bigint_from_u64(0xFFFFFFFF)
     var b = bigint_from_u64(1)
@@ -130,7 +130,7 @@ fn test_add_carry() raises:
         raise Error("add carry: got " + got)
 
 
-fn test_add_large() raises:
+def test_add_large() raises:
     # 2^64 - 1 + 2^64 - 1 = 2^65 - 2
     var a = bigint_from_u64(0xFFFFFFFFFFFFFFFF)
     var c = bigint_add(a, a.copy())
@@ -140,7 +140,7 @@ fn test_add_large() raises:
         raise Error("add large: got " + got)
 
 
-fn test_sub_borrow() raises:
+def test_sub_borrow() raises:
     # 0x100000000 - 1 = 0xFFFFFFFF
     var a = bigint_from_u64(0x100000000)
     var b = bigint_from_u64(1)
@@ -150,14 +150,14 @@ fn test_sub_borrow() raises:
         raise Error("sub borrow: got " + got)
 
 
-fn test_sub_equal() raises:
+def test_sub_equal() raises:
     var a = bigint_from_u64(12345)
     var c = bigint_sub(a, a.copy())
     if not bigint_is_zero(c):
         raise Error("sub equal: expected zero, got " + bytes_to_hex(bigint_to_bytes(c, 4)))
 
 
-fn test_mul_basic() raises:
+def test_mul_basic() raises:
     # 0xFFFFFFFF * 0xFFFFFFFF = 0xFFFFFFFE00000001
     var a = bigint_from_u64(0xFFFFFFFF)
     var c = bigint_mul(a, a.copy())
@@ -166,7 +166,7 @@ fn test_mul_basic() raises:
         raise Error("mul basic: got " + got)
 
 
-fn test_mul_zero() raises:
+def test_mul_zero() raises:
     var a = bigint_from_u64(12345678)
     var z = bigint_zero()
     var c = bigint_mul(a, z)
@@ -174,7 +174,7 @@ fn test_mul_zero() raises:
         raise Error("mul by zero: not zero")
 
 
-fn test_mul_one() raises:
+def test_mul_one() raises:
     var a = bigint_from_u64(0xDEADBEEF)
     var o = bigint_one()
     var c = bigint_mul(a, o)
@@ -186,7 +186,7 @@ fn test_mul_one() raises:
 # Bit length test
 # ============================================================================
 
-fn test_bit_len() raises:
+def test_bit_len() raises:
     if bigint_bit_len(bigint_zero()) != 0:
         raise Error("bit_len(0) != 0")
     if bigint_bit_len(bigint_one()) != 1:
@@ -205,7 +205,7 @@ fn test_bit_len() raises:
 # Modular reduction
 # ============================================================================
 
-fn test_mod_basic() raises:
+def test_mod_basic() raises:
     # 17 mod 5 = 2
     var a = bigint_from_u64(17)
     var n = bigint_from_u64(5)
@@ -214,7 +214,7 @@ fn test_mod_basic() raises:
         raise Error("17 mod 5: got " + bytes_to_hex(bigint_to_bytes(r, 4)))
 
 
-fn test_mod_exact() raises:
+def test_mod_exact() raises:
     # 100 mod 10 = 0
     var a = bigint_from_u64(100)
     var n = bigint_from_u64(10)
@@ -223,7 +223,7 @@ fn test_mod_exact() raises:
         raise Error("100 mod 10: not zero")
 
 
-fn test_mod_less_than_n() raises:
+def test_mod_less_than_n() raises:
     # a < n → a mod n = a
     var a = bigint_from_u64(7)
     var n = bigint_from_u64(13)
@@ -236,7 +236,7 @@ fn test_mod_less_than_n() raises:
 # Modular exponentiation — textbook RSA (n=3233, e=17, d=2753)
 # ============================================================================
 
-fn test_modexp_textbook_rsa_enc() raises:
+def test_modexp_textbook_rsa_enc() raises:
     # 65^17 mod 3233 = 2790  (RSA encrypt)
     var base = bigint_from_u64(65)
     var exp  = bigint_from_u64(17)
@@ -246,7 +246,7 @@ fn test_modexp_textbook_rsa_enc() raises:
         raise Error("65^17 mod 3233: got " + bytes_to_hex(bigint_to_bytes(r, 4)))
 
 
-fn test_modexp_textbook_rsa_dec() raises:
+def test_modexp_textbook_rsa_dec() raises:
     # 2790^2753 mod 3233 = 65  (RSA decrypt)
     var base = bigint_from_u64(2790)
     var exp  = bigint_from_u64(2753)
@@ -256,7 +256,7 @@ fn test_modexp_textbook_rsa_dec() raises:
         raise Error("2790^2753 mod 3233: got " + bytes_to_hex(bigint_to_bytes(r, 4)))
 
 
-fn test_modexp_base0() raises:
+def test_modexp_base0() raises:
     # 0^e mod n = 0
     var z = bigint_zero()
     var e = bigint_from_u64(65537)
@@ -266,7 +266,7 @@ fn test_modexp_base0() raises:
         raise Error("0^e mod n: not zero")
 
 
-fn test_modexp_exp0() raises:
+def test_modexp_exp0() raises:
     # b^0 mod n = 1
     var b = bigint_from_u64(12345)
     var e = bigint_zero()
@@ -281,7 +281,7 @@ fn test_modexp_exp0() raises:
 # python3: pow(2, 65537, 2**127-1) = 32
 # ============================================================================
 
-fn test_modexp_mersenne127() raises:
+def test_modexp_mersenne127() raises:
     # Modulus = 2^127 - 1 (Mersenne prime, 128-bit)
     var n_bytes = hex_to_bytes("7fffffffffffffffffffffffffffffff")
     var n = bigint_from_bytes(n_bytes)
@@ -300,7 +300,7 @@ fn test_modexp_mersenne127() raises:
 #   1f0b20d5555cb1acbbe8ce8dada98c280312ed981c6e9320f24a37d6cc7d4104
 # ============================================================================
 
-fn test_modexp_p256_prime() raises:
+def test_modexp_p256_prime() raises:
     # P-256 prime p = 2^256 - 2^224 + 2^192 + 2^96 - 1
     var p_hex = "ffffffff00000001000000000000000000000000ffffffffffffffffffffffff"
     var p = bigint_from_bytes(hex_to_bytes(p_hex))
@@ -317,7 +317,7 @@ fn test_modexp_p256_prime() raises:
 # Modular inverse — binary extended GCD
 # ============================================================================
 
-fn test_modinv_small() raises:
+def test_modinv_small() raises:
     # 3^(-1) mod 7 = 5  (3*5=15 ≡ 1 mod 7)
     var r = bigint_modinv(bigint_from_u64(3), bigint_from_u64(7))
     if bigint_cmp(r, bigint_from_u64(5)) != 0:
@@ -332,7 +332,7 @@ fn test_modinv_small() raises:
         raise Error("modinv(1,7): got " + bytes_to_hex(bigint_to_bytes(r3, 4)))
 
 
-fn test_modinv_consistency() raises:
+def test_modinv_consistency() raises:
     # Verify modinv is consistent with modexp: a * modinv(a, p) ≡ 1 mod p
     # Use a = 12345, p = 2^127 - 1 (Mersenne prime)
     var p_bytes = hex_to_bytes("7fffffffffffffffffffffffffffffff")
@@ -344,7 +344,7 @@ fn test_modinv_consistency() raises:
         raise Error("modinv consistency: a * inv != 1 mod p")
 
 
-fn test_modinv_p256_order() raises:
+def test_modinv_p256_order() raises:
     # Verify modinv on P-256 order n matches modexp(a, n-2, n)
     # a = 3, n = P-256 order
     var n_hex = "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551"
@@ -357,7 +357,7 @@ fn test_modinv_p256_order() raises:
         raise Error("modinv(3, n256): GCD != Fermat result")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
     print("=== BigInt Tests ===")

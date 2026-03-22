@@ -20,7 +20,7 @@ from crypto.hash import sha256, sha384
 # 30 31 30 0d 06 09 60 86 48 01 65 03 04 02 01 05 00 04 20
 # ============================================================================
 
-fn _sha256_di() -> List[UInt8]:
+def _sha256_di() -> List[UInt8]:
     var b = List[UInt8](capacity=19)
     b.append(0x30); b.append(0x31)
     b.append(0x30); b.append(0x0D)
@@ -32,7 +32,7 @@ fn _sha256_di() -> List[UInt8]:
     return b^
 
 
-fn _sha384_di() -> List[UInt8]:
+def _sha384_di() -> List[UInt8]:
     """SHA-384 DigestInfo prefix for PKCS#1 v1.5: 30 41 30 0d 06 09 ... 02 02 05 00 04 30."""
     var b = List[UInt8](capacity=19)
     b.append(0x30); b.append(0x41)
@@ -49,7 +49,7 @@ fn _sha384_di() -> List[UInt8]:
 # MGF1 with SHA-256
 # ============================================================================
 
-fn _mgf1_sha256(seed: List[UInt8], length: Int) -> List[UInt8]:
+def _mgf1_sha256(seed: List[UInt8], length: Int) -> List[UInt8]:
     """MGF1(seed, length) using SHA-256."""
     var out = List[UInt8](capacity=length)
     var counter: UInt32 = 0
@@ -70,7 +70,7 @@ fn _mgf1_sha256(seed: List[UInt8], length: Int) -> List[UInt8]:
     return out^
 
 
-fn _mgf1_sha384(seed: List[UInt8], length: Int) -> List[UInt8]:
+def _mgf1_sha384(seed: List[UInt8], length: Int) -> List[UInt8]:
     """MGF1(seed, length) using SHA-384."""
     var out = List[UInt8](capacity=length)
     var counter: UInt32 = 0
@@ -94,7 +94,7 @@ fn _mgf1_sha384(seed: List[UInt8], length: Int) -> List[UInt8]:
 # Internal: sig^e mod n → zero-padded EM bytes
 # ============================================================================
 
-fn _rsa_raw(sig: List[UInt8], n: BigInt, e: BigInt, em_len: Int) -> List[UInt8]:
+def _rsa_raw(sig: List[UInt8], n: BigInt, e: BigInt, em_len: Int) -> List[UInt8]:
     """Compute sig^e mod n and return as em_len big-endian bytes."""
     var sig_int = bigint_from_bytes(sig)
     var em_int  = bigint_modexp(sig_int, e, n)
@@ -105,7 +105,7 @@ fn _rsa_raw(sig: List[UInt8], n: BigInt, e: BigInt, em_len: Int) -> List[UInt8]:
 # PKCS#1 v1.5 signature verification (SHA-256)
 # ============================================================================
 
-fn rsa_pkcs1_verify(
+def rsa_pkcs1_verify(
     n_bytes:  List[UInt8],   # RSA modulus (big-endian)
     e_bytes:  List[UInt8],   # RSA public exponent (big-endian)
     msg_hash: List[UInt8],   # 32-byte SHA-256 or 48-byte SHA-384 message hash
@@ -163,7 +163,7 @@ fn rsa_pkcs1_verify(
 # RSA-PSS signature verification (SHA-256, MGF1-SHA-256)
 # ============================================================================
 
-fn rsa_pss_verify(
+def rsa_pss_verify(
     n_bytes:  List[UInt8],   # RSA modulus (big-endian)
     e_bytes:  List[UInt8],   # RSA public exponent (big-endian)
     msg_hash: List[UInt8],   # 32-byte SHA-256 or 48-byte SHA-384 message hash

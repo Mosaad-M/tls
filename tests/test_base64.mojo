@@ -5,11 +5,11 @@
 from crypto.base64 import base64_encode, base64_decode
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -20,7 +20,7 @@ fn run_test(
         failed += 1
 
 
-fn str_to_bytes(s: String) -> List[UInt8]:
+def str_to_bytes(s: String) -> List[UInt8]:
     var raw = s.as_bytes()
     var out = List[UInt8](capacity=len(raw))
     for i in range(len(raw)):
@@ -28,7 +28,7 @@ fn str_to_bytes(s: String) -> List[UInt8]:
     return out^
 
 
-fn bytes_eq(a: List[UInt8], b: List[UInt8]) -> Bool:
+def bytes_eq(a: List[UInt8], b: List[UInt8]) -> Bool:
     if len(a) != len(b):
         return False
     for i in range(len(a)):
@@ -39,37 +39,37 @@ fn bytes_eq(a: List[UInt8], b: List[UInt8]) -> Bool:
 
 # ── RFC 4648 §10 encode tests ──────────────────────────────────────────────
 
-fn test_encode_empty() raises:
+def test_encode_empty() raises:
     var r = base64_encode(List[UInt8]())
     if r != "":
         raise Error("expected '', got '" + r + "'")
 
 
-fn test_encode_f() raises:
+def test_encode_f() raises:
     var r = base64_encode(str_to_bytes("f"))
     if r != "Zg==":
         raise Error("expected 'Zg==', got '" + r + "'")
 
 
-fn test_encode_fo() raises:
+def test_encode_fo() raises:
     var r = base64_encode(str_to_bytes("fo"))
     if r != "Zm8=":
         raise Error("expected 'Zm8=', got '" + r + "'")
 
 
-fn test_encode_foo() raises:
+def test_encode_foo() raises:
     var r = base64_encode(str_to_bytes("foo"))
     if r != "Zm9v":
         raise Error("expected 'Zm9v', got '" + r + "'")
 
 
-fn test_encode_foobar() raises:
+def test_encode_foobar() raises:
     var r = base64_encode(str_to_bytes("foobar"))
     if r != "Zm9vYmFy":
         raise Error("expected 'Zm9vYmFy', got '" + r + "'")
 
 
-fn test_encode_32_binary() raises:
+def test_encode_32_binary() raises:
     # bytes.fromhex("00112233445566778899aabbccddeeff" * 2)
     var data = List[UInt8](capacity=32)
     var src = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
@@ -88,28 +88,28 @@ fn test_encode_32_binary() raises:
 
 # ── Decode round-trip tests ────────────────────────────────────────────────
 
-fn test_decode_f() raises:
+def test_decode_f() raises:
     var r = base64_decode("Zg==")
     var expected = str_to_bytes("f")
     if not bytes_eq(r, expected):
         raise Error("decode 'Zg==' failed")
 
 
-fn test_decode_fo() raises:
+def test_decode_fo() raises:
     var r = base64_decode("Zm8=")
     var expected = str_to_bytes("fo")
     if not bytes_eq(r, expected):
         raise Error("decode 'Zm8=' failed")
 
 
-fn test_decode_foo() raises:
+def test_decode_foo() raises:
     var r = base64_decode("Zm9v")
     var expected = str_to_bytes("foo")
     if not bytes_eq(r, expected):
         raise Error("decode 'Zm9v' failed")
 
 
-fn test_decode_bad_char() raises:
+def test_decode_bad_char() raises:
     var raised = False
     try:
         _ = base64_decode("Z!==")
@@ -119,7 +119,7 @@ fn test_decode_bad_char() raises:
         raise Error("expected raise on bad char '!'")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

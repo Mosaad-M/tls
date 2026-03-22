@@ -5,13 +5,13 @@
 from crypto.poly1305 import poly1305_mac, chacha20_poly1305_encrypt, chacha20_poly1305_decrypt
 
 
-fn _hex_nibble(b: UInt8) raises -> UInt8:
+def _hex_nibble(b: UInt8) raises -> UInt8:
     if b >= 48 and b <= 57: return b - 48
     if b >= 97 and b <= 102: return b - 87
     raise Error("bad hex char")
 
 
-fn hex_to_bytes(hex: String) raises -> List[UInt8]:
+def hex_to_bytes(hex: String) raises -> List[UInt8]:
     var raw = hex.as_bytes()
     var n = len(raw)
     if n % 2 != 0: raise Error("odd hex length")
@@ -21,7 +21,7 @@ fn hex_to_bytes(hex: String) raises -> List[UInt8]:
     return out^
 
 
-fn bytes_to_hex(b: List[UInt8]) -> String:
+def bytes_to_hex(b: List[UInt8]) -> String:
     var digits = "0123456789abcdef".as_bytes()
     var result = List[UInt8](capacity=len(b) * 2)
     for i in range(len(b)):
@@ -31,13 +31,13 @@ fn bytes_to_hex(b: List[UInt8]) -> String:
     return String(unsafe_from_utf8=result^)
 
 
-fn assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
+def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
     var got_hex = bytes_to_hex(got)
     if got_hex != expected_hex:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raises -> None):
+def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
     try:
         test_fn()
         print("  PASS:", name)
@@ -51,7 +51,7 @@ fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raise
 # RFC 8439 §2.5.2 — Poly1305 MAC
 # ============================================================================
 
-fn test_poly1305_mac_rfc8439() raises:
+def test_poly1305_mac_rfc8439() raises:
     # RFC 8439 §2.5.2 test vector
     # Key: 85d6be7857556d337f4452fe42d506a8 0103808afb0db2fd4abff6af4149f51b
     var key = hex_to_bytes(
@@ -71,7 +71,7 @@ fn test_poly1305_mac_rfc8439() raises:
 # RFC 8439 §2.8.2 — ChaCha20-Poly1305 AEAD
 # ============================================================================
 
-fn test_chacha20_poly1305_encrypt_rfc8439() raises:
+def test_chacha20_poly1305_encrypt_rfc8439() raises:
     # Key: 80 81 82 ... 9f (32 bytes)
     var key = List[UInt8](capacity=32)
     for i in range(32): key.append(UInt8(0x80 + i))
@@ -108,7 +108,7 @@ fn test_chacha20_poly1305_encrypt_rfc8439() raises:
 # Decrypt round-trip
 # ============================================================================
 
-fn test_chacha20_poly1305_roundtrip() raises:
+def test_chacha20_poly1305_roundtrip() raises:
     var key = List[UInt8](capacity=32)
     for i in range(32): key.append(UInt8(i))
     var nonce = hex_to_bytes("000000000000000000000000")
@@ -126,7 +126,7 @@ fn test_chacha20_poly1305_roundtrip() raises:
 # Tamper rejection
 # ============================================================================
 
-fn test_reject_tampered_ct() raises:
+def test_reject_tampered_ct() raises:
     var key = List[UInt8](capacity=32)
     for i in range(32): key.append(UInt8(i))
     var nonce = hex_to_bytes("000000000000000000000000")
@@ -144,7 +144,7 @@ fn test_reject_tampered_ct() raises:
         raise Error("tampered CT not rejected")
 
 
-fn test_reject_tampered_tag() raises:
+def test_reject_tampered_tag() raises:
     var key = List[UInt8](capacity=32)
     for i in range(32): key.append(UInt8(i))
     var nonce = hex_to_bytes("000000000000000000000000")
@@ -162,7 +162,7 @@ fn test_reject_tampered_tag() raises:
         raise Error("tampered tag not rejected")
 
 
-fn test_reject_tampered_aad() raises:
+def test_reject_tampered_aad() raises:
     var key = List[UInt8](capacity=32)
     for i in range(32): key.append(UInt8(i))
     var nonce = hex_to_bytes("000000000000000000000000")
@@ -181,7 +181,7 @@ fn test_reject_tampered_aad() raises:
         raise Error("tampered AAD not rejected")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
     print("=== Poly1305 / ChaCha20-Poly1305 Tests ===")

@@ -10,7 +10,7 @@ from crypto.aes import AES
 # ============================================================================
 
 
-fn _hex_nibble(b: UInt8) raises -> UInt8:
+def _hex_nibble(b: UInt8) raises -> UInt8:
     if b >= 48 and b <= 57:
         return b - 48
     if b >= 97 and b <= 102:
@@ -18,7 +18,7 @@ fn _hex_nibble(b: UInt8) raises -> UInt8:
     raise Error("bad hex char")
 
 
-fn hex_to_bytes(hex: String) raises -> List[UInt8]:
+def hex_to_bytes(hex: String) raises -> List[UInt8]:
     var raw = hex.as_bytes()
     var n = len(raw)
     if n % 2 != 0:
@@ -29,7 +29,7 @@ fn hex_to_bytes(hex: String) raises -> List[UInt8]:
     return out^
 
 
-fn bytes_to_hex(b: List[UInt8]) -> String:
+def bytes_to_hex(b: List[UInt8]) -> String:
     var digits = "0123456789abcdef".as_bytes()
     var result = List[UInt8](capacity=len(b) * 2)
     for i in range(len(b)):
@@ -39,17 +39,17 @@ fn bytes_to_hex(b: List[UInt8]) -> String:
     return String(unsafe_from_utf8=result^)
 
 
-fn assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
+def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
     var got_hex = bytes_to_hex(got)
     if got_hex != expected_hex:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -65,7 +65,7 @@ fn run_test(
 # ============================================================================
 
 
-fn test_aes128_fips197_b() raises:
+def test_aes128_fips197_b() raises:
     # FIPS 197 Appendix B
     var key = hex_to_bytes("2b7e151628aed2a6abf7158809cf4f3c")
     var pt  = hex_to_bytes("3243f6a8885a308d313198a2e0370734")
@@ -74,7 +74,7 @@ fn test_aes128_fips197_b() raises:
     assert_hex_eq(ct, "3925841d02dc09fbdc118597196a0b32", "fips197_b")
 
 
-fn test_aes128_fips197_c1() raises:
+def test_aes128_fips197_c1() raises:
     # FIPS 197 Appendix C.1
     var key = hex_to_bytes("000102030405060708090a0b0c0d0e0f")
     var pt  = hex_to_bytes("00112233445566778899aabbccddeeff")
@@ -83,7 +83,7 @@ fn test_aes128_fips197_c1() raises:
     assert_hex_eq(ct, "69c4e0d86a7b0430d8cdb78070b4c55a", "fips197_c1")
 
 
-fn test_aes128_zero() raises:
+def test_aes128_zero() raises:
     # AES-128, zero key, zero plaintext
     var key = List[UInt8](capacity=16)
     for _ in range(16):
@@ -96,7 +96,7 @@ fn test_aes128_zero() raises:
     assert_hex_eq(ct, "66e94bd4ef8a2c3b884cfa59ca342b2e", "aes128_zero")
 
 
-fn test_aes128_all_ff() raises:
+def test_aes128_all_ff() raises:
     # AES-128, 0xff key, 0xff plaintext
     var key = List[UInt8](capacity=16)
     for _ in range(16):
@@ -115,7 +115,7 @@ fn test_aes128_all_ff() raises:
 # ============================================================================
 
 
-fn test_aes256_fips197_c3() raises:
+def test_aes256_fips197_c3() raises:
     # FIPS 197 Appendix C.3
     var key = hex_to_bytes(
         "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
@@ -126,7 +126,7 @@ fn test_aes256_fips197_c3() raises:
     assert_hex_eq(ct, "8ea2b7ca516745bfeafc49904b496089", "fips197_c3")
 
 
-fn test_aes256_zero() raises:
+def test_aes256_zero() raises:
     # AES-256, zero key, zero plaintext
     var key = List[UInt8](capacity=32)
     for _ in range(32):
@@ -139,7 +139,7 @@ fn test_aes256_zero() raises:
     assert_hex_eq(ct, "dc95c078a2408989ad48a21492842087", "aes256_zero")
 
 
-fn test_aes256_known() raises:
+def test_aes256_known() raises:
     # AES-256 with known key/pt pair (from NIST test vectors)
     var key = hex_to_bytes(
         "603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4"
@@ -155,7 +155,7 @@ fn test_aes256_known() raises:
 # ============================================================================
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

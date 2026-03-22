@@ -16,13 +16,13 @@ from crypto.handshake import (
 )
 
 
-fn _hex_nibble(b: UInt8) raises -> UInt8:
+def _hex_nibble(b: UInt8) raises -> UInt8:
     if b >= 48 and b <= 57: return b - 48
     if b >= 97 and b <= 102: return b - 87
     raise Error("bad hex char")
 
 
-fn hex_to_bytes(hex: String) raises -> List[UInt8]:
+def hex_to_bytes(hex: String) raises -> List[UInt8]:
     var raw = hex.as_bytes()
     var n = len(raw)
     if n % 2 != 0: raise Error("odd hex length")
@@ -32,7 +32,7 @@ fn hex_to_bytes(hex: String) raises -> List[UInt8]:
     return out^
 
 
-fn bytes_to_hex(b: List[UInt8]) -> String:
+def bytes_to_hex(b: List[UInt8]) -> String:
     var digits = "0123456789abcdef".as_bytes()
     var result = List[UInt8](capacity=len(b) * 2)
     for i in range(len(b)):
@@ -42,13 +42,13 @@ fn bytes_to_hex(b: List[UInt8]) -> String:
     return String(unsafe_from_utf8=result^)
 
 
-fn assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
+def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
     var got_hex = bytes_to_hex(got)
     if got_hex != expected_hex:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raises -> None):
+def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
     try:
         test_fn()
         print("  PASS:", name)
@@ -63,7 +63,7 @@ fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raise
 # Expected: 33ad0a1c607ec03b09e6cd9893680ce210adf300aa1f2660e1b22e10f170f92a
 # ============================================================================
 
-fn test_early_secret() raises:
+def test_early_secret() raises:
     var es = tls13_early_secret()
     assert_hex_eq(
         es,
@@ -80,7 +80,7 @@ fn test_early_secret() raises:
 # Expected: 70735bf7c7bab21c1f802d8eab67e6fac3c48974f1c9caf8c99962acd585bbd8
 # ============================================================================
 
-fn test_expand_label_derived() raises:
+def test_expand_label_derived() raises:
     from crypto.hkdf import hkdf_expand_label
     from crypto.hash import sha256
     var secret = List[UInt8](capacity=32)
@@ -102,7 +102,7 @@ fn test_expand_label_derived() raises:
 # Expected: 59bdc36ca7a0b92470b1d838b920e314f6de79f9d7dc836899e667c01a2a1a9a
 # ============================================================================
 
-fn test_derive_secret() raises:
+def test_derive_secret() raises:
     from crypto.hash import sha256
     var secret = List[UInt8](capacity=32)
     for _ in range(32):
@@ -127,7 +127,7 @@ fn test_derive_secret() raises:
 # iv  (12 bytes) = 5bd3c71b836e0b76bb73265f
 # ============================================================================
 
-fn test_traffic_keys() raises:
+def test_traffic_keys() raises:
     var ts = hex_to_bytes("b3eddb126e067f35a780b3abf45e2d8f3b1a950738f52e9600746a0e27a55a21")
     var res = tls13_traffic_keys(ts, 16, 12)
     var key = res[0].copy()
@@ -142,7 +142,7 @@ fn test_traffic_keys() raises:
 # finished_key   = b80ad01015fb2f0bd65ff7d4da5d6bf83f84821d1f87fdc7d3c75b5a7b42d9c4
 # ============================================================================
 
-fn test_finished_key() raises:
+def test_finished_key() raises:
     var ts = hex_to_bytes("b3eddb126e067f35a780b3abf45e2d8f3b1a950738f52e9600746a0e27a55a21")
     var fk = tls13_finished_key(ts)
     assert_hex_eq(
@@ -160,7 +160,7 @@ fn test_finished_key() raises:
 # verify_data     = fa98033e572d3521bf44e8d9eb56631df6860d76e28d795e359901a0eacccc37
 # ============================================================================
 
-fn test_compute_finished() raises:
+def test_compute_finished() raises:
     from crypto.hash import sha256
     var transcript_bytes = String("handshake messages transcript").as_bytes()
     var msg = List[UInt8](capacity=len(transcript_bytes))
@@ -182,7 +182,7 @@ fn test_compute_finished() raises:
 # Test: verify_finished accepts valid verify_data
 # ============================================================================
 
-fn test_verify_finished_valid() raises:
+def test_verify_finished_valid() raises:
     from crypto.hash import sha256
     var transcript_bytes = String("handshake messages transcript").as_bytes()
     var msg = List[UInt8](capacity=len(transcript_bytes))
@@ -200,7 +200,7 @@ fn test_verify_finished_valid() raises:
 # Test: verify_finished rejects wrong verify_data
 # ============================================================================
 
-fn test_verify_finished_reject() raises:
+def test_verify_finished_reject() raises:
     from crypto.hash import sha256
     var transcript_bytes = String("handshake messages transcript").as_bytes()
     var msg = List[UInt8](capacity=len(transcript_bytes))
@@ -227,7 +227,7 @@ fn test_verify_finished_reject() raises:
 # The first 64 bytes must all be 0x20 (space), then context, then 0x00, then hash.
 # ============================================================================
 
-fn test_cert_verify_input() raises:
+def test_cert_verify_input() raises:
     from crypto.hash import sha256
     var transcript_bytes = String("handshake messages transcript").as_bytes()
     var msg = List[UInt8](capacity=len(transcript_bytes))
@@ -260,7 +260,7 @@ fn test_cert_verify_input() raises:
 # Expected ES = 33ad0a1c607ec03b09e6cd9893680ce210adf300aa1f2660e1b22e10f170f92a
 # ============================================================================
 
-fn test_full_key_schedule() raises:
+def test_full_key_schedule() raises:
     # RFC 8448 §3 DHE shared secret (x25519)
     var dhe = hex_to_bytes("8bd4054fb55b9d63fdfbacf9f04b9f0d35e6d63f537563efd46272900f89492d")
 
@@ -291,7 +291,7 @@ fn test_full_key_schedule() raises:
 # SHA-384 Key Schedule Tests
 # ============================================================================
 
-fn test_early_secret_sha384() raises:
+def test_early_secret_sha384() raises:
     # HKDF-Extract-SHA384(0^48, 0^48)
     var es = tls13_early_secret_sha384()
     if len(es) != 48:
@@ -303,7 +303,7 @@ fn test_early_secret_sha384() raises:
     )
 
 
-fn test_handshake_secret_sha384() raises:
+def test_handshake_secret_sha384() raises:
     # Use RFC 8448 DHE shared secret with SHA-384 key schedule
     var dhe = hex_to_bytes("8bd4054fb55b9d63fdfbacf9f04b9f0d35e6d63f537563efd46272900f89492d")
     var es  = tls13_early_secret_sha384()
@@ -317,7 +317,7 @@ fn test_handshake_secret_sha384() raises:
     )
 
 
-fn test_derive_secret_sha384() raises:
+def test_derive_secret_sha384() raises:
     # derive_secret_sha384(0^48, "c hs traffic", SHA384("test message transcript"))
     from crypto.hash import sha384
     var secret = List[UInt8](capacity=48)
@@ -338,7 +338,7 @@ fn test_derive_secret_sha384() raises:
     )
 
 
-fn test_finished_sha384() raises:
+def test_finished_sha384() raises:
     # finished_key_sha384 + compute_finished_sha384
     # traffic_secret = bytes(range(48))
     from crypto.hash import sha384
@@ -370,7 +370,7 @@ fn test_finished_sha384() raises:
     )
 
 
-fn test_verify_finished_sha384_accept_reject() raises:
+def test_verify_finished_sha384_accept_reject() raises:
     from crypto.hash import sha384
     var ts = List[UInt8](capacity=48)
     for i in range(48):
@@ -397,7 +397,7 @@ fn test_verify_finished_sha384_accept_reject() raises:
         raise Error("verify_finished_sha384_reject: bad MAC not rejected")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
     print("=== TLS 1.3 Handshake Key Schedule Tests ===")

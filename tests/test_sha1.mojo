@@ -18,11 +18,11 @@ from crypto.sha1 import sha1, SHA1
 from crypto.base64 import base64_encode
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -33,7 +33,7 @@ fn run_test(
         failed += 1
 
 
-fn hex_to_bytes(h: String) -> List[UInt8]:
+def hex_to_bytes(h: String) -> List[UInt8]:
     var raw = h.as_bytes()
     var n = len(raw) // 2
     var out = List[UInt8](capacity=n)
@@ -46,7 +46,7 @@ fn hex_to_bytes(h: String) -> List[UInt8]:
     return out^
 
 
-fn bytes_to_hex(b: List[UInt8]) -> String:
+def bytes_to_hex(b: List[UInt8]) -> String:
     var digits = "0123456789abcdef".as_bytes()
     var result = List[UInt8](capacity=len(b) * 2)
     for i in range(len(b)):
@@ -56,7 +56,7 @@ fn bytes_to_hex(b: List[UInt8]) -> String:
     return String(unsafe_from_utf8=result^)
 
 
-fn str_to_bytes(s: String) -> List[UInt8]:
+def str_to_bytes(s: String) -> List[UInt8]:
     var raw = s.as_bytes()
     var out = List[UInt8](capacity=len(raw))
     for i in range(len(raw)):
@@ -67,7 +67,7 @@ fn str_to_bytes(s: String) -> List[UInt8]:
 # ── Test 1: sha1(b"") — empty message ──────────────────────────────────────
 # Python: hashlib.sha1(b"").hexdigest() = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
 
-fn test_sha1_empty() raises:
+def test_sha1_empty() raises:
     var data = List[UInt8]()
     var digest = sha1(data)
     var got = bytes_to_hex(digest)
@@ -79,7 +79,7 @@ fn test_sha1_empty() raises:
 # ── Test 2: sha1(b"abc") — 3-byte message ──────────────────────────────────
 # Python: hashlib.sha1(b"abc").hexdigest() = "a9993e364706816aba3e25717850c26c9cd0d89d"
 
-fn test_sha1_abc() raises:
+def test_sha1_abc() raises:
     var data = str_to_bytes("abc")
     var digest = sha1(data)
     var got = bytes_to_hex(digest)
@@ -93,7 +93,7 @@ fn test_sha1_abc() raises:
 # Python: hashlib.sha1(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq").hexdigest()
 #       = "84983e441c3bd26ebaae4aa1f95129e5e54670f1"
 
-fn test_sha1_448bit() raises:
+def test_sha1_448bit() raises:
     var data = str_to_bytes("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
     var digest = sha1(data)
     var got = bytes_to_hex(digest)
@@ -105,7 +105,7 @@ fn test_sha1_448bit() raises:
 # ── Test 4: sha1 — multi-block message (>512 bits) ─────────────────────────
 # Python: hashlib.sha1(b"a" * 100).hexdigest() = "7f9000257a4918d7072655ea468540cdcbd42e0c"
 
-fn test_sha1_multiblock() raises:
+def test_sha1_multiblock() raises:
     var data = List[UInt8](capacity=100)
     for _ in range(100):
         data.append(UInt8(ord("a")))
@@ -125,7 +125,7 @@ fn test_sha1_multiblock() raises:
 #   base64.b64encode(hashlib.sha1(concat.encode()).digest()).decode()
 #   = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
 
-fn test_sha1_websocket_accept() raises:
+def test_sha1_websocket_accept() raises:
     var concat = str_to_bytes(
         "dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
     )
@@ -136,7 +136,7 @@ fn test_sha1_websocket_accept() raises:
         raise Error("ws accept key = '" + accept + "', want '" + want + "'")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

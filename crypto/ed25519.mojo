@@ -30,19 +30,19 @@ struct EdPoint(Copyable, Movable):
     var z: Fe
     var t: Fe
 
-    fn __init__(out self):
+    def __init__(out self):
         self.x = fe_zero()
         self.y = fe_one()
         self.z = fe_one()
         self.t = fe_zero()
 
-    fn __copyinit__(out self, copy: Self):
+    def __copyinit__(out self, copy: Self):
         self.x = copy.x.copy()
         self.y = copy.y.copy()
         self.z = copy.z.copy()
         self.t = copy.t.copy()
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self.x = take.x^
         self.y = take.y^
         self.z = take.z^
@@ -53,7 +53,7 @@ struct EdPoint(Copyable, Movable):
 # Curve constants
 # ============================================================================
 
-fn _fe_d() -> Fe:
+def _fe_d() -> Fe:
     """d = -121665/121666 mod p (RFC 8032 §5.1, little-endian)."""
     # d = 37095705934669439343138083508754565189542113879843219016388785533085940283555
     # big-endian hex: 52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3
@@ -71,12 +71,12 @@ fn _fe_d() -> Fe:
     return fe_from_bytes(b)
 
 
-fn _fe_d2() -> Fe:
+def _fe_d2() -> Fe:
     """2*d mod p."""
     return fe_add(_fe_d(), _fe_d())
 
 
-fn _ed_base_point() -> EdPoint:
+def _ed_base_point() -> EdPoint:
     """Generator point G (RFC 8032 §5.1)."""
     # G_y in little-endian
     var gy_b = List[UInt8](capacity=32)
@@ -97,7 +97,7 @@ fn _ed_base_point() -> EdPoint:
 # Compressed point encoding/decoding
 # ============================================================================
 
-fn _ed_compress(p: EdPoint) -> List[UInt8]:
+def _ed_compress(p: EdPoint) -> List[UInt8]:
     """Compress an extended point to 32 bytes: y || sign(x)."""
     var zi = fe_inv(p.z.copy())
     var x = fe_mul(p.x.copy(), zi.copy())
@@ -109,7 +109,7 @@ fn _ed_compress(p: EdPoint) -> List[UInt8]:
     return out^
 
 
-fn _fe_sqrt_m1() -> Fe:
+def _fe_sqrt_m1() -> Fe:
     """sqrt(-1) = 2^((p-1)/4) mod p — Tonelli-Shanks correction constant."""
     # Value: 19681161376707505956807079304988542015446066515923890162744021073123829784752
     # Little-endian bytes: b0 a0 0e 4a 27 1b ee c4 78 e4 2f ad 06 18 43 2f
@@ -126,7 +126,7 @@ fn _fe_sqrt_m1() -> Fe:
     return fe_from_bytes(b)
 
 
-fn _fe_is_nonzero(a: Fe) -> Bool:
+def _fe_is_nonzero(a: Fe) -> Bool:
     """Return True if a != 0 mod p."""
     var b = fe_to_bytes(fe_reduce(a))
     for i in range(32):
@@ -135,7 +135,7 @@ fn _fe_is_nonzero(a: Fe) -> Bool:
     return False
 
 
-fn _ed_decompress_x(y: Fe, sign: UInt8) -> EdPoint:
+def _ed_decompress_x(y: Fe, sign: UInt8) -> EdPoint:
     """Recover x from y and sign bit. Returns identity on failure."""
     # x² = (y²-1) / (d·y²+1)
     var y2 = fe_sq(y.copy())
@@ -164,7 +164,7 @@ fn _ed_decompress_x(y: Fe, sign: UInt8) -> EdPoint:
     return p^
 
 
-fn _fe_pow_p58(z: Fe) -> Fe:
+def _fe_pow_p58(z: Fe) -> Fe:
     """Compute z^((p-5)/8) mod p — used for square root in Ed25519 decode.
     Addition chain from RFC 8032 §5.1.3 / standard Curve25519 chain."""
     var z2_1 = fe_sq(z.copy())
@@ -304,7 +304,7 @@ fn _fe_pow_p58(z: Fe) -> Fe:
 # Ed25519 point decompression (public)
 # ============================================================================
 
-fn _ed_decode_point(b: List[UInt8]) raises -> EdPoint:
+def _ed_decode_point(b: List[UInt8]) raises -> EdPoint:
     """Decompress a 32-byte encoded point. Raises if not on curve."""
     var sign = (b[31] >> 7) & 1
     var yb = b.copy()
@@ -330,7 +330,7 @@ fn _ed_decode_point(b: List[UInt8]) raises -> EdPoint:
 # Hisil et al. "Twisted Edwards Curves Revisited", §3.1 (2008)
 # ============================================================================
 
-fn _ed_add(p: EdPoint, q: EdPoint) -> EdPoint:
+def _ed_add(p: EdPoint, q: EdPoint) -> EdPoint:
     """Unified addition of two extended Edwards points."""
     var d2 = _fe_d2()
     var A = fe_mul(fe_sub(p.y.copy(), p.x.copy()), fe_sub(q.y.copy(), q.x.copy()))
@@ -349,7 +349,7 @@ fn _ed_add(p: EdPoint, q: EdPoint) -> EdPoint:
     return r^
 
 
-fn _ed_double(p: EdPoint) -> EdPoint:
+def _ed_double(p: EdPoint) -> EdPoint:
     """Point doubling in extended coordinates (dedicated formula, faster)."""
     var A = fe_sq(p.x.copy())
     var B = fe_sq(p.y.copy())
@@ -370,7 +370,7 @@ fn _ed_double(p: EdPoint) -> EdPoint:
 # Scalar multiply (constant-time double-and-add, MSB first)
 # ============================================================================
 
-fn _ed_scalar_mul(scalar: List[UInt8], p: EdPoint) -> EdPoint:
+def _ed_scalar_mul(scalar: List[UInt8], p: EdPoint) -> EdPoint:
     """Constant-time scalar multiply: returns scalar * p."""
     var r = EdPoint()   # identity: (0:1:1:0)
     var q = p.copy()
@@ -387,7 +387,7 @@ fn _ed_scalar_mul(scalar: List[UInt8], p: EdPoint) -> EdPoint:
     return r^
 
 
-fn _ed_cswap(mut a: EdPoint, mut b: EdPoint, swap: UInt64):
+def _ed_cswap(mut a: EdPoint, mut b: EdPoint, swap: UInt64):
     """Constant-time conditional swap of two EdPoints."""
     fe_cswap(a.x, b.x, swap)
     fe_cswap(a.y, b.y, swap)
@@ -395,7 +395,7 @@ fn _ed_cswap(mut a: EdPoint, mut b: EdPoint, swap: UInt64):
     fe_cswap(a.t, b.t, swap)
 
 
-fn _ed_base_mul(scalar: List[UInt8]) -> EdPoint:
+def _ed_base_mul(scalar: List[UInt8]) -> EdPoint:
     """Compute scalar * G (base point multiply)."""
     return _ed_scalar_mul(scalar, _ed_base_point())
 
@@ -406,7 +406,7 @@ fn _ed_base_mul(scalar: List[UInt8]) -> EdPoint:
 #   = 2^252 + 0x14def9dea2f79cd65812631a5cf5d3ed  (little-endian)
 # ============================================================================
 
-fn _scalar_reduce(s: List[UInt8]) -> List[UInt8]:
+def _scalar_reduce(s: List[UInt8]) -> List[UInt8]:
     """Reduce an up-to-64-byte scalar mod L, returning 32 bytes (little-endian).
     Uses the RFC 8032 §5.1.5 / SUPERCOP 21-bit limb schoolbook method."""
     var sb = s.copy()
@@ -617,7 +617,7 @@ fn _scalar_reduce(s: List[UInt8]) -> List[UInt8]:
     return out^
 
 
-fn _scalar_mul_add(a: List[UInt8], b: List[UInt8], c: List[UInt8]) -> List[UInt8]:
+def _scalar_mul_add(a: List[UInt8], b: List[UInt8], c: List[UInt8]) -> List[UInt8]:
     """Compute (a * b + c) mod L — for signing: S = (r + H*a) mod L.
     All inputs are 32 bytes (little-endian scalars < L).
     Output is 32 bytes.
@@ -661,7 +661,7 @@ fn _scalar_mul_add(a: List[UInt8], b: List[UInt8], c: List[UInt8]) -> List[UInt8
 # Public key derivation
 # ============================================================================
 
-fn ed25519_public_key(private_key: List[UInt8]) -> List[UInt8]:
+def ed25519_public_key(private_key: List[UInt8]) -> List[UInt8]:
     """Compute Ed25519 public key from 32-byte private key seed."""
     var h = sha512(private_key)
     var scalar = _clamp_ed25519(h)
@@ -669,7 +669,7 @@ fn ed25519_public_key(private_key: List[UInt8]) -> List[UInt8]:
     return _ed_compress(p)
 
 
-fn _clamp_ed25519(h: List[UInt8]) -> List[UInt8]:
+def _clamp_ed25519(h: List[UInt8]) -> List[UInt8]:
     """Extract and clamp the scalar from SHA-512(seed).
     RFC 8032 §5.1.5: clear bits 0,1,2 and 255; set bit 254."""
     var scalar = List[UInt8](capacity=32)
@@ -685,7 +685,7 @@ fn _clamp_ed25519(h: List[UInt8]) -> List[UInt8]:
 # Sign
 # ============================================================================
 
-fn ed25519_sign(private_key: List[UInt8], message: List[UInt8]) -> List[UInt8]:
+def ed25519_sign(private_key: List[UInt8], message: List[UInt8]) -> List[UInt8]:
     """Sign a message with a 32-byte Ed25519 private key seed.
     Returns 64-byte signature (R || S)."""
     # Step 1: expand private key
@@ -735,7 +735,7 @@ fn ed25519_sign(private_key: List[UInt8], message: List[UInt8]) -> List[UInt8]:
 # Verify
 # ============================================================================
 
-fn ed25519_verify(public_key: List[UInt8], message: List[UInt8], signature: List[UInt8]) raises -> Bool:
+def ed25519_verify(public_key: List[UInt8], message: List[UInt8], signature: List[UInt8]) raises -> Bool:
     """Verify an Ed25519 signature.
     Returns True if valid, False if invalid. Raises on malformed input."""
     if len(signature) != 64:

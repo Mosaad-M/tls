@@ -19,27 +19,27 @@ from collections import InlineArray
 struct Fe(Copyable, Movable):
     var v: InlineArray[UInt64, 5]
 
-    fn __init__(out self):
+    def __init__(out self):
         self.v = InlineArray[UInt64, 5](fill=UInt64(0))
 
-    fn __copyinit__(out self, copy: Self):
+    def __copyinit__(out self, copy: Self):
         self.v = copy.v.copy()
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self.v = take.v^
 
 
-fn fe_zero() -> Fe:
+def fe_zero() -> Fe:
     return Fe()
 
 
-fn fe_one() -> Fe:
+def fe_one() -> Fe:
     var r = Fe()
     r.v[0] = 1
     return r^
 
 
-fn fe_from_bytes(b: List[UInt8]) -> Fe:
+def fe_from_bytes(b: List[UInt8]) -> Fe:
     """Load 32 little-endian bytes, mask bit 255, split into 51-bit limbs."""
     var w0 = (UInt64(b[0])       | (UInt64(b[1]) << 8)  | (UInt64(b[2]) << 16)
             | (UInt64(b[3]) << 24) | (UInt64(b[4]) << 32) | (UInt64(b[5]) << 40)
@@ -63,7 +63,7 @@ fn fe_from_bytes(b: List[UInt8]) -> Fe:
     return r^
 
 
-fn fe_to_bytes(a: Fe) -> List[UInt8]:
+def fe_to_bytes(a: Fe) -> List[UInt8]:
     """Reduce fully and serialize as 32 little-endian bytes."""
     var r = fe_reduce(a)
     var w0 =  r.v[0]        | (r.v[1] << 51)
@@ -78,7 +78,7 @@ fn fe_to_bytes(a: Fe) -> List[UInt8]:
     return out^
 
 
-fn fe_carry(a: Fe) -> Fe:
+def fe_carry(a: Fe) -> Fe:
     """Propagate carries; top limb has 47 usable bits."""
     var l0 = a.v[0]; var l1 = a.v[1]; var l2 = a.v[2]
     var l3 = a.v[3]; var l4 = a.v[4]
@@ -94,7 +94,7 @@ fn fe_carry(a: Fe) -> Fe:
     return r^
 
 
-fn fe_reduce(a: Fe) -> Fe:
+def fe_reduce(a: Fe) -> Fe:
     """Canonical reduction modulo p = 2^255 - 19."""
     var r = fe_carry(a)
     var t0 = r.v[0] + 19
@@ -117,7 +117,7 @@ fn fe_reduce(a: Fe) -> Fe:
     return out^
 
 
-fn fe_add(a: Fe, b: Fe) -> Fe:
+def fe_add(a: Fe, b: Fe) -> Fe:
     var r = Fe()
     r.v[0] = a.v[0] + b.v[0]; r.v[1] = a.v[1] + b.v[1]
     r.v[2] = a.v[2] + b.v[2]; r.v[3] = a.v[3] + b.v[3]
@@ -125,7 +125,7 @@ fn fe_add(a: Fe, b: Fe) -> Fe:
     return r^
 
 
-fn fe_sub(a: Fe, b: Fe) -> Fe:
+def fe_sub(a: Fe, b: Fe) -> Fe:
     """Compute a - b mod p (adds 2p to avoid underflow)."""
     var r = Fe()
     r.v[0] = (a.v[0] + 0x000FFFFFFFFFFFDA) - b.v[0]
@@ -140,7 +140,7 @@ fn fe_sub(a: Fe, b: Fe) -> Fe:
 # 128-bit multiply helpers
 # ============================================================================
 
-fn _mul64(a: UInt64, b: UInt64) -> Tuple[UInt64, UInt64]:
+def _mul64(a: UInt64, b: UInt64) -> Tuple[UInt64, UInt64]:
     """Return (hi, lo) of a * b using 32-bit halves."""
     var a_lo = a & 0xFFFFFFFF; var a_hi = a >> 32
     var b_lo = b & 0xFFFFFFFF; var b_hi = b >> 32
@@ -156,7 +156,7 @@ fn _mul64(a: UInt64, b: UInt64) -> Tuple[UInt64, UInt64]:
     return (hi, lo)
 
 
-fn _add128(
+def _add128(
     a_hi: UInt64, a_lo: UInt64,
     b_hi: UInt64, b_lo: UInt64,
 ) -> Tuple[UInt64, UInt64]:
@@ -165,7 +165,7 @@ fn _add128(
     return (a_hi + b_hi + carry, lo)
 
 
-fn fe_mul(a: Fe, b: Fe) -> Fe:
+def fe_mul(a: Fe, b: Fe) -> Fe:
     """Schoolbook 5×5 multiply with 2^255≡19 reduction for high cross-terms."""
     var a0 = a.v[0]; var a1 = a.v[1]; var a2 = a.v[2]
     var a3 = a.v[3]; var a4 = a.v[4]
@@ -240,11 +240,11 @@ fn fe_mul(a: Fe, b: Fe) -> Fe:
     return r^
 
 
-fn fe_sq(a: Fe) -> Fe:
+def fe_sq(a: Fe) -> Fe:
     return fe_mul(a, a)
 
 
-fn fe_mul_scalar(a: Fe, s: UInt64) -> Fe:
+def fe_mul_scalar(a: Fe, s: UInt64) -> Fe:
     """Multiply by small scalar with proper 128-bit intermediates."""
     var r = Fe()
     var carry: UInt64 = 0
@@ -262,7 +262,7 @@ fn fe_mul_scalar(a: Fe, s: UInt64) -> Fe:
     return r^
 
 
-fn fe_cswap(mut a: Fe, mut b: Fe, swap: UInt64):
+def fe_cswap(mut a: Fe, mut b: Fe, swap: UInt64):
     """Constant-time conditional swap."""
     var mask: UInt64 = 0 - swap
     for i in range(5):
@@ -275,7 +275,7 @@ fn fe_cswap(mut a: Fe, mut b: Fe, swap: UInt64):
 # Field inversion: z^(p-2) via DJB's Curve25519 addition chain
 # ============================================================================
 
-fn fe_inv(z: Fe) -> Fe:
+def fe_inv(z: Fe) -> Fe:
     """Compute z^(p-2) mod p = z^(-1) mod p (Fermat's little theorem)."""
     var t = fe_sq(z.copy())      # z^2
     var z2 = t.copy()
@@ -425,7 +425,7 @@ fn fe_inv(z: Fe) -> Fe:
 # X25519 Montgomery ladder scalar multiply
 # ============================================================================
 
-fn _clamp_scalar(s: List[UInt8]) -> List[UInt8]:
+def _clamp_scalar(s: List[UInt8]) -> List[UInt8]:
     """Apply RFC 7748 §5 scalar clamping."""
     var k = s.copy()
     k[0]  &= 248   # clear bits 0,1,2
@@ -434,7 +434,7 @@ fn _clamp_scalar(s: List[UInt8]) -> List[UInt8]:
     return k^
 
 
-fn x25519(scalar: List[UInt8], u_point: List[UInt8]) -> List[UInt8]:
+def x25519(scalar: List[UInt8], u_point: List[UInt8]) -> List[UInt8]:
     """X25519 DH function (RFC 7748 §5).
 
     Args:
@@ -483,7 +483,7 @@ fn x25519(scalar: List[UInt8], u_point: List[UInt8]) -> List[UInt8]:
     return fe_to_bytes(result)
 
 
-fn x25519_public_key(private_key: List[UInt8]) -> List[UInt8]:
+def x25519_public_key(private_key: List[UInt8]) -> List[UInt8]:
     """Compute X25519 public key = scalar * base_point (u=9).
 
     Args:

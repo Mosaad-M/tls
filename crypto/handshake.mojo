@@ -23,7 +23,7 @@ from crypto.hash import sha256, sha384
 # Key Schedule
 # ============================================================================
 
-fn _zeros32() -> List[UInt8]:
+def _zeros32() -> List[UInt8]:
     """32 zero bytes — used as IKM or salt when no real input is available."""
     var z = List[UInt8](capacity=32)
     for _ in range(32):
@@ -31,17 +31,17 @@ fn _zeros32() -> List[UInt8]:
     return z^
 
 
-fn _hash_empty() -> List[UInt8]:
+def _hash_empty() -> List[UInt8]:
     """SHA-256 of the empty string (= e3b0c44298fc1c...)."""
     return sha256(_zeros32()[:0])  # can't easily get a zero-len List here
 
-fn _sha256_empty() -> List[UInt8]:
+def _sha256_empty() -> List[UInt8]:
     """SHA-256 of empty string."""
     var empty = List[UInt8]()
     return sha256(empty)
 
 
-fn tls13_early_secret() -> List[UInt8]:
+def tls13_early_secret() -> List[UInt8]:
     """Compute TLS 1.3 Early Secret: HKDF-Extract(0^32, 0^32).
 
     When no PSK is used (most connections), both salt and IKM are zero.
@@ -50,7 +50,7 @@ fn tls13_early_secret() -> List[UInt8]:
     return hkdf_extract(_zeros32(), _zeros32())
 
 
-fn tls13_handshake_secret(early_secret: List[UInt8], dhe: List[UInt8]) raises -> List[UInt8]:
+def tls13_handshake_secret(early_secret: List[UInt8], dhe: List[UInt8]) raises -> List[UInt8]:
     """Compute TLS 1.3 Handshake Secret from Early Secret and ECDHE shared value.
 
     derived_salt = HKDF-Expand-Label(early_secret, "derived", SHA256(""), 32)
@@ -62,7 +62,7 @@ fn tls13_handshake_secret(early_secret: List[UInt8], dhe: List[UInt8]) raises ->
     return hkdf_extract(derived_salt, dhe)
 
 
-fn tls13_master_secret(handshake_secret: List[UInt8]) raises -> List[UInt8]:
+def tls13_master_secret(handshake_secret: List[UInt8]) raises -> List[UInt8]:
     """Compute TLS 1.3 Master Secret from Handshake Secret.
 
     derived_salt = HKDF-Expand-Label(hs, "derived", SHA256(""), 32)
@@ -74,7 +74,7 @@ fn tls13_master_secret(handshake_secret: List[UInt8]) raises -> List[UInt8]:
     return hkdf_extract(derived_salt, _zeros32())
 
 
-fn tls13_derive_secret(secret: List[UInt8], label: String, transcript_hash: List[UInt8]) raises -> List[UInt8]:
+def tls13_derive_secret(secret: List[UInt8], label: String, transcript_hash: List[UInt8]) raises -> List[UInt8]:
     """Derive-Secret(secret, label, messages_hash) per RFC 8446 §7.1.
 
     Returns HKDF-Expand-Label(secret, label, transcript_hash, 32).
@@ -82,7 +82,7 @@ fn tls13_derive_secret(secret: List[UInt8], label: String, transcript_hash: List
     return hkdf_expand_label(secret, label, transcript_hash, 32)
 
 
-fn tls13_traffic_keys(
+def tls13_traffic_keys(
     traffic_secret: List[UInt8],
     key_len:        Int,
     iv_len:         Int,
@@ -98,18 +98,18 @@ fn tls13_traffic_keys(
     return (key^, iv^)
 
 
-fn tls13_finished_key(traffic_secret: List[UInt8]) raises -> List[UInt8]:
+def tls13_finished_key(traffic_secret: List[UInt8]) raises -> List[UInt8]:
     """Compute the Finished HMAC key: HKDF-Expand-Label(secret, "finished", "", 32)."""
     var empty = List[UInt8]()
     return hkdf_expand_label(traffic_secret, "finished", empty, 32)
 
 
-fn tls13_compute_finished(finished_key: List[UInt8], transcript_hash: List[UInt8]) -> List[UInt8]:
+def tls13_compute_finished(finished_key: List[UInt8], transcript_hash: List[UInt8]) -> List[UInt8]:
     """Compute Finished verify_data = HMAC-SHA256(finished_key, transcript_hash)."""
     return hmac_sha256(finished_key, transcript_hash)
 
 
-fn tls13_verify_finished(
+def tls13_verify_finished(
     finished_key:    List[UInt8],
     transcript_hash: List[UInt8],
     verify_data:     List[UInt8],
@@ -135,7 +135,7 @@ comptime CERT_VERIFY_CLIENT_CTX = "TLS 1.3, client CertificateVerify"
 # SHA-384 Key Schedule (for TLS_AES_256_GCM_SHA384 / cipher suite 0x1302)
 # ============================================================================
 
-fn _zeros48() -> List[UInt8]:
+def _zeros48() -> List[UInt8]:
     """48 zero bytes — used as IKM or salt for SHA-384 key schedule."""
     var z = List[UInt8](capacity=48)
     for _ in range(48):
@@ -143,13 +143,13 @@ fn _zeros48() -> List[UInt8]:
     return z^
 
 
-fn _sha384_empty() -> List[UInt8]:
+def _sha384_empty() -> List[UInt8]:
     """SHA-384 of empty string."""
     var empty = List[UInt8]()
     return sha384(empty)
 
 
-fn tls13_early_secret_sha384() -> List[UInt8]:
+def tls13_early_secret_sha384() -> List[UInt8]:
     """Compute TLS 1.3 Early Secret (SHA-384): HKDF-Extract-SHA384(0^48, 0^48).
 
     Returns 48 bytes.
@@ -157,7 +157,7 @@ fn tls13_early_secret_sha384() -> List[UInt8]:
     return hkdf_extract_sha384(_zeros48(), _zeros48())
 
 
-fn tls13_handshake_secret_sha384(early_secret: List[UInt8], dhe: List[UInt8]) raises -> List[UInt8]:
+def tls13_handshake_secret_sha384(early_secret: List[UInt8], dhe: List[UInt8]) raises -> List[UInt8]:
     """Compute TLS 1.3 Handshake Secret (SHA-384) from Early Secret and DHE.
 
     derived_salt = HKDF-Expand-Label-SHA384(early_secret, "derived", SHA384(""), 48)
@@ -169,7 +169,7 @@ fn tls13_handshake_secret_sha384(early_secret: List[UInt8], dhe: List[UInt8]) ra
     return hkdf_extract_sha384(derived_salt, dhe)
 
 
-fn tls13_master_secret_sha384(handshake_secret: List[UInt8]) raises -> List[UInt8]:
+def tls13_master_secret_sha384(handshake_secret: List[UInt8]) raises -> List[UInt8]:
     """Compute TLS 1.3 Master Secret (SHA-384) from Handshake Secret.
 
     derived_salt = HKDF-Expand-Label-SHA384(hs, "derived", SHA384(""), 48)
@@ -181,7 +181,7 @@ fn tls13_master_secret_sha384(handshake_secret: List[UInt8]) raises -> List[UInt
     return hkdf_extract_sha384(derived_salt, _zeros48())
 
 
-fn tls13_derive_secret_sha384(
+def tls13_derive_secret_sha384(
     secret: List[UInt8],
     label: String,
     transcript_hash: List[UInt8],
@@ -190,7 +190,7 @@ fn tls13_derive_secret_sha384(
     return hkdf_expand_label_sha384(secret, label, transcript_hash, 48)
 
 
-fn tls13_traffic_keys_sha384(
+def tls13_traffic_keys_sha384(
     traffic_secret: List[UInt8],
     key_len:        Int,
     iv_len:         Int,
@@ -206,14 +206,14 @@ fn tls13_traffic_keys_sha384(
     return (key^, iv^)
 
 
-fn tls13_finished_key_sha384(traffic_secret: List[UInt8]) raises -> List[UInt8]:
+def tls13_finished_key_sha384(traffic_secret: List[UInt8]) raises -> List[UInt8]:
     """Compute the Finished HMAC key (SHA-384):
     HKDF-Expand-Label-SHA384(secret, "finished", "", 48)."""
     var empty = List[UInt8]()
     return hkdf_expand_label_sha384(traffic_secret, "finished", empty, 48)
 
 
-fn tls13_compute_finished_sha384(
+def tls13_compute_finished_sha384(
     finished_key: List[UInt8],
     transcript_hash: List[UInt8],
 ) -> List[UInt8]:
@@ -221,7 +221,7 @@ fn tls13_compute_finished_sha384(
     return hmac_sha384(finished_key, transcript_hash)
 
 
-fn tls13_verify_finished_sha384(
+def tls13_verify_finished_sha384(
     finished_key:    List[UInt8],
     transcript_hash: List[UInt8],
     verify_data:     List[UInt8],
@@ -236,7 +236,7 @@ fn tls13_verify_finished_sha384(
 # CertificateVerify support
 # ============================================================================
 
-fn tls13_cert_verify_input(context: String, transcript_hash: List[UInt8]) -> List[UInt8]:
+def tls13_cert_verify_input(context: String, transcript_hash: List[UInt8]) -> List[UInt8]:
     """Build the CertificateVerify message content to be signed/verified.
 
     Format (RFC 8446 §4.4.3):

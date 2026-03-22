@@ -16,14 +16,14 @@ from tls.message12 import (
 )
 
 
-fn make_bytes(value: UInt8, count: Int) -> List[UInt8]:
+def make_bytes(value: UInt8, count: Int) -> List[UInt8]:
     var out = List[UInt8](capacity=count)
     for i in range(count):
         out.append(value)
     return out^
 
 
-fn contains_u16(data: List[UInt8], value: UInt16) -> Bool:
+def contains_u16(data: List[UInt8], value: UInt16) -> Bool:
     """Check if data contains the 2-byte big-endian value anywhere."""
     var hi = UInt8(value >> 8)
     var lo = UInt8(value & 0xFF)
@@ -33,11 +33,11 @@ fn contains_u16(data: List[UInt8], value: UInt16) -> Bool:
     return False
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -50,7 +50,7 @@ fn run_test(
 
 # ── build_client_hello tests ───────────────────────────────────────────────
 
-fn test_ch_includes_tls12_suite() raises:
+def test_ch_includes_tls12_suite() raises:
     """build_client_hello now includes 0xC02F (TLS_ECDHE_RSA_AES128_GCM_SHA256)."""
     var random   = make_bytes(0x01, 32)
     var key_share = make_bytes(0x02, 32)
@@ -59,7 +59,7 @@ fn test_ch_includes_tls12_suite() raises:
         raise Error("0xC02F not found in ClientHello cipher_suites")
 
 
-fn test_ch_supported_versions_includes_tls12() raises:
+def test_ch_supported_versions_includes_tls12() raises:
     """build_client_hello supported_versions extension includes 0x0303 (TLS 1.2)."""
     var random   = make_bytes(0x01, 32)
     var key_share = make_bytes(0x02, 32)
@@ -70,7 +70,7 @@ fn test_ch_supported_versions_includes_tls12() raises:
 
 # ── parse_server_hello_version tests ─────────────────────────────────────
 
-fn _build_server_hello_tls13() -> List[UInt8]:
+def _build_server_hello_tls13() -> List[UInt8]:
     """Build a TLS 1.3 ServerHello body (has supported_versions = 0x0304)."""
     var body = List[UInt8]()
     # legacy_version = 0x0303
@@ -109,7 +109,7 @@ fn _build_server_hello_tls13() -> List[UInt8]:
     return body^
 
 
-fn _build_server_hello_tls12() -> List[UInt8]:
+def _build_server_hello_tls12() -> List[UInt8]:
     """Build a TLS 1.2 ServerHello body (no supported_versions ext)."""
     var body = List[UInt8]()
     # legacy_version = 0x0303
@@ -131,7 +131,7 @@ fn _build_server_hello_tls12() -> List[UInt8]:
     return body^
 
 
-fn test_parse_server_hello_version_tls13() raises:
+def test_parse_server_hello_version_tls13() raises:
     """parse_server_hello_version: TLS 1.3 ServerHello → use_tls13=True."""
     var body = _build_server_hello_tls13()
     var result = parse_server_hello_version(body)
@@ -143,7 +143,7 @@ fn test_parse_server_hello_version_tls13() raises:
         raise Error("expected cipher 0x1301, got " + String(Int(cipher)))
 
 
-fn test_parse_server_hello_version_tls12() raises:
+def test_parse_server_hello_version_tls12() raises:
     """parse_server_hello_version: TLS 1.2 ServerHello (no sup_ver ext) → use_tls13=False."""
     var body = _build_server_hello_tls12()
     var result = parse_server_hello_version(body)
@@ -157,7 +157,7 @@ fn test_parse_server_hello_version_tls12() raises:
 
 # ── parse_server_key_exchange tests ──────────────────────────────────────
 
-fn _build_ske() -> List[UInt8]:
+def _build_ske() -> List[UInt8]:
     """Build a fake ServerKeyExchange: curve_type=3, x25519, RSA sig."""
     var body = List[UInt8]()
     body.append(0x03)        # curve_type = named_curve
@@ -175,7 +175,7 @@ fn _build_ske() -> List[UInt8]:
     return body^
 
 
-fn test_parse_server_key_exchange_x25519_rsa() raises:
+def test_parse_server_key_exchange_x25519_rsa() raises:
     """parse_server_key_exchange: x25519 pubkey + RSA sig extracted correctly."""
     var body = _build_ske()
     var result = parse_server_key_exchange(body)
@@ -201,7 +201,7 @@ fn test_parse_server_key_exchange_x25519_rsa() raises:
         raise Error("expected sig_bytes[0]=0x03")
 
 
-fn test_parse_server_key_exchange_truncated() raises:
+def test_parse_server_key_exchange_truncated() raises:
     """parse_server_key_exchange: truncated body raises."""
     var body = List[UInt8]()
     body.append(0x03)  # curve_type only — too short
@@ -216,7 +216,7 @@ fn test_parse_server_key_exchange_truncated() raises:
 
 # ── build_client_key_exchange test ────────────────────────────────────────
 
-fn test_build_client_key_exchange() raises:
+def test_build_client_key_exchange() raises:
     """build_client_key_exchange: 1-byte length prefix + key bytes."""
     var pubkey = make_bytes(0x04, 32)
     var cke = build_client_key_exchange(pubkey)
@@ -231,7 +231,7 @@ fn test_build_client_key_exchange() raises:
 
 # ── build_finished_body / parse_finished_body roundtrip ──────────────────
 
-fn test_finished_body_roundtrip() raises:
+def test_finished_body_roundtrip() raises:
     """build_finished_body + parse_finished_body roundtrip."""
     var verify_data = make_bytes(0x05, 12)
     var body = build_finished_body(verify_data)
@@ -248,7 +248,7 @@ fn test_finished_body_roundtrip() raises:
             raise Error("verify_data mismatch at byte " + String(i))
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

@@ -5,13 +5,13 @@
 from crypto.curve25519 import x25519, x25519_public_key
 
 
-fn _hex_nibble(b: UInt8) raises -> UInt8:
+def _hex_nibble(b: UInt8) raises -> UInt8:
     if b >= 48 and b <= 57: return b - 48
     if b >= 97 and b <= 102: return b - 87
     raise Error("bad hex char")
 
 
-fn hex_to_bytes(hex: String) raises -> List[UInt8]:
+def hex_to_bytes(hex: String) raises -> List[UInt8]:
     var raw = hex.as_bytes()
     var n = len(raw)
     if n % 2 != 0: raise Error("odd hex length")
@@ -21,7 +21,7 @@ fn hex_to_bytes(hex: String) raises -> List[UInt8]:
     return out^
 
 
-fn bytes_to_hex(b: List[UInt8]) -> String:
+def bytes_to_hex(b: List[UInt8]) -> String:
     var digits = "0123456789abcdef".as_bytes()
     var result = List[UInt8](capacity=len(b) * 2)
     for i in range(len(b)):
@@ -31,13 +31,13 @@ fn bytes_to_hex(b: List[UInt8]) -> String:
     return String(unsafe_from_utf8=result^)
 
 
-fn assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
+def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
     var got_hex = bytes_to_hex(got)
     if got_hex != expected_hex:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raises -> None):
+def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
     try:
         test_fn()
         print("  PASS:", name)
@@ -51,7 +51,7 @@ fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raise
 # RFC 7748 §6.1 — X25519 function test vectors
 # ============================================================================
 
-fn test_x25519_rfc7748_alice() raises:
+def test_x25519_rfc7748_alice() raises:
     # Alice's private key (scalar) — RFC 7748 §6.1
     var alice_priv = hex_to_bytes(
         "77076d0a7318a57d3c16c17251b26645"
@@ -67,7 +67,7 @@ fn test_x25519_rfc7748_alice() raises:
     )
 
 
-fn test_x25519_rfc7748_bob() raises:
+def test_x25519_rfc7748_bob() raises:
     # Bob's private key — RFC 7748 §6.1
     var bob_priv = hex_to_bytes(
         "5dab087e624a8a4b79e17f8b83800ee6"
@@ -83,7 +83,7 @@ fn test_x25519_rfc7748_bob() raises:
     )
 
 
-fn test_x25519_rfc7748_shared_secret() raises:
+def test_x25519_rfc7748_shared_secret() raises:
     var alice_priv = hex_to_bytes(
         "77076d0a7318a57d3c16c17251b26645"
         "df4c2f87ebc0992ab177fba51db92c2a"
@@ -112,7 +112,7 @@ fn test_x25519_rfc7748_shared_secret() raises:
 # RFC 7748 §6.1 — Iterated test (u=9, apply 1000×)
 # ============================================================================
 
-fn test_x25519_iterated_1000() raises:
+def test_x25519_iterated_1000() raises:
     # Start: k = u = 9 (encoded as 32 LE bytes)
     var k = List[UInt8](capacity=32)
     k.append(9)
@@ -142,7 +142,7 @@ fn test_x25519_iterated_1000() raises:
 # Low-order point rejection
 # ============================================================================
 
-fn test_x25519_reject_low_order() raises:
+def test_x25519_reject_low_order() raises:
     # The all-zeros u-coordinate is a low-order point; x25519 must return 0
     # (RFC 7748 §6 — implementations SHOULD reject but RFC doesn't mandate it)
     # We verify that our implementation returns all-zero (i.e., the result is
@@ -162,7 +162,7 @@ fn test_x25519_reject_low_order() raises:
     )
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
     print("=== X25519 / Curve25519 Tests ===")

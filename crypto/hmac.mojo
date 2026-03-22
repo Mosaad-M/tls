@@ -14,7 +14,7 @@
 from crypto.hash import sha256, sha384, SHA256, SHA384
 
 
-fn hmac_sha256(key: List[UInt8], data: List[UInt8]) -> List[UInt8]:
+def hmac_sha256(key: List[UInt8], data: List[UInt8]) -> List[UInt8]:
     """Compute HMAC-SHA256. Block size = 64 bytes, digest = 32 bytes."""
     var block_size = 64
 
@@ -49,7 +49,7 @@ fn hmac_sha256(key: List[UInt8], data: List[UInt8]) -> List[UInt8]:
     return outer.finalize()
 
 
-fn hmac_sha384(key: List[UInt8], data: List[UInt8]) -> List[UInt8]:
+def hmac_sha384(key: List[UInt8], data: List[UInt8]) -> List[UInt8]:
     """Compute HMAC-SHA384. Block size = 128 bytes, digest = 48 bytes."""
     var block_size = 128
 
@@ -84,7 +84,7 @@ fn hmac_sha384(key: List[UInt8], data: List[UInt8]) -> List[UInt8]:
     return outer.finalize()
 
 
-fn hmac_equal(a: List[UInt8], b: List[UInt8]) -> Bool:
+def hmac_equal(a: List[UInt8], b: List[UInt8]) -> Bool:
     """Constant-time comparison of two byte sequences.
 
     Uses OR-accumulation so that comparison time is independent of

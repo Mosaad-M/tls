@@ -10,7 +10,7 @@ from crypto.hkdf import hkdf_extract, hkdf_expand, hkdf_expand_label
 # ============================================================================
 
 
-fn _hex_nibble(b: UInt8) raises -> UInt8:
+def _hex_nibble(b: UInt8) raises -> UInt8:
     if b >= 48 and b <= 57:
         return b - 48
     if b >= 97 and b <= 102:
@@ -18,7 +18,7 @@ fn _hex_nibble(b: UInt8) raises -> UInt8:
     raise Error("bad hex char")
 
 
-fn hex_to_bytes(hex: String) raises -> List[UInt8]:
+def hex_to_bytes(hex: String) raises -> List[UInt8]:
     var raw = hex.as_bytes()
     var n = len(raw)
     if n % 2 != 0:
@@ -29,7 +29,7 @@ fn hex_to_bytes(hex: String) raises -> List[UInt8]:
     return out^
 
 
-fn bytes_to_hex(b: List[UInt8]) -> String:
+def bytes_to_hex(b: List[UInt8]) -> String:
     var digits = "0123456789abcdef".as_bytes()
     var result = List[UInt8](capacity=len(b) * 2)
     for i in range(len(b)):
@@ -39,31 +39,31 @@ fn bytes_to_hex(b: List[UInt8]) -> String:
     return String(unsafe_from_utf8=result^)
 
 
-fn repeat_byte(b: UInt8, n: Int) -> List[UInt8]:
+def repeat_byte(b: UInt8, n: Int) -> List[UInt8]:
     var out = List[UInt8](capacity=n)
     for _ in range(n):
         out.append(b)
     return out^
 
 
-fn seq_bytes(start: Int, end_excl: Int) -> List[UInt8]:
+def seq_bytes(start: Int, end_excl: Int) -> List[UInt8]:
     var out = List[UInt8](capacity=end_excl - start)
     for i in range(start, end_excl):
         out.append(UInt8(i))
     return out^
 
 
-fn assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
+def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
     var got_hex = bytes_to_hex(got)
     if got_hex != expected_hex:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -79,7 +79,7 @@ fn run_test(
 # ============================================================================
 
 
-fn test_hkdf_tc1_extract() raises:
+def test_hkdf_tc1_extract() raises:
     # IKM  = 0x0b * 22
     # Salt = 000102030405060708090a0b0c
     # PRK  = 077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5
@@ -93,7 +93,7 @@ fn test_hkdf_tc1_extract() raises:
     )
 
 
-fn test_hkdf_tc1_expand() raises:
+def test_hkdf_tc1_expand() raises:
     var prk = hex_to_bytes(
         "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5"
     )
@@ -111,7 +111,7 @@ fn test_hkdf_tc1_expand() raises:
 # ============================================================================
 
 
-fn test_hkdf_tc2_extract() raises:
+def test_hkdf_tc2_extract() raises:
     # IKM  = 0x00..0x4f (80 bytes)
     # Salt = 0x60..0xaf (80 bytes)
     # PRK  = 06a6b88c5853361a06104c9ceb35b45cef760014904671014a193f40c15fc244
@@ -125,7 +125,7 @@ fn test_hkdf_tc2_extract() raises:
     )
 
 
-fn test_hkdf_tc2_expand() raises:
+def test_hkdf_tc2_expand() raises:
     var prk = hex_to_bytes(
         "06a6b88c5853361a06104c9ceb35b45cef760014904671014a193f40c15fc244"
     )
@@ -143,7 +143,7 @@ fn test_hkdf_tc2_expand() raises:
 # ============================================================================
 
 
-fn test_hkdf_tc3_extract() raises:
+def test_hkdf_tc3_extract() raises:
     # IKM  = 0x0b * 22, no salt (treat as 0x00 * HashLen = 32 zeros)
     # PRK  = 19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04
     var ikm = repeat_byte(0x0B, 22)
@@ -156,7 +156,7 @@ fn test_hkdf_tc3_extract() raises:
     )
 
 
-fn test_hkdf_tc3_expand() raises:
+def test_hkdf_tc3_expand() raises:
     # info = empty, length = 42
     var prk = hex_to_bytes(
         "19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04"
@@ -175,7 +175,7 @@ fn test_hkdf_tc3_expand() raises:
 # ============================================================================
 
 
-fn test_expand_label_derived() raises:
+def test_expand_label_derived() raises:
     # Derive the "derived" secret from a zero 32-byte secret (early_secret stage)
     # Using SHA-256 hash of empty string as context, label="derived", length=32
     # Verified against Python reference implementation
@@ -191,7 +191,7 @@ fn test_expand_label_derived() raises:
     )
 
 
-fn test_expand_label_tls13_early_chain() raises:
+def test_expand_label_tls13_early_chain() raises:
     # TLS 1.3 early_secret (HKDF-Extract(0^32, 0^32)) then "derived" label
     # Matches RFC 8448 §3 reference
     var zero32 = repeat_byte(0x00, 32)
@@ -217,7 +217,7 @@ fn test_expand_label_tls13_early_chain() raises:
 # ============================================================================
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

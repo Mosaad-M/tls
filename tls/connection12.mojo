@@ -83,7 +83,7 @@ struct TlsKeys12(Copyable, Movable):
     var server_seqno:     UInt64
     var use_sha384:       Bool          # True for *_SHA384 cipher suites
 
-    fn __init__(out self):
+    def __init__(out self):
         self.cipher           = 0
         self.client_write_key = List[UInt8]()
         self.server_write_key = List[UInt8]()
@@ -94,7 +94,7 @@ struct TlsKeys12(Copyable, Movable):
         self.server_seqno     = 0
         self.use_sha384       = False
 
-    fn __copyinit__(out self, copy: Self):
+    def __copyinit__(out self, copy: Self):
         self.cipher           = copy.cipher
         self.client_write_key = copy.client_write_key.copy()
         self.server_write_key = copy.server_write_key.copy()
@@ -105,7 +105,7 @@ struct TlsKeys12(Copyable, Movable):
         self.server_seqno     = copy.server_seqno
         self.use_sha384       = copy.use_sha384
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self.cipher           = take.cipher
         self.client_write_key = take.client_write_key^
         self.server_write_key = take.server_write_key^
@@ -121,12 +121,12 @@ struct TlsKeys12(Copyable, Movable):
 # Internal helpers
 # ============================================================================
 
-fn _append_bytes12(mut out: List[UInt8], src: List[UInt8]):
+def _append_bytes12(mut out: List[UInt8], src: List[UInt8]):
     for i in range(len(src)):
         out.append(src[i])
 
 
-fn _make_tls12_record(content_type: UInt8, data: List[UInt8]) -> List[UInt8]:
+def _make_tls12_record(content_type: UInt8, data: List[UInt8]) -> List[UInt8]:
     """Wrap data in a TLS 1.2 record (5-byte header + data)."""
     var n = len(data)
     var out = List[UInt8](capacity=5 + n)
@@ -139,7 +139,7 @@ fn _make_tls12_record(content_type: UInt8, data: List[UInt8]) -> List[UInt8]:
     return out^
 
 
-fn _wrap_hs_msg12(msg_type: UInt8, body: List[UInt8]) -> List[UInt8]:
+def _wrap_hs_msg12(msg_type: UInt8, body: List[UInt8]) -> List[UInt8]:
     """Wrap body in a 4-byte Handshake header (for transcript)."""
     var out = List[UInt8](capacity=4 + len(body))
     out.append(msg_type)
@@ -151,17 +151,17 @@ fn _wrap_hs_msg12(msg_type: UInt8, body: List[UInt8]) -> List[UInt8]:
     return out^
 
 
-fn _transcript_hash12(h: SHA256) -> List[UInt8]:
+def _transcript_hash12(h: SHA256) -> List[UInt8]:
     var h_copy = h.copy()
     return h_copy.finalize()
 
 
-fn _transcript_hash12_384(h: SHA384) -> List[UInt8]:
+def _transcript_hash12_384(h: SHA384) -> List[UInt8]:
     var h_copy = h.copy()
     return h_copy.finalize()
 
 
-fn _parse_cert_chain_12(body: List[UInt8]) raises -> List[List[UInt8]]:
+def _parse_cert_chain_12(body: List[UInt8]) raises -> List[List[UInt8]]:
     """Parse TLS 1.2 Certificate message body → list of DER cert bytes.
 
     TLS 1.2 format: 3-byte list_len + (3-byte cert_len + cert_bytes)*
@@ -188,7 +188,7 @@ fn _parse_cert_chain_12(body: List[UInt8]) raises -> List[List[UInt8]]:
     return certs^
 
 
-fn _verify_ske_signature(
+def _verify_ske_signature(
     cert:           X509Cert,
     sig_hash:       UInt8,      # 4=SHA-256, 5=SHA-384
     sig_sig:        UInt8,      # 1=RSA, 3=ECDSA
@@ -221,7 +221,7 @@ fn _verify_ske_signature(
         raise Error("tls12: unsupported sig_sig " + String(Int(sig_sig)))
 
 
-fn _read_server_hs12_until_done(fd: Int32) raises -> List[HandshakeMsg]:
+def _read_server_hs12_until_done(fd: Int32) raises -> List[HandshakeMsg]:
     """Read TLS 1.2 server handshake messages until ServerHelloDone.
 
     Accumulates data across multiple TLS records, handling the common case
@@ -279,7 +279,7 @@ fn _read_server_hs12_until_done(fd: Int32) raises -> List[HandshakeMsg]:
     return all_msgs^
 
 
-fn _find_msg12(messages: List[HandshakeMsg], msg_type: UInt8) raises -> List[UInt8]:
+def _find_msg12(messages: List[HandshakeMsg], msg_type: UInt8) raises -> List[UInt8]:
     """Find first message of the given type. Raises if not found."""
     for i in range(len(messages)):
         if messages[i].msg_type == msg_type:
@@ -291,7 +291,7 @@ fn _find_msg12(messages: List[HandshakeMsg], msg_type: UInt8) raises -> List[UIn
 # tls12_client_handshake
 # ============================================================================
 
-fn _tls12_handshake_impl(
+def _tls12_handshake_impl(
     fd:             Int32,
     hostname:       String,
     trust_anchors:  List[X509Cert],
@@ -508,7 +508,7 @@ fn _tls12_handshake_impl(
     return keys^
 
 
-fn tls12_client_handshake(
+def tls12_client_handshake(
     fd:             Int32,
     hostname:       String,
     trust_anchors:  List[X509Cert],

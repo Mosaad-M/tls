@@ -9,7 +9,7 @@
 comptime _B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 
-fn base64_encode(data: List[UInt8]) -> String:
+def base64_encode(data: List[UInt8]) -> String:
     """Encode bytes to standard base64 with padding."""
     var n = len(data)
     if n == 0:
@@ -48,7 +48,7 @@ fn base64_encode(data: List[UInt8]) -> String:
     return String(unsafe_from_utf8=out^)
 
 
-fn _b64_decode_char(c: UInt8) raises -> UInt8:
+def _b64_decode_char(c: UInt8) raises -> UInt8:
     """Decode a single base64 character to its 6-bit value. Raises on invalid."""
     if c >= 65 and c <= 90:    # A-Z
         return c - 65
@@ -63,7 +63,7 @@ fn _b64_decode_char(c: UInt8) raises -> UInt8:
     raise Error("base64_decode: invalid character: " + String(Int(c)))
 
 
-fn base64_decode(s: String) raises -> List[UInt8]:
+def base64_decode(s: String) raises -> List[UInt8]:
     """Decode standard base64 string to bytes. Raises on invalid input."""
     var raw = s.as_bytes()
     var n = len(raw)

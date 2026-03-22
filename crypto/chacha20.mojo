@@ -17,11 +17,11 @@
 from collections import InlineArray
 
 
-fn _rotl32(v: UInt32, n: Int) -> UInt32:
+def _rotl32(v: UInt32, n: Int) -> UInt32:
     return (v << UInt32(n)) | (v >> UInt32(32 - n))
 
 
-fn _quarter_round(
+def _quarter_round(
     mut s: InlineArray[UInt32, 16],
     a: Int, b: Int, c: Int, d: Int,
 ):
@@ -31,7 +31,7 @@ fn _quarter_round(
     s[c] = s[c] + s[d]; s[b] ^= s[c]; s[b] = _rotl32(s[b], 7)
 
 
-fn _load_le32(data: List[UInt8], off: Int) -> UInt32:
+def _load_le32(data: List[UInt8], off: Int) -> UInt32:
     return (
         UInt32(data[off]) |
         (UInt32(data[off + 1]) << 8) |
@@ -40,14 +40,14 @@ fn _load_le32(data: List[UInt8], off: Int) -> UInt32:
     )
 
 
-fn _store_le32(v: UInt32, mut data: List[UInt8]):
+def _store_le32(v: UInt32, mut data: List[UInt8]):
     data.append(UInt8(v & 0xFF))
     data.append(UInt8((v >> 8) & 0xFF))
     data.append(UInt8((v >> 16) & 0xFF))
     data.append(UInt8((v >> 24) & 0xFF))
 
 
-fn chacha20_block(
+def chacha20_block(
     key: List[UInt8],
     counter: UInt32,
     nonce: List[UInt8],
@@ -106,7 +106,7 @@ fn chacha20_block(
     return keystream^
 
 
-fn chacha20_encrypt(
+def chacha20_encrypt(
     key: List[UInt8],
     nonce: List[UInt8],
     counter: UInt32,

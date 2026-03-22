@@ -12,11 +12,11 @@
 from crypto.cert import X509Cert, cert_parse, cert_chain_verify
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -27,7 +27,7 @@ fn run_test(
         failed += 1
 
 
-fn hex_to_bytes(h: String) -> List[UInt8]:
+def hex_to_bytes(h: String) -> List[UInt8]:
     var raw = h.as_bytes()
     var n = len(raw) // 2
     var out = List[UInt8](capacity=n)
@@ -58,7 +58,7 @@ comptime LEAF2_HEX = "308201423081e9a00302010202020190300a06082a8648ce3d04030230
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-fn test_valid_2cert_chain() raises:
+def test_valid_2cert_chain() raises:
     var root2 = cert_parse(hex_to_bytes(ROOT2_HEX))
     var leaf2 = cert_parse(hex_to_bytes(LEAF2_HEX))
     var chain = List[X509Cert]()
@@ -69,7 +69,7 @@ fn test_valid_2cert_chain() raises:
     cert_chain_verify(chain, anchors, "leaf2.example.com")
 
 
-fn test_valid_3cert_chain() raises:
+def test_valid_3cert_chain() raises:
     var root = cert_parse(hex_to_bytes(ROOT_HEX))
     var inter = cert_parse(hex_to_bytes(INTER_HEX))
     var leaf = cert_parse(hex_to_bytes(LEAF_HEX))
@@ -82,7 +82,7 @@ fn test_valid_3cert_chain() raises:
     cert_chain_verify(chain, anchors, "www.example.com")
 
 
-fn test_hostname_mismatch() raises:
+def test_hostname_mismatch() raises:
     var root2 = cert_parse(hex_to_bytes(ROOT2_HEX))
     var leaf2 = cert_parse(hex_to_bytes(LEAF2_HEX))
     var chain = List[X509Cert]()
@@ -99,7 +99,7 @@ fn test_hostname_mismatch() raises:
         raise Error("expected raise for hostname mismatch")
 
 
-fn test_tampered_intermediate() raises:
+def test_tampered_intermediate() raises:
     var root = cert_parse(hex_to_bytes(ROOT_HEX))
     var tampered_inter = cert_parse(hex_to_bytes(TAMPERED_INTER_HEX))
     var leaf = cert_parse(hex_to_bytes(LEAF_HEX))
@@ -118,7 +118,7 @@ fn test_tampered_intermediate() raises:
         raise Error("expected raise for tampered intermediate signature")
 
 
-fn test_unrelated_trust_anchor() raises:
+def test_unrelated_trust_anchor() raises:
     # Use ROOT (from 3-cert chain) as TA for LEAF2+ROOT2 chain — should fail
     var root = cert_parse(hex_to_bytes(ROOT_HEX))    # unrelated anchor
     var root2 = cert_parse(hex_to_bytes(ROOT2_HEX))
@@ -137,7 +137,7 @@ fn test_unrelated_trust_anchor() raises:
         raise Error("expected raise for unrelated trust anchor")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

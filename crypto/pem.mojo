@@ -11,7 +11,7 @@
 from crypto.base64 import base64_decode
 
 
-fn _str_to_bytes(s: String) -> List[UInt8]:
+def _str_to_bytes(s: String) -> List[UInt8]:
     """Copy String bytes into a List[UInt8]."""
     var span = s.as_bytes()
     var out = List[UInt8](capacity=len(span))
@@ -20,7 +20,7 @@ fn _str_to_bytes(s: String) -> List[UInt8]:
     return out^
 
 
-fn pem_decode(pem: String, label: String) raises -> List[List[UInt8]]:
+def pem_decode(pem: String, label: String) raises -> List[List[UInt8]]:
     """Decode all PEM blocks matching `label`. Returns list of DER payloads."""
     var begin_marker = "-----BEGIN " + label + "-----"
     var end_marker   = "-----END " + label + "-----"
@@ -69,7 +69,7 @@ fn pem_decode(pem: String, label: String) raises -> List[List[UInt8]]:
     return result^
 
 
-fn _find_substr(haystack: List[UInt8], needle: List[UInt8], start: Int) -> Int:
+def _find_substr(haystack: List[UInt8], needle: List[UInt8], start: Int) -> Int:
     """Find first occurrence of needle in haystack starting at start. Returns -1 if not found."""
     var h = len(haystack)
     var nlen = len(needle)
@@ -88,7 +88,7 @@ fn _find_substr(haystack: List[UInt8], needle: List[UInt8], start: Int) -> Int:
     return -1
 
 
-fn _strip_whitespace(data: List[UInt8]) -> String:
+def _strip_whitespace(data: List[UInt8]) -> String:
     """Remove whitespace (\\n, \\r, space, tab) from byte list, return as String."""
     var out = List[UInt8](capacity=len(data))
     for i in range(len(data)):

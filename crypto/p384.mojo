@@ -23,7 +23,7 @@ from crypto.bigint import (
 # P-384 constants (returned as BigInt on demand)
 # ============================================================================
 
-fn _p384_p() -> BigInt:
+def _p384_p() -> BigInt:
     """Field prime p = 2^384 − 2^128 − 2^96 + 2^32 − 1."""
     var b = List[UInt8](capacity=48)
     b.append(0xFF); b.append(0xFF); b.append(0xFF); b.append(0xFF)
@@ -41,7 +41,7 @@ fn _p384_p() -> BigInt:
     return bigint_from_bytes(b)
 
 
-fn _p384_n() -> BigInt:
+def _p384_n() -> BigInt:
     """Curve order n."""
     var b = List[UInt8](capacity=48)
     b.append(0xFF); b.append(0xFF); b.append(0xFF); b.append(0xFF)
@@ -59,7 +59,7 @@ fn _p384_n() -> BigInt:
     return bigint_from_bytes(b)
 
 
-fn _p384_gx() -> BigInt:
+def _p384_gx() -> BigInt:
     """Generator x-coordinate."""
     var b = List[UInt8](capacity=48)
     b.append(0xAA); b.append(0x87); b.append(0xCA); b.append(0x22)
@@ -77,7 +77,7 @@ fn _p384_gx() -> BigInt:
     return bigint_from_bytes(b)
 
 
-fn _p384_gy() -> BigInt:
+def _p384_gy() -> BigInt:
     """Generator y-coordinate."""
     var b = List[UInt8](capacity=48)
     b.append(0x36); b.append(0x17); b.append(0xDE); b.append(0x4A)
@@ -99,7 +99,7 @@ fn _p384_gy() -> BigInt:
 # Field arithmetic — all operands in [0, p-1]
 # ============================================================================
 
-fn _p384_fadd(a: BigInt, b: BigInt, p: BigInt) -> BigInt:
+def _p384_fadd(a: BigInt, b: BigInt, p: BigInt) -> BigInt:
     """(a + b) mod p."""
     var r = bigint_add(a, b)
     if bigint_cmp(r, p) >= 0:
@@ -107,14 +107,14 @@ fn _p384_fadd(a: BigInt, b: BigInt, p: BigInt) -> BigInt:
     return r^
 
 
-fn _p384_fsub(a: BigInt, b: BigInt, p: BigInt) -> BigInt:
+def _p384_fsub(a: BigInt, b: BigInt, p: BigInt) -> BigInt:
     """(a - b) mod p."""
     if bigint_cmp(a, b) >= 0:
         return bigint_sub(a, b)
     return bigint_sub(bigint_add(a, p), b)
 
 
-fn _p384_nist_reduce(t: BigInt) -> BigInt:
+def _p384_nist_reduce(t: BigInt) -> BigInt:
     """Reduce a 768-bit product mod P-384 prime using NIST FIPS 186-4 D.1.2.4.
 
     t must be < p^2 (true for products of field elements).
@@ -239,27 +239,27 @@ fn _p384_nist_reduce(t: BigInt) -> BigInt:
     return r^
 
 
-fn _p384_fmul_fast(a: BigInt, b: BigInt) -> BigInt:
+def _p384_fmul_fast(a: BigInt, b: BigInt) -> BigInt:
     """(a * b) mod p384 using NIST fast reduction."""
     return _p384_nist_reduce(bigint_mul(a, b))
 
 
-fn _p384_fsq_fast(a: BigInt) -> BigInt:
+def _p384_fsq_fast(a: BigInt) -> BigInt:
     """a^2 mod p384 using NIST fast reduction."""
     return _p384_nist_reduce(bigint_mul(a, a.copy()))
 
 
-fn _p384_fmul(a: BigInt, b: BigInt, p: BigInt) -> BigInt:
+def _p384_fmul(a: BigInt, b: BigInt, p: BigInt) -> BigInt:
     """(a * b) mod p."""
     return _p384_fmul_fast(a, b)
 
 
-fn _p384_fsq(a: BigInt, p: BigInt) -> BigInt:
+def _p384_fsq(a: BigInt, p: BigInt) -> BigInt:
     """a^2 mod p."""
     return _p384_fsq_fast(a)
 
 
-fn _p384_fk(a: BigInt, k: UInt64, p: BigInt) -> BigInt:
+def _p384_fk(a: BigInt, k: UInt64, p: BigInt) -> BigInt:
     """k*a mod p for small constant k using repeated doubling."""
     if k == 2:
         return _p384_fadd(a, a.copy(), p)
@@ -277,7 +277,7 @@ fn _p384_fk(a: BigInt, k: UInt64, p: BigInt) -> BigInt:
         return bigint_modmul(a, bigint_from_u64(k), p)
 
 
-fn _p384_finv(a: BigInt, p: BigInt) raises -> BigInt:
+def _p384_finv(a: BigInt, p: BigInt) raises -> BigInt:
     """a^(-1) mod p using binary extended GCD (fast, safe for public Z coord)."""
     return bigint_modinv(a, p)
 
@@ -292,27 +292,27 @@ struct P384Point(Copyable, Movable):
     var z: BigInt
     var inf: Bool
 
-    fn __init__(out self):
+    def __init__(out self):
         """Construct the point at infinity."""
         self.x = bigint_zero()
         self.y = bigint_zero()
         self.z = bigint_zero()
         self.inf = True
 
-    fn __copyinit__(out self, copy: Self):
+    def __copyinit__(out self, copy: Self):
         self.x = copy.x.copy()
         self.y = copy.y.copy()
         self.z = copy.z.copy()
         self.inf = copy.inf
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self.x = take.x^
         self.y = take.y^
         self.z = take.z^
         self.inf = take.inf
 
 
-fn _p384_from_affine(x: BigInt, y: BigInt) -> P384Point:
+def _p384_from_affine(x: BigInt, y: BigInt) -> P384Point:
     """Jacobian point from affine (x, y) with Z=1."""
     var P = P384Point()
     P.x = x.copy()
@@ -322,7 +322,7 @@ fn _p384_from_affine(x: BigInt, y: BigInt) -> P384Point:
     return P^
 
 
-fn _p384_to_affine(P: P384Point, p: BigInt) raises -> Tuple[BigInt, BigInt]:
+def _p384_to_affine(P: P384Point, p: BigInt) raises -> Tuple[BigInt, BigInt]:
     """Convert Jacobian to affine: (X/Z^2, Y/Z^3) mod p."""
     var zinv  = _p384_finv(P.z, p)
     var zinv2 = _p384_fsq(zinv.copy(), p)
@@ -337,7 +337,7 @@ fn _p384_to_affine(P: P384Point, p: BigInt) raises -> Tuple[BigInt, BigInt]:
 # P-384 also has a = -3, so the same formula applies.
 # ============================================================================
 
-fn _p384_pdbl(P: P384Point, p: BigInt) -> P384Point:
+def _p384_pdbl(P: P384Point, p: BigInt) -> P384Point:
     if P.inf or bigint_is_zero(P.y):
         return P384Point()
 
@@ -371,7 +371,7 @@ fn _p384_pdbl(P: P384Point, p: BigInt) -> P384Point:
 # Mixed addition (Jacobian P + affine Q) — madd-2007-bl
 # ============================================================================
 
-fn _p384_pmadd(P: P384Point, qx: BigInt, qy: BigInt, p: BigInt) -> P384Point:
+def _p384_pmadd(P: P384Point, qx: BigInt, qy: BigInt, p: BigInt) -> P384Point:
     """P + Q where Q is in affine coordinates."""
     if P.inf:
         return _p384_from_affine(qx, qy)
@@ -414,7 +414,7 @@ fn _p384_pmadd(P: P384Point, qx: BigInt, qy: BigInt, p: BigInt) -> P384Point:
 # Full Jacobian addition
 # ============================================================================
 
-fn _p384_padd(P: P384Point, Q: P384Point, p: BigInt) -> P384Point:
+def _p384_padd(P: P384Point, Q: P384Point, p: BigInt) -> P384Point:
     """Full Jacobian + Jacobian point addition."""
     if P.inf:
         return Q.copy()
@@ -461,7 +461,7 @@ fn _p384_padd(P: P384Point, Q: P384Point, p: BigInt) -> P384Point:
 # Scalar multiplication: Montgomery ladder (constant-time structure)
 # ============================================================================
 
-fn _p384_point_cswap(mut a: P384Point, mut b: P384Point, swap: Int):
+def _p384_point_cswap(mut a: P384Point, mut b: P384Point, swap: Int):
     """Conditionally swap two P-384 points in constant time (swap if swap==1)."""
     var mask: UInt32 = ~UInt32(0) if swap == 1 else UInt32(0)
     bigint_cswap_inplace(a.x, b.x, mask)
@@ -476,7 +476,7 @@ fn _p384_point_cswap(mut a: P384Point, mut b: P384Point, swap: Int):
     b.inf = (bi == 1)
 
 
-fn _p384_scalar_mul_affine(scalar: BigInt, px: BigInt, py: BigInt, p: BigInt) -> P384Point:
+def _p384_scalar_mul_affine(scalar: BigInt, px: BigInt, py: BigInt, p: BigInt) -> P384Point:
     """Compute scalar * P where P = (px, py) in affine coords, using Montgomery ladder."""
     var r0 = P384Point()  # point at infinity
     var r1 = P384Point()
@@ -497,7 +497,7 @@ fn _p384_scalar_mul_affine(scalar: BigInt, px: BigInt, py: BigInt, p: BigInt) ->
     return r0^
 
 
-fn _p384_scalar_mul(scalar: BigInt, P: P384Point, p: BigInt) -> P384Point:
+def _p384_scalar_mul(scalar: BigInt, P: P384Point, p: BigInt) -> P384Point:
     """Compute scalar * P where P is in Jacobian coords, using Montgomery ladder."""
     var r0 = P384Point()  # point at infinity
     var r1 = P.copy()
@@ -518,7 +518,7 @@ fn _p384_scalar_mul(scalar: BigInt, P: P384Point, p: BigInt) -> P384Point:
 # Point validation
 # ============================================================================
 
-fn _p384_point_on_curve(x: BigInt, y: BigInt, p: BigInt) -> Bool:
+def _p384_point_on_curve(x: BigInt, y: BigInt, p: BigInt) -> Bool:
     """Check y² ≡ x³ − 3x + b (mod p) for P-384."""
     # b = b3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875a
     #       c656398d8a2ed19d2a85c8edd3ec2aef
@@ -547,7 +547,7 @@ fn _p384_point_on_curve(x: BigInt, y: BigInt, p: BigInt) -> Bool:
 # Parse uncompressed public key (97 bytes: 0x04 || X || Y)
 # ============================================================================
 
-fn _p384_parse_pub(pub: List[UInt8]) raises -> Tuple[BigInt, BigInt]:
+def _p384_parse_pub(pub: List[UInt8]) raises -> Tuple[BigInt, BigInt]:
     """Parse 97-byte uncompressed P-384 public key → (Qx, Qy)."""
     if len(pub) != 97 or pub[0] != 0x04:
         raise Error("p384: invalid public key format (need 97-byte uncompressed)")
@@ -563,7 +563,7 @@ fn _p384_parse_pub(pub: List[UInt8]) raises -> Tuple[BigInt, BigInt]:
 # Public API
 # ============================================================================
 
-fn p384_ecdsa_verify(
+def p384_ecdsa_verify(
     pub_key:  List[UInt8],   # 97-byte uncompressed P-384 public key
     msg_hash: List[UInt8],   # 48-byte message hash (SHA-384)
     sig_r:    List[UInt8],   # up to 48-byte r component

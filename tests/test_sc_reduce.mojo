@@ -2,7 +2,7 @@
 from crypto.ed25519 import _scalar_reduce
 
 
-fn bytes_equal(a: List[UInt8], b: List[UInt8]) -> Bool:
+def bytes_equal(a: List[UInt8], b: List[UInt8]) -> Bool:
     if len(a) != len(b):
         return False
     for i in range(len(a)):
@@ -11,7 +11,7 @@ fn bytes_equal(a: List[UInt8], b: List[UInt8]) -> Bool:
     return True
 
 
-fn hex_bytes(s: List[UInt8]) -> String:
+def hex_bytes(s: List[UInt8]) -> String:
     var result = String()
     for i in range(len(s)):
         var b = Int(s[i])
@@ -22,7 +22,7 @@ fn hex_bytes(s: List[UInt8]) -> String:
     return result
 
 
-fn main() raises:
+def main() raises:
     # Test 1: sc_reduce(0) == 0
     var zero = List[UInt8](capacity=64)
     for _ in range(64):

@@ -21,7 +21,7 @@ from tls.connection import (
 # ── Temp-file capture helpers ──────────────────────────────────────────────
 # These avoid needing module-level mutable state.
 
-fn _capture_reset() raises:
+def _capture_reset() raises:
     """Truncate /tmp/mojo_alert_test.bin to zero bytes."""
     var path = String("/tmp/mojo_alert_test.bin")
     # O_WRONLY | O_CREAT | O_TRUNC = 1 | 64 | 512 = 577
@@ -33,7 +33,7 @@ fn _capture_reset() raises:
     _ = external_call["close", Int32](fd)
 
 
-fn _capture_write(data: List[UInt8]) raises:
+def _capture_write(data: List[UInt8]) raises:
     """Append data to /tmp/mojo_alert_test.bin."""
     var path = String("/tmp/mojo_alert_test.bin")
     # O_WRONLY | O_CREAT | O_APPEND = 1 | 64 | 1024 = 1089
@@ -52,7 +52,7 @@ fn _capture_write(data: List[UInt8]) raises:
     _ = external_call["close", Int32](fd)
 
 
-fn _capture_read() raises -> List[UInt8]:
+def _capture_read() raises -> List[UInt8]:
     """Read all bytes from /tmp/mojo_alert_test.bin."""
     var path = String("/tmp/mojo_alert_test.bin")
     var fd = external_call["open", Int32](path.unsafe_ptr(), Int32(0), Int32(0))  # O_RDONLY
@@ -71,11 +71,11 @@ fn _capture_read() raises -> List[UInt8]:
 
 # ── run_test helper ────────────────────────────────────────────────────────
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -88,7 +88,7 @@ fn run_test(
 
 # ── Tests ──────────────────────────────────────────────────────────────────
 
-fn test_send_alert_warning_close_notify() raises:
+def test_send_alert_warning_close_notify() raises:
     """tls_send_alert with empty keys sends 7-byte plaintext alert record."""
     _capture_reset()
     var empty_keys = TlsKeys()
@@ -109,7 +109,7 @@ fn test_send_alert_warning_close_notify() raises:
         raise Error("expected code=0 (close_notify)")
 
 
-fn test_send_alert_fatal_bad_cert() raises:
+def test_send_alert_fatal_bad_cert() raises:
     """tls_send_alert with FATAL + BAD_CERT produces correct bytes."""
     _capture_reset()
     var empty_keys = TlsKeys()
@@ -123,7 +123,7 @@ fn test_send_alert_fatal_bad_cert() raises:
         raise Error("expected code=42 (bad_certificate)")
 
 
-fn test_handle_close_notify() raises:
+def test_handle_close_notify() raises:
     """tls_handle_incoming_alert raises for close_notify."""
     var alert = List[UInt8]()
     alert.append(1)  # warning
@@ -137,7 +137,7 @@ fn test_handle_close_notify() raises:
         raise Error("expected raise for close_notify")
 
 
-fn test_handle_bad_certificate() raises:
+def test_handle_bad_certificate() raises:
     """tls_handle_incoming_alert raises for bad_certificate."""
     var alert = List[UInt8]()
     alert.append(2)   # fatal
@@ -151,7 +151,7 @@ fn test_handle_bad_certificate() raises:
         raise Error("expected raise for bad_certificate")
 
 
-fn test_handle_malformed_alert() raises:
+def test_handle_malformed_alert() raises:
     """tls_handle_incoming_alert raises for empty (malformed) alert."""
     var empty = List[UInt8]()
     var raised = False
@@ -163,7 +163,7 @@ fn test_handle_malformed_alert() raises:
         raise Error("expected raise for malformed alert")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

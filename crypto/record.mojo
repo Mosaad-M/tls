@@ -37,7 +37,7 @@ comptime CTYPE_APPLICATION_DATA   : UInt8 = 0x17
 # Internal helpers
 # ============================================================================
 
-fn _make_nonce(iv: List[UInt8], seqno: UInt64) -> List[UInt8]:
+def _make_nonce(iv: List[UInt8], seqno: UInt64) -> List[UInt8]:
     """Compute per-record nonce: iv XOR seqno padded to 12 bytes (big-endian)."""
     var nonce = List[UInt8](capacity=12)
     var s = seqno
@@ -51,7 +51,7 @@ fn _make_nonce(iv: List[UInt8], seqno: UInt64) -> List[UInt8]:
     return nonce^
 
 
-fn _make_aad(inner_len: Int) -> List[UInt8]:
+def _make_aad(inner_len: Int) -> List[UInt8]:
     """Build TLS 1.3 AAD: opaque_type=0x17, version=0x0303, length=inner+16."""
     var total = inner_len + 16  # includes 16-byte authentication tag
     var aad = List[UInt8](capacity=5)
@@ -67,7 +67,7 @@ fn _make_aad(inner_len: Int) -> List[UInt8]:
 # record_seal — encrypt and authenticate a TLS 1.3 record
 # ============================================================================
 
-fn record_seal(
+def record_seal(
     cipher:       UInt8,
     key:          List[UInt8],
     iv:           List[UInt8],
@@ -115,7 +115,7 @@ fn record_seal(
 # record_open — decrypt and verify a TLS 1.3 record
 # ============================================================================
 
-fn record_open(
+def record_open(
     cipher: UInt8,
     key:    List[UInt8],
     iv:     List[UInt8],
@@ -183,7 +183,7 @@ fn record_open(
 #   on-wire  = explicit_nonce(8) || ciphertext || tag(16)
 # ============================================================================
 
-fn _make_nonce_12(iv_implicit: List[UInt8], seqno: UInt64) -> List[UInt8]:
+def _make_nonce_12(iv_implicit: List[UInt8], seqno: UInt64) -> List[UInt8]:
     """Build 12-byte TLS 1.2 nonce: iv_implicit(4) || seqno_be8(8)."""
     var nonce = List[UInt8](capacity=12)
     for i in range(4):
@@ -194,7 +194,7 @@ fn _make_nonce_12(iv_implicit: List[UInt8], seqno: UInt64) -> List[UInt8]:
     return nonce^
 
 
-fn _make_explicit_nonce(seqno: UInt64) -> List[UInt8]:
+def _make_explicit_nonce(seqno: UInt64) -> List[UInt8]:
     """Build 8-byte explicit nonce from sequence number (big-endian)."""
     var out = List[UInt8](capacity=8)
     for i in range(8):
@@ -203,7 +203,7 @@ fn _make_explicit_nonce(seqno: UInt64) -> List[UInt8]:
     return out^
 
 
-fn _make_aad_12(seqno: UInt64, content_type: UInt8, plaintext_len: Int) -> List[UInt8]:
+def _make_aad_12(seqno: UInt64, content_type: UInt8, plaintext_len: Int) -> List[UInt8]:
     """Build TLS 1.2 AAD: seqno(8) || content_type(1) || 0x03 0x03(2) || plaintext_len(2)."""
     var aad = List[UInt8](capacity=13)
     for i in range(8):
@@ -217,7 +217,7 @@ fn _make_aad_12(seqno: UInt64, content_type: UInt8, plaintext_len: Int) -> List[
     return aad^
 
 
-fn record_seal_12(
+def record_seal_12(
     cipher:      UInt8,
     key:         List[UInt8],
     iv_implicit: List[UInt8],   # 4-byte implicit IV from key_block
@@ -257,7 +257,7 @@ fn record_seal_12(
     return out^
 
 
-fn record_open_12(
+def record_open_12(
     cipher:      UInt8,
     key:         List[UInt8],
     iv_implicit: List[UInt8],   # 4-byte implicit IV from key_block

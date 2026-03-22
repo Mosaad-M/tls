@@ -12,13 +12,13 @@
 from crypto.rsa import rsa_pkcs1_verify, rsa_pss_verify
 
 
-fn _hex_nibble(b: UInt8) raises -> UInt8:
+def _hex_nibble(b: UInt8) raises -> UInt8:
     if b >= 48 and b <= 57: return b - 48
     if b >= 97 and b <= 102: return b - 87
     raise Error("bad hex char")
 
 
-fn hex_to_bytes(hex: String) raises -> List[UInt8]:
+def hex_to_bytes(hex: String) raises -> List[UInt8]:
     var raw = hex.as_bytes()
     var n = len(raw)
     if n % 2 != 0: raise Error("odd hex length")
@@ -28,7 +28,7 @@ fn hex_to_bytes(hex: String) raises -> List[UInt8]:
     return out^
 
 
-fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raises -> None):
+def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
     try:
         test_fn()
         print("  PASS:", name)
@@ -42,7 +42,7 @@ fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raise
 # Fixed RSA-1024 key and test vectors
 # ============================================================================
 
-fn _rsa_n() raises -> List[UInt8]:
+def _rsa_n() raises -> List[UInt8]:
     return hex_to_bytes(
         "c7974be25680819d64991c0325af4d91"
         "cb1092fa736b1454ea401c3d73dcfcb5"
@@ -55,16 +55,16 @@ fn _rsa_n() raises -> List[UInt8]:
     )
 
 
-fn _rsa_e() raises -> List[UInt8]:
+def _rsa_e() raises -> List[UInt8]:
     return hex_to_bytes("00010001")  # 65537
 
 
-fn _msg_hash() raises -> List[UInt8]:
+def _msg_hash() raises -> List[UInt8]:
     # SHA-256("test message for RSA")
     return hex_to_bytes("fa48700ab9b800ac9b82e89f6ab90622988fb1f9a5498402fc19a99c1ec91018")
 
 
-fn _pkcs1_sig() raises -> List[UInt8]:
+def _pkcs1_sig() raises -> List[UInt8]:
     return hex_to_bytes(
         "ad289740e8001c743fadfacccd83e34d"
         "378578e21ffcab5b0169ef41081740f1"
@@ -77,7 +77,7 @@ fn _pkcs1_sig() raises -> List[UInt8]:
     )
 
 
-fn _pss_sig() raises -> List[UInt8]:
+def _pss_sig() raises -> List[UInt8]:
     return hex_to_bytes(
         "63a278b30f7eeae76e92545cfcbd7b2e"
         "e171e1612da892dd30c3196366acce08"
@@ -94,11 +94,11 @@ fn _pss_sig() raises -> List[UInt8]:
 # PKCS#1 v1.5 tests
 # ============================================================================
 
-fn test_pkcs1_valid() raises:
+def test_pkcs1_valid() raises:
     rsa_pkcs1_verify(_rsa_n(), _rsa_e(), _msg_hash(), _pkcs1_sig())
 
 
-fn test_pkcs1_reject_wrong_hash() raises:
+def test_pkcs1_reject_wrong_hash() raises:
     # Flip a byte in the hash → verification must fail
     var h = _msg_hash()
     h[0] ^= 0x01
@@ -111,7 +111,7 @@ fn test_pkcs1_reject_wrong_hash() raises:
         raise Error("pkcs1_reject_wrong_hash: bad hash not rejected")
 
 
-fn test_pkcs1_reject_tampered_sig() raises:
+def test_pkcs1_reject_tampered_sig() raises:
     var sig = _pkcs1_sig()
     sig[63] ^= 0x01   # Flip a bit in the middle of the signature
     var raised = False
@@ -127,11 +127,11 @@ fn test_pkcs1_reject_tampered_sig() raises:
 # RSA-PSS tests
 # ============================================================================
 
-fn test_pss_valid() raises:
+def test_pss_valid() raises:
     rsa_pss_verify(_rsa_n(), _rsa_e(), _msg_hash(), _pss_sig(), 32)
 
 
-fn test_pss_reject_wrong_hash() raises:
+def test_pss_reject_wrong_hash() raises:
     var h = _msg_hash()
     h[15] ^= 0x01
     var raised = False
@@ -143,7 +143,7 @@ fn test_pss_reject_wrong_hash() raises:
         raise Error("pss_reject_wrong_hash: bad hash not rejected")
 
 
-fn test_pss_reject_tampered_sig() raises:
+def test_pss_reject_tampered_sig() raises:
     var sig = _pss_sig()
     sig[0] ^= 0x01
     var raised = False
@@ -155,7 +155,7 @@ fn test_pss_reject_tampered_sig() raises:
         raise Error("pss_reject_tampered_sig: tampered sig not rejected")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
     print("=== RSA Verification Tests ===")

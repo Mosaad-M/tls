@@ -29,11 +29,11 @@ from tls.message import (
 )
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -44,7 +44,7 @@ fn run_test(
         failed += 1
 
 
-fn hex_to_bytes(h: String) -> List[UInt8]:
+def hex_to_bytes(h: String) -> List[UInt8]:
     var raw = h.as_bytes()
     var n = len(raw) // 2
     var out = List[UInt8](capacity=n)
@@ -57,7 +57,7 @@ fn hex_to_bytes(h: String) -> List[UInt8]:
     return out^
 
 
-fn bytes_eq(a: List[UInt8], b: List[UInt8]) -> Bool:
+def bytes_eq(a: List[UInt8], b: List[UInt8]) -> Bool:
     if len(a) != len(b):
         return False
     for i in range(len(a)):
@@ -66,7 +66,7 @@ fn bytes_eq(a: List[UInt8], b: List[UInt8]) -> Bool:
     return True
 
 
-fn contains_u16(data: List[UInt8], val: UInt16) -> Bool:
+def contains_u16(data: List[UInt8], val: UInt16) -> Bool:
     var hi = UInt8(val >> 8)
     var lo = UInt8(val & 0xFF)
     var i = 0
@@ -77,14 +77,14 @@ fn contains_u16(data: List[UInt8], val: UInt16) -> Bool:
     return False
 
 
-fn make_random() -> List[UInt8]:
+def make_random() -> List[UInt8]:
     var r = List[UInt8](capacity=32)
     for i in range(32):
         r.append(UInt8(i))
     return r^
 
 
-fn make_key_share() -> List[UInt8]:
+def make_key_share() -> List[UInt8]:
     var k = List[UInt8](capacity=32)
     for i in range(32):
         k.append(UInt8(32 + i))
@@ -93,20 +93,20 @@ fn make_key_share() -> List[UInt8]:
 
 # ── ClientHello tests ─────────────────────────────────────────────────────────
 
-fn test_ch_type_byte() raises:
+def test_ch_type_byte() raises:
     var ch = build_client_hello(make_random(), List[UInt8](), make_key_share(), "example.com")
     if ch[0] != 0x01:
         raise Error("expected type 0x01, got " + String(Int(ch[0])))
 
 
-fn test_ch_legacy_version() raises:
+def test_ch_legacy_version() raises:
     var ch = build_client_hello(make_random(), List[UInt8](), make_key_share(), "example.com")
     # legacy_version is at offset 4..5 (after 4-byte header)
     if ch[4] != 0x03 or ch[5] != 0x03:
         raise Error("expected 0x0303 at [4:6], got " + String(Int(ch[4])) + " " + String(Int(ch[5])))
 
 
-fn test_ch_random() raises:
+def test_ch_random() raises:
     var rand = make_random()
     var ch = build_client_hello(rand, List[UInt8](), make_key_share(), "example.com")
     # random is at offset 6..37
@@ -115,7 +115,7 @@ fn test_ch_random() raises:
             raise Error("random mismatch at byte " + String(i))
 
 
-fn test_ch_cipher_suites() raises:
+def test_ch_cipher_suites() raises:
     var ch = build_client_hello(make_random(), List[UInt8](), make_key_share(), "example.com")
     # Body starts at offset 4: legacy_version(2) + random(32) + sid_len(1) + sid(0) + cs_len(2) + cs
     # cipher suites start at offset 4+2+32+1+0+2=41
@@ -128,7 +128,7 @@ fn test_ch_cipher_suites() raises:
         raise Error("cipher suite 0x1302 not found")
 
 
-fn test_ch_sni() raises:
+def test_ch_sni() raises:
     var ch = build_client_hello(make_random(), List[UInt8](), make_key_share(), "example.com")
     # SNI extension type = 0x0000; check the hostname bytes are present
     var sni_bytes = "example.com".as_bytes()
@@ -148,7 +148,7 @@ fn test_ch_sni() raises:
         raise Error("SNI hostname bytes not found in ClientHello")
 
 
-fn test_ch_key_share() raises:
+def test_ch_key_share() raises:
     var ks = make_key_share()
     var ch = build_client_hello(make_random(), List[UInt8](), ks, "example.com")
     var found = False
@@ -169,7 +169,7 @@ fn test_ch_key_share() raises:
 
 # ── parse_handshake_msg ────────────────────────────────────────────────────────
 
-fn test_parse_handshake_msg() raises:
+def test_parse_handshake_msg() raises:
     var ch = build_client_hello(make_random(), List[UInt8](), make_key_share(), "test.com")
     var result = parse_handshake_msg(ch, 0)
     var msg = result[0].copy()
@@ -182,7 +182,7 @@ fn test_parse_handshake_msg() raises:
 
 # ── parse_server_hello ────────────────────────────────────────────────────────
 
-fn test_parse_server_hello() raises:
+def test_parse_server_hello() raises:
     # ServerHello hex from Python: server_random=bytes(32..63), session_id=32xaa, cipher=0x1301, pub=bytes(64..95)
     var sh_bytes = hex_to_bytes("020000760303202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f20aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa130100002e00330024001d0020404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f002b00020304")
     var result = parse_handshake_msg(sh_bytes, 0)
@@ -200,7 +200,7 @@ fn test_parse_server_hello() raises:
 
 # ── parse_certificate_chain ───────────────────────────────────────────────────
 
-fn test_parse_certificate_chain() raises:
+def test_parse_certificate_chain() raises:
     # Certificate message from Python: 2 certs of 20 bytes each
     var cert_msg = hex_to_bytes("0b00003600000032000014000102030405060708090a0b0c0d0e0f1011121300000000141415161718191a1b1c1d1e1f20212223242526270000")
     var result = parse_handshake_msg(cert_msg, 0)
@@ -222,7 +222,7 @@ fn test_parse_certificate_chain() raises:
 
 # ── parse_cert_verify ─────────────────────────────────────────────────────────
 
-fn test_parse_cert_verify() raises:
+def test_parse_cert_verify() raises:
     # CertVerify from Python: scheme=0x0403, sig=bytes(0..63)
     var cv_bytes = hex_to_bytes("0f00004404030040000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f")
     var result = parse_handshake_msg(cv_bytes, 0)
@@ -243,7 +243,7 @@ fn test_parse_cert_verify() raises:
 
 # ── parse_finished + build_finished ──────────────────────────────────────────
 
-fn test_parse_finished() raises:
+def test_parse_finished() raises:
     # Finished from Python: verify_data=bytes(0..31)
     var fin_bytes = hex_to_bytes("14000020000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
     var result = parse_handshake_msg(fin_bytes, 0)
@@ -258,7 +258,7 @@ fn test_parse_finished() raises:
             raise Error("verify_data[" + String(i) + "] mismatch")
 
 
-fn test_build_finished() raises:
+def test_build_finished() raises:
     var vd = List[UInt8](capacity=32)
     for i in range(32):
         vd.append(UInt8(i))
@@ -275,7 +275,7 @@ fn test_build_finished() raises:
             raise Error("verify_data[" + String(i) + "] mismatch in built Finished")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

@@ -36,7 +36,7 @@ comptime TLS12_ECDHE_ECDSA_AES256_GCM_SHA384 : UInt16 = 0xC02C
 # parse_server_hello_version
 # ============================================================================
 
-fn parse_server_hello_version(body: List[UInt8]) raises -> Tuple[UInt16, List[UInt8], List[UInt8], Bool]:
+def parse_server_hello_version(body: List[UInt8]) raises -> Tuple[UInt16, List[UInt8], List[UInt8], Bool]:
     """Parse ServerHello body, determine TLS version.
 
     Returns (cipher, server_random[32], session_id, use_tls13).
@@ -73,7 +73,7 @@ fn parse_server_hello_version(body: List[UInt8]) raises -> Tuple[UInt16, List[UI
 # parse_server_key_exchange
 # ============================================================================
 
-fn parse_server_key_exchange(body: List[UInt8]) raises -> Tuple[UInt16, List[UInt8], UInt8, UInt8, List[UInt8]]:
+def parse_server_key_exchange(body: List[UInt8]) raises -> Tuple[UInt16, List[UInt8], UInt8, UInt8, List[UInt8]]:
     """Parse ServerKeyExchange for ECDHE named curve.
 
     Returns (named_curve, ecdhe_pubkey, sig_hash_alg, sig_sig_alg, sig_bytes).
@@ -129,7 +129,7 @@ fn parse_server_key_exchange(body: List[UInt8]) raises -> Tuple[UInt16, List[UIn
 # parse_server_hello_done
 # ============================================================================
 
-fn parse_server_hello_done(body: List[UInt8]) raises:
+def parse_server_hello_done(body: List[UInt8]) raises:
     """Validate ServerHelloDone body. Raises if not empty."""
     if len(body) != 0:
         raise Error("parse_server_hello_done: expected empty body, got " + String(len(body)))
@@ -139,7 +139,7 @@ fn parse_server_hello_done(body: List[UInt8]) raises:
 # build_client_key_exchange
 # ============================================================================
 
-fn build_client_key_exchange(pubkey: List[UInt8]) -> List[UInt8]:
+def build_client_key_exchange(pubkey: List[UInt8]) -> List[UInt8]:
     """Build ClientKeyExchange body for ECDHE: 1-byte length + public key bytes."""
     var out = List[UInt8](capacity=1 + len(pubkey))
     _append_u8(out, UInt8(len(pubkey)))
@@ -151,7 +151,7 @@ fn build_client_key_exchange(pubkey: List[UInt8]) -> List[UInt8]:
 # build_change_cipher_spec_body
 # ============================================================================
 
-fn build_change_cipher_spec_body() -> List[UInt8]:
+def build_change_cipher_spec_body() -> List[UInt8]:
     """Build ChangeCipherSpec body: always [0x01]."""
     var out = List[UInt8](capacity=1)
     out.append(0x01)
@@ -162,7 +162,7 @@ fn build_change_cipher_spec_body() -> List[UInt8]:
 # build_finished_body
 # ============================================================================
 
-fn build_finished_body(verify_data: List[UInt8]) -> List[UInt8]:
+def build_finished_body(verify_data: List[UInt8]) -> List[UInt8]:
     """Build TLS 1.2 Finished handshake message body.
 
     Returns Handshake header (type + 3-byte length) + verify_data.
@@ -179,7 +179,7 @@ fn build_finished_body(verify_data: List[UInt8]) -> List[UInt8]:
 # parse_finished_body
 # ============================================================================
 
-fn parse_finished_body(body: List[UInt8]) raises -> List[UInt8]:
+def parse_finished_body(body: List[UInt8]) raises -> List[UInt8]:
     """Parse TLS 1.2 Finished handshake body → 12-byte verify_data.
 
     Input is the Handshake body (4-byte header + verify_data).

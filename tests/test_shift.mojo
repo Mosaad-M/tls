@@ -1,6 +1,6 @@
 """Test arithmetic vs logical right shift for Int64 in Mojo."""
 
-fn main():
+def main():
     # Test: does Int64 >> use arithmetic (sign-preserving) or logical (zero-fill) right shift?
     var neg1: Int64 = -1
     var shifted = neg1 >> 21

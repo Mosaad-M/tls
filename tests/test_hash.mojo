@@ -10,7 +10,7 @@ from crypto.hash import sha256, sha384, sha512, SHA256, SHA384, SHA512
 # ============================================================================
 
 
-fn _hex_nibble(b: UInt8) raises -> UInt8:
+def _hex_nibble(b: UInt8) raises -> UInt8:
     if b >= 48 and b <= 57:   # '0'..'9'
         return b - 48
     if b >= 97 and b <= 102:  # 'a'..'f'
@@ -18,7 +18,7 @@ fn _hex_nibble(b: UInt8) raises -> UInt8:
     raise Error("hex_to_bytes: bad char")
 
 
-fn bytes_to_hex(b: List[UInt8]) -> String:
+def bytes_to_hex(b: List[UInt8]) -> String:
     """Encode bytes to lowercase hex string."""
     var digits = "0123456789abcdef".as_bytes()
     var result = List[UInt8](capacity=len(b) * 2)
@@ -29,7 +29,7 @@ fn bytes_to_hex(b: List[UInt8]) -> String:
     return String(unsafe_from_utf8=result^)
 
 
-fn str_to_bytes(s: String) -> List[UInt8]:
+def str_to_bytes(s: String) -> List[UInt8]:
     var raw = s.as_bytes()
     var out = List[UInt8](capacity=len(raw))
     for i in range(len(raw)):
@@ -37,17 +37,17 @@ fn str_to_bytes(s: String) -> List[UInt8]:
     return out^
 
 
-fn assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
+def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
     var got_hex = bytes_to_hex(got)
     if got_hex != expected_hex:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -63,7 +63,7 @@ fn run_test(
 # ============================================================================
 
 
-fn test_sha256_empty() raises:
+def test_sha256_empty() raises:
     var result = sha256(List[UInt8]())
     assert_hex_eq(
         result,
@@ -72,7 +72,7 @@ fn test_sha256_empty() raises:
     )
 
 
-fn test_sha256_abc() raises:
+def test_sha256_abc() raises:
     var data = str_to_bytes("abc")
     var result = sha256(data)
     assert_hex_eq(
@@ -82,7 +82,7 @@ fn test_sha256_abc() raises:
     )
 
 
-fn test_sha256_448bit() raises:
+def test_sha256_448bit() raises:
     # 56-byte message — fits in one block with padding
     var data = str_to_bytes(
         "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
@@ -95,7 +95,7 @@ fn test_sha256_448bit() raises:
     )
 
 
-fn test_sha256_896bit() raises:
+def test_sha256_896bit() raises:
     # 112-byte message — requires two blocks
     var data = str_to_bytes(
         "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"
@@ -108,7 +108,7 @@ fn test_sha256_896bit() raises:
     )
 
 
-fn test_sha256_one_million_a() raises:
+def test_sha256_one_million_a() raises:
     var data = List[UInt8](capacity=1_000_000)
     for _ in range(1_000_000):
         data.append(UInt8(97))  # ord('a')
@@ -120,7 +120,7 @@ fn test_sha256_one_million_a() raises:
     )
 
 
-fn test_sha256_streaming() raises:
+def test_sha256_streaming() raises:
     # Feed 1 byte at a time — same as sha256_abc
     var h = SHA256()
     var data = str_to_bytes("abc")
@@ -136,7 +136,7 @@ fn test_sha256_streaming() raises:
     )
 
 
-fn test_sha256_two_block() raises:
+def test_sha256_two_block() raises:
     # 64 bytes = exactly one full block; padding goes into second block
     var data = List[UInt8](capacity=64)
     for i in range(64):
@@ -154,7 +154,7 @@ fn test_sha256_two_block() raises:
 # ============================================================================
 
 
-fn test_sha384_empty() raises:
+def test_sha384_empty() raises:
     var result = sha384(List[UInt8]())
     assert_hex_eq(
         result,
@@ -163,7 +163,7 @@ fn test_sha384_empty() raises:
     )
 
 
-fn test_sha384_abc() raises:
+def test_sha384_abc() raises:
     var data = str_to_bytes("abc")
     var result = sha384(data)
     assert_hex_eq(
@@ -173,7 +173,7 @@ fn test_sha384_abc() raises:
     )
 
 
-fn test_sha384_448bit() raises:
+def test_sha384_448bit() raises:
     var data = str_to_bytes(
         "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
     )
@@ -185,7 +185,7 @@ fn test_sha384_448bit() raises:
     )
 
 
-fn test_sha384_896bit() raises:
+def test_sha384_896bit() raises:
     var data = str_to_bytes(
         "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"
     )
@@ -197,7 +197,7 @@ fn test_sha384_896bit() raises:
     )
 
 
-fn test_sha384_one_million_a() raises:
+def test_sha384_one_million_a() raises:
     var data = List[UInt8](capacity=1_000_000)
     for _ in range(1_000_000):
         data.append(UInt8(97))  # ord('a')
@@ -209,7 +209,7 @@ fn test_sha384_one_million_a() raises:
     )
 
 
-fn test_sha384_streaming() raises:
+def test_sha384_streaming() raises:
     var h = SHA384()
     var data = str_to_bytes("abc")
     for i in range(len(data)):
@@ -229,7 +229,7 @@ fn test_sha384_streaming() raises:
 # ============================================================================
 
 
-fn test_sha512_empty() raises:
+def test_sha512_empty() raises:
     var result = sha512(List[UInt8]())
     assert_hex_eq(
         result,
@@ -238,7 +238,7 @@ fn test_sha512_empty() raises:
     )
 
 
-fn test_sha512_abc() raises:
+def test_sha512_abc() raises:
     var data = str_to_bytes("abc")
     var result = sha512(data)
     assert_hex_eq(
@@ -248,7 +248,7 @@ fn test_sha512_abc() raises:
     )
 
 
-fn test_sha512_448bit() raises:
+def test_sha512_448bit() raises:
     var data = str_to_bytes(
         "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
     )
@@ -260,7 +260,7 @@ fn test_sha512_448bit() raises:
     )
 
 
-fn test_sha512_896bit() raises:
+def test_sha512_896bit() raises:
     var data = str_to_bytes(
         "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"
     )
@@ -272,7 +272,7 @@ fn test_sha512_896bit() raises:
     )
 
 
-fn test_sha512_streaming() raises:
+def test_sha512_streaming() raises:
     var h = SHA512()
     var data = str_to_bytes("abc")
     for i in range(len(data)):
@@ -292,7 +292,7 @@ fn test_sha512_streaming() raises:
 # ============================================================================
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

@@ -2,17 +2,17 @@
 # tls/socket.mojo — TlsSocket: TCP fd wrapper with TLS 1.3 + TLS 1.2 support
 # ============================================================================
 # API:
-#   fn load_system_ca_bundle() raises -> List[X509Cert]
+#   def load_system_ca_bundle() raises -> List[X509Cert]
 #       Reads /etc/ssl/certs/ca-certificates.crt, parses all CERTIFICATE blocks.
 #
 #   struct TlsSocket(Movable):
-#       fn __init__(out self, tcp_fd: Int32 = 0)
-#       fn connect(mut self, hostname: String, trust_anchors: List[X509Cert]) raises
+#       def __init__(out self, tcp_fd: Int32 = 0)
+#       def connect(mut self, hostname: String, trust_anchors: List[X509Cert]) raises
 #           Auto-negotiates TLS 1.3 or TLS 1.2 based on server's ServerHello.
-#       fn send(mut self, data: List[UInt8]) raises -> Int
-#       fn recv(mut self, max_bytes: Int) raises -> List[UInt8]
-#       fn recv_all(mut self, max_size: Int = 16*1024*1024) raises -> List[UInt8]
-#       fn close(mut self) raises
+#       def send(mut self, data: List[UInt8]) raises -> Int
+#       def recv(mut self, max_bytes: Int) raises -> List[UInt8]
+#       def recv_all(mut self, max_size: Int = 16*1024*1024) raises -> List[UInt8]
+#       def close(mut self) raises
 # ============================================================================
 
 from ffi import external_call
@@ -46,13 +46,13 @@ from tls.message12 import parse_server_hello_version
 
 # ── Internal helpers ────────────────────────────────────────────────────────────
 
-fn _sock_append_bytes(mut out: List[UInt8], src: List[UInt8]):
+def _sock_append_bytes(mut out: List[UInt8], src: List[UInt8]):
     out.reserve(len(out) + len(src))
     for i in range(len(src)):
         out.append(src[i])
 
 
-fn _sock_contains(haystack: String, needle: String) -> Bool:
+def _sock_contains(haystack: String, needle: String) -> Bool:
     """Check if haystack contains needle (simple byte search)."""
     var h = haystack.as_bytes()
     var n = needle.as_bytes()
@@ -71,7 +71,7 @@ fn _sock_contains(haystack: String, needle: String) -> Bool:
     return False
 
 
-fn _sock_wrap_hs_msg(msg_type: UInt8, body: List[UInt8]) -> List[UInt8]:
+def _sock_wrap_hs_msg(msg_type: UInt8, body: List[UInt8]) -> List[UInt8]:
     """Wrap handshake body in type+length header for transcript."""
     var out = List[UInt8](capacity=4 + len(body))
     out.append(msg_type)
@@ -88,7 +88,7 @@ fn _sock_wrap_hs_msg(msg_type: UInt8, body: List[UInt8]) -> List[UInt8]:
 # load_system_ca_bundle
 # ============================================================================
 
-fn load_system_ca_bundle() raises -> List[X509Cert]:
+def load_system_ca_bundle() raises -> List[X509Cert]:
     """Load trusted CA certificates from the system CA bundle.
 
     Reads /etc/ssl/certs/ca-certificates.crt (Debian/Ubuntu/WSL),
@@ -149,21 +149,21 @@ struct TlsSocket(Movable):
     var _buf:    List[UInt8] # buffered decrypted application bytes
     var _is12:   Bool        # True if TLS 1.2 was negotiated
 
-    fn __init__(out self, tcp_fd: Int32 = 0):
+    def __init__(out self, tcp_fd: Int32 = 0):
         self._fd     = tcp_fd
         self._keys   = TlsKeys()
         self._keys12 = TlsKeys12()
         self._buf    = List[UInt8]()
         self._is12   = False
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self._fd     = take._fd
         self._keys   = take._keys^
         self._keys12 = take._keys12^
         self._buf    = take._buf^
         self._is12   = take._is12
 
-    fn connect(mut self, hostname: String, trust_anchors: List[X509Cert]) raises:
+    def connect(mut self, hostname: String, trust_anchors: List[X509Cert]) raises:
         """Perform TLS handshake, auto-negotiating TLS 1.3 or TLS 1.2."""
 
         # ── Generate ECDHE key pair + client_random ───────────────────────────
@@ -256,7 +256,7 @@ struct TlsSocket(Movable):
                 self._is12 = False  # reset to safe state on handshake failure
                 raise Error(String(e))
 
-    fn send(mut self, data: List[UInt8]) raises -> Int:
+    def send(mut self, data: List[UInt8]) raises -> Int:
         """Encrypt data as a TLS ApplicationData record and write to socket."""
         if len(data) > 16384:
             raise Error("tls: send: plaintext exceeds TLS record limit (16384 bytes)")
@@ -296,7 +296,7 @@ struct TlsSocket(Movable):
             self._keys.client_seqno += 1
         return len(data)
 
-    fn _fill_buf_12(mut self) raises:
+    def _fill_buf_12(mut self) raises:
         """Read and decrypt one TLS 1.2 record, appending plaintext to _buf."""
         while True:
             var header = tls_tcp_read(self._fd, 5)
@@ -352,7 +352,7 @@ struct TlsSocket(Movable):
             _sock_append_bytes(self._buf, plain)
             return  # one record successfully decrypted
 
-    fn _fill_buf(mut self) raises:
+    def _fill_buf(mut self) raises:
         """Read and decrypt one TLS ApplicationData record, appending plaintext to _buf.
 
         Raises "tls: close_notify" on clean shutdown.
@@ -414,7 +414,7 @@ struct TlsSocket(Movable):
             _sock_append_bytes(self._buf, plaintext)
             return  # one record successfully read
 
-    fn recv(mut self, max_bytes: Int) raises -> List[UInt8]:
+    def recv(mut self, max_bytes: Int) raises -> List[UInt8]:
         """Read up to max_bytes of decrypted application data.
 
         Buffers data across TLS records so multiple small reads work correctly.
@@ -439,7 +439,7 @@ struct TlsSocket(Movable):
             self._buf = new_buf^
         return out^
 
-    fn recv_exact(mut self, n: Int) raises -> List[UInt8]:
+    def recv_exact(mut self, n: Int) raises -> List[UInt8]:
         """Read exactly n decrypted bytes, looping recv() until done.
 
         Raises:
@@ -460,7 +460,7 @@ struct TlsSocket(Movable):
                 result.append(chunk[i])
         return result^
 
-    fn recv_all(mut self, max_size: Int = 16777216) raises -> List[UInt8]:
+    def recv_all(mut self, max_size: Int = 16777216) raises -> List[UInt8]:
         """Read all ApplicationData until server closes connection (close_notify or TCP close).
 
         Loops recv(), accumulates bytes. Stops when:
@@ -491,7 +491,7 @@ struct TlsSocket(Movable):
                 raise Error(err_str)
         return result^
 
-    fn close(mut self) raises:
+    def close(mut self) raises:
         """Send close_notify alert and close the TCP socket."""
         if self._is12:
             if len(self._keys12.client_write_key) > 0:

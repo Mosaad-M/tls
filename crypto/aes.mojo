@@ -19,7 +19,7 @@ from collections import InlineArray
 # S-box and inverse S-box (FIPS 197 Figure 7)
 # ============================================================================
 
-fn _sbox() -> InlineArray[UInt8, 256]:
+def _sbox() -> InlineArray[UInt8, 256]:
     var s = InlineArray[UInt8, 256](fill=UInt8(0))
     s[0]=0x63;s[1]=0x7c;s[2]=0x77;s[3]=0x7b;s[4]=0xf2;s[5]=0x6b;s[6]=0x6f;s[7]=0xc5
     s[8]=0x30;s[9]=0x01;s[10]=0x67;s[11]=0x2b;s[12]=0xfe;s[13]=0xd7;s[14]=0xab;s[15]=0x76
@@ -60,12 +60,12 @@ fn _sbox() -> InlineArray[UInt8, 256]:
 # GF(2^8) multiplication helpers (for MixColumns and key schedule)
 # ============================================================================
 
-fn _xtime(a: UInt8) -> UInt8:
+def _xtime(a: UInt8) -> UInt8:
     """Multiply by x (i.e., 2) in GF(2^8) with reduction poly x^8+x^4+x^3+x+1."""
     return ((a << 1) ^ (UInt8(0x1B) & (a >> 7) * UInt8(0xFF)))
 
 
-fn _gmul(a: UInt8, b: UInt8) -> UInt8:
+def _gmul(a: UInt8, b: UInt8) -> UInt8:
     """Multiply two elements of GF(2^8) using Russian peasant algorithm."""
     var p: UInt8 = 0
     var aa = a
@@ -85,7 +85,7 @@ fn _gmul(a: UInt8, b: UInt8) -> UInt8:
 # AES key schedule round constants
 # ============================================================================
 
-fn _rcon(i: Int) -> UInt8:
+def _rcon(i: Int) -> UInt8:
     """Return Rcon[i] — power of x in GF(2^8), i starting at 1."""
     var rc: UInt8 = 1
     for _ in range(i - 1):
@@ -108,7 +108,7 @@ struct AES(Copyable, Movable):
     var _rk: List[UInt32]              # expanded round key words
     var _sb: InlineArray[UInt8, 256]   # S-box cached at init (avoids rebuilding per block)
 
-    fn __init__(out self, key: List[UInt8]) raises:
+    def __init__(out self, key: List[UInt8]) raises:
         var nk = len(key) // 4  # words in key (4 or 8)
         if len(key) != 16 and len(key) != 32:
             raise Error("AES key must be 16 or 32 bytes")
@@ -149,17 +149,17 @@ struct AES(Copyable, Movable):
             self._rk.append(self._rk[i - nk] ^ temp)
         self._sb = sbox^
 
-    fn __copyinit__(out self, copy: Self):
+    def __copyinit__(out self, copy: Self):
         self._nr = copy._nr
         self._rk = copy._rk.copy()
         self._sb = copy._sb.copy()
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self._nr = take._nr
         self._rk = take._rk^
         self._sb = take._sb^
 
-    fn encrypt_block(self, block: List[UInt8]) raises -> List[UInt8]:
+    def encrypt_block(self, block: List[UInt8]) raises -> List[UInt8]:
         """Encrypt a single 16-byte block (AES-ECB)."""
         if len(block) != 16:
             raise Error("AES block must be 16 bytes")
@@ -198,7 +198,7 @@ struct AES(Copyable, Movable):
 # i.e. state[4*col + row]
 # ============================================================================
 
-fn _add_round_key(mut s: InlineArray[UInt8, 16], rk: List[UInt32], rnd: Int):
+def _add_round_key(mut s: InlineArray[UInt8, 16], rk: List[UInt32], rnd: Int):
     """XOR state with round key words."""
     for col in range(4):
         var w = rk[rnd * 4 + col]
@@ -208,13 +208,13 @@ fn _add_round_key(mut s: InlineArray[UInt8, 16], rk: List[UInt32], rnd: Int):
         s[col * 4 + 3] ^= UInt8(w & 0xFF)
 
 
-fn _sub_bytes(mut s: InlineArray[UInt8, 16], sbox: InlineArray[UInt8, 256]):
+def _sub_bytes(mut s: InlineArray[UInt8, 16], sbox: InlineArray[UInt8, 256]):
     """Apply S-box substitution to each byte."""
     for i in range(16):
         s[i] = sbox[Int(s[i])]
 
 
-fn _shift_rows(mut s: InlineArray[UInt8, 16]):
+def _shift_rows(mut s: InlineArray[UInt8, 16]):
     """Cyclically shift rows left: row 0 by 0, row 1 by 1, row 2 by 2, row 3 by 3.
 
     State is column-major: s[4*col + row].
@@ -243,7 +243,7 @@ fn _shift_rows(mut s: InlineArray[UInt8, 16]):
     s[0 * 4 + 3] = t2
 
 
-fn _mix_columns(mut s: InlineArray[UInt8, 16]):
+def _mix_columns(mut s: InlineArray[UInt8, 16]):
     """Mix each column using GF(2^8) arithmetic (FIPS 197 §5.1.3).
 
     Uses _xtime (single shift+XOR) instead of _gmul for speed:

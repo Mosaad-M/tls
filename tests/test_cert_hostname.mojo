@@ -12,11 +12,11 @@
 from crypto.cert import cert_parse, cert_san_names, cert_hostname_match
 
 
-fn run_test(
+def run_test(
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: fn () raises -> None,
+    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -27,7 +27,7 @@ fn run_test(
         failed += 1
 
 
-fn hex_to_bytes(h: String) -> List[UInt8]:
+def hex_to_bytes(h: String) -> List[UInt8]:
     var raw = h.as_bytes()
     var n = len(raw) // 2
     var out = List[UInt8](capacity=n)
@@ -49,7 +49,7 @@ comptime CN_ONLY_CERT_HEX = "308201283081cfa003020102020102300a06082a8648ce3d040
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-fn test_san_names() raises:
+def test_san_names() raises:
     var der = hex_to_bytes(SAN_CERT_HEX)
     var cert = cert_parse(der)
     var names = cert_san_names(cert)
@@ -63,25 +63,25 @@ fn test_san_names() raises:
         raise Error("SAN[2] wrong: " + names[2])
 
 
-fn test_match_exact() raises:
+def test_match_exact() raises:
     var der = hex_to_bytes(SAN_CERT_HEX)
     var cert = cert_parse(der)
     cert_hostname_match(cert, "example.com")  # should not raise
 
 
-fn test_match_wildcard() raises:
+def test_match_wildcard() raises:
     var der = hex_to_bytes(SAN_CERT_HEX)
     var cert = cert_parse(der)
     cert_hostname_match(cert, "foo.example.com")  # should not raise
 
 
-fn test_match_other() raises:
+def test_match_other() raises:
     var der = hex_to_bytes(SAN_CERT_HEX)
     var cert = cert_parse(der)
     cert_hostname_match(cert, "other.net")  # should not raise
 
 
-fn test_no_match_two_subdomains() raises:
+def test_no_match_two_subdomains() raises:
     var der = hex_to_bytes(SAN_CERT_HEX)
     var cert = cert_parse(der)
     var raised = False
@@ -93,7 +93,7 @@ fn test_no_match_two_subdomains() raises:
         raise Error("expected raise for bar.foo.example.com (two subdomains)")
 
 
-fn test_no_match_evil() raises:
+def test_no_match_evil() raises:
     var der = hex_to_bytes(SAN_CERT_HEX)
     var cert = cert_parse(der)
     var raised = False
@@ -105,7 +105,7 @@ fn test_no_match_evil() raises:
         raise Error("expected raise for evil.com")
 
 
-fn test_cn_only_fallback() raises:
+def test_cn_only_fallback() raises:
     var der = hex_to_bytes(CN_ONLY_CERT_HEX)
     var cert = cert_parse(der)
     # No SAN → should fall back to CN = "cn-only.example.com"
@@ -117,7 +117,7 @@ fn test_cn_only_fallback() raises:
     cert_hostname_match(cert, "cn-only.example.com")  # should not raise
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 

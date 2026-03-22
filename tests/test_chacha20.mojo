@@ -5,13 +5,13 @@
 from crypto.chacha20 import chacha20_block, chacha20_encrypt
 
 
-fn _hex_nibble(b: UInt8) raises -> UInt8:
+def _hex_nibble(b: UInt8) raises -> UInt8:
     if b >= 48 and b <= 57: return b - 48
     if b >= 97 and b <= 102: return b - 87
     raise Error("bad hex char")
 
 
-fn hex_to_bytes(hex: String) raises -> List[UInt8]:
+def hex_to_bytes(hex: String) raises -> List[UInt8]:
     var raw = hex.as_bytes()
     var n = len(raw)
     if n % 2 != 0: raise Error("odd hex length")
@@ -21,7 +21,7 @@ fn hex_to_bytes(hex: String) raises -> List[UInt8]:
     return out^
 
 
-fn bytes_to_hex(b: List[UInt8]) -> String:
+def bytes_to_hex(b: List[UInt8]) -> String:
     var digits = "0123456789abcdef".as_bytes()
     var result = List[UInt8](capacity=len(b) * 2)
     for i in range(len(b)):
@@ -31,13 +31,13 @@ fn bytes_to_hex(b: List[UInt8]) -> String:
     return String(unsafe_from_utf8=result^)
 
 
-fn assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
+def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
     var got_hex = bytes_to_hex(got)
     if got_hex != expected_hex:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raises -> None):
+def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
     try:
         test_fn()
         print("  PASS:", name)
@@ -52,7 +52,7 @@ fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raise
 # Key: 00..1f (32 bytes), Nonce: 000000090000004a00000000, Counter: 1
 # ============================================================================
 
-fn test_chacha20_block() raises:
+def test_chacha20_block() raises:
     var key = List[UInt8](capacity=32)
     for i in range(32): key.append(UInt8(i))
     var nonce = hex_to_bytes("000000090000004a00000000")
@@ -73,7 +73,7 @@ fn test_chacha20_block() raises:
 # Plaintext: "Ladies and Gentlemen of the class of '99: ..."
 # ============================================================================
 
-fn test_chacha20_encrypt() raises:
+def test_chacha20_encrypt() raises:
     var key = List[UInt8](capacity=32)
     for i in range(32): key.append(UInt8(i))
     var nonce = hex_to_bytes("000000000000004a00000000")
@@ -103,7 +103,7 @@ fn test_chacha20_encrypt() raises:
 # Decrypt is the same operation (XOR is its own inverse)
 # ============================================================================
 
-fn test_chacha20_decrypt_roundtrip() raises:
+def test_chacha20_decrypt_roundtrip() raises:
     var key = List[UInt8](capacity=32)
     for i in range(32): key.append(UInt8(i))
     var nonce = List[UInt8](capacity=12)
@@ -118,7 +118,7 @@ fn test_chacha20_decrypt_roundtrip() raises:
         raise Error("decrypt roundtrip failed")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
     print("=== ChaCha20 Tests ===")

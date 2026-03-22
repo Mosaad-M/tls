@@ -22,7 +22,7 @@ from crypto.hmac import hmac_equal
 # 26-bit limb helpers
 # ============================================================================
 
-fn _load_le32_p(data: List[UInt8], off: Int) -> UInt32:
+def _load_le32_p(data: List[UInt8], off: Int) -> UInt32:
     return (
         UInt32(data[off]) |
         (UInt32(data[off + 1]) << 8) |
@@ -35,7 +35,7 @@ fn _load_le32_p(data: List[UInt8], off: Int) -> UInt32:
 # Poly1305 MAC
 # ============================================================================
 
-fn poly1305_mac(key: List[UInt8], msg: List[UInt8]) raises -> List[UInt8]:
+def poly1305_mac(key: List[UInt8], msg: List[UInt8]) raises -> List[UInt8]:
     """Compute Poly1305 MAC.
 
     Args:
@@ -215,7 +215,7 @@ fn poly1305_mac(key: List[UInt8], msg: List[UInt8]) raises -> List[UInt8]:
 # ChaCha20-Poly1305 AEAD helpers
 # ============================================================================
 
-fn _pad16_poly(data: List[UInt8]) -> List[UInt8]:
+def _pad16_poly(data: List[UInt8]) -> List[UInt8]:
     """Zero-pad data to 16-byte boundary."""
     var n = len(data)
     var padded = ((n + 15) // 16) * 16
@@ -227,7 +227,7 @@ fn _pad16_poly(data: List[UInt8]) -> List[UInt8]:
     return out^
 
 
-fn _le64(n: Int) -> List[UInt8]:
+def _le64(n: Int) -> List[UInt8]:
     """Encode n as 8-byte little-endian."""
     var out = List[UInt8](capacity=8)
     var v = UInt64(n)
@@ -237,7 +237,7 @@ fn _le64(n: Int) -> List[UInt8]:
     return out^
 
 
-fn _build_poly1305_input(aad: List[UInt8], ct: List[UInt8]) -> List[UInt8]:
+def _build_poly1305_input(aad: List[UInt8], ct: List[UInt8]) -> List[UInt8]:
     """Build the Poly1305 MAC input for ChaCha20-Poly1305:
        pad(AAD) || pad(CT) || len(AAD) LE64 || len(CT) LE64
     """
@@ -261,7 +261,7 @@ fn _build_poly1305_input(aad: List[UInt8], ct: List[UInt8]) -> List[UInt8]:
 # Public AEAD API
 # ============================================================================
 
-fn chacha20_poly1305_encrypt(
+def chacha20_poly1305_encrypt(
     key: List[UInt8],
     nonce: List[UInt8],
     aad: List[UInt8],
@@ -298,7 +298,7 @@ fn chacha20_poly1305_encrypt(
     return ciphertext^, tag^
 
 
-fn chacha20_poly1305_decrypt(
+def chacha20_poly1305_decrypt(
     key: List[UInt8],
     nonce: List[UInt8],
     aad: List[UInt8],

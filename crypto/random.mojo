@@ -10,7 +10,7 @@ from ffi import external_call
 from memory.unsafe_pointer import alloc
 
 
-fn csprng_bytes(n: Int) raises -> List[UInt8]:
+def csprng_bytes(n: Int) raises -> List[UInt8]:
     """Read n bytes from the OS CSPRNG via getrandom() syscall."""
     if n == 0:
         return List[UInt8]()

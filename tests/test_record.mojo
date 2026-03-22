@@ -11,13 +11,13 @@ from crypto.record import (
 )
 
 
-fn _hex_nibble(b: UInt8) raises -> UInt8:
+def _hex_nibble(b: UInt8) raises -> UInt8:
     if b >= 48 and b <= 57: return b - 48
     if b >= 97 and b <= 102: return b - 87
     raise Error("bad hex char")
 
 
-fn hex_to_bytes(hex: String) raises -> List[UInt8]:
+def hex_to_bytes(hex: String) raises -> List[UInt8]:
     var raw = hex.as_bytes()
     var n = len(raw)
     if n % 2 != 0: raise Error("odd hex length")
@@ -27,7 +27,7 @@ fn hex_to_bytes(hex: String) raises -> List[UInt8]:
     return out^
 
 
-fn bytes_to_hex(b: List[UInt8]) -> String:
+def bytes_to_hex(b: List[UInt8]) -> String:
     var digits = "0123456789abcdef".as_bytes()
     var result = List[UInt8](capacity=len(b) * 2)
     for i in range(len(b)):
@@ -37,13 +37,13 @@ fn bytes_to_hex(b: List[UInt8]) -> String:
     return String(unsafe_from_utf8=result^)
 
 
-fn assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
+def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
     var got_hex = bytes_to_hex(got)
     if got_hex != expected_hex:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raises -> None):
+def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
     try:
         test_fn()
         print("  PASS:", name)
@@ -61,7 +61,7 @@ fn run_test(name: String, mut passed: Int, mut failed: Int, test_fn: fn () raise
 # seq = 0 → record = 1703030020b25b...
 # ============================================================================
 
-fn test_aes128_known_vector() raises:
+def test_aes128_known_vector() raises:
     var key = hex_to_bytes("00112233445566778899aabbccddeeff")
     var iv  = hex_to_bytes("aabbccddeeff001122334455")
     var pt  = hex_to_bytes("48656c6c6f2c20544c5320312e3321")  # "Hello, TLS 1.3!"
@@ -78,7 +78,7 @@ fn test_aes128_known_vector() raises:
 # Test: AES-128-GCM round-trip (seal then open)
 # ============================================================================
 
-fn test_aes128_round_trip() raises:
+def test_aes128_round_trip() raises:
     var key = hex_to_bytes("00112233445566778899aabbccddeeff")
     var iv  = hex_to_bytes("aabbccddeeff001122334455")
     var pt  = hex_to_bytes("48656c6c6f2c20544c5320312e3321")
@@ -98,7 +98,7 @@ fn test_aes128_round_trip() raises:
 # Verify using the known vectors for seq=0 and seq=1.
 # ============================================================================
 
-fn test_aes128_seqno() raises:
+def test_aes128_seqno() raises:
     var key = hex_to_bytes("00112233445566778899aabbccddeeff")
     var iv  = hex_to_bytes("aabbccddeeff001122334455")
     var pt  = hex_to_bytes("48656c6c6f2c20544c5320312e3321")
@@ -123,7 +123,7 @@ fn test_aes128_seqno() raises:
 # pt  = "AES-256-GCM test"  content_type = 0x17
 # ============================================================================
 
-fn test_aes256_round_trip() raises:
+def test_aes256_round_trip() raises:
     var key = hex_to_bytes("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
     var iv  = hex_to_bytes("a0a1a2a3a4a5a6a7a8a9aaab")
     var pt  = hex_to_bytes("4145532d3235362d47434d2074657374")  # "AES-256-GCM test"
@@ -146,7 +146,7 @@ fn test_aes256_round_trip() raises:
 # Test: ChaCha20-Poly1305 round-trip
 # ============================================================================
 
-fn test_chacha20_round_trip() raises:
+def test_chacha20_round_trip() raises:
     var key = hex_to_bytes("404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f")
     var iv  = hex_to_bytes("b0b1b2b3b4b5b6b7b8b9babb")
     var pt  = hex_to_bytes("43686143686132302d506f6c793133303521")  # "ChaCha20-Poly1305!"
@@ -169,7 +169,7 @@ fn test_chacha20_round_trip() raises:
 # Test: tampered record fails authentication
 # ============================================================================
 
-fn test_reject_tampered() raises:
+def test_reject_tampered() raises:
     var key = hex_to_bytes("00112233445566778899aabbccddeeff")
     var iv  = hex_to_bytes("aabbccddeeff001122334455")
     var pt  = hex_to_bytes("48656c6c6f2c20544c5320312e3321")
@@ -190,7 +190,7 @@ fn test_reject_tampered() raises:
 # Test: wrong seqno fails authentication (different nonce → bad tag)
 # ============================================================================
 
-fn test_reject_wrong_seqno() raises:
+def test_reject_wrong_seqno() raises:
     var key = hex_to_bytes("00112233445566778899aabbccddeeff")
     var iv  = hex_to_bytes("aabbccddeeff001122334455")
     var pt  = hex_to_bytes("48656c6c6f2c20544c5320312e3321")
@@ -206,7 +206,7 @@ fn test_reject_wrong_seqno() raises:
         raise Error("reject_wrong_seqno: wrong seqno should fail")
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
     print("=== TLS 1.3 Record Layer Tests ===")

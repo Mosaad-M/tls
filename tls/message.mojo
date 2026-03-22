@@ -47,15 +47,15 @@ struct HandshakeMsg(Copyable, Movable):
     var msg_type: UInt8
     var body:     List[UInt8]
 
-    fn __init__(out self):
+    def __init__(out self):
         self.msg_type = 0
         self.body = List[UInt8]()
 
-    fn __copyinit__(out self, copy: Self):
+    def __copyinit__(out self, copy: Self):
         self.msg_type = copy.msg_type
         self.body     = copy.body.copy()
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self.msg_type = take.msg_type
         self.body     = take.body^
 
@@ -66,19 +66,19 @@ struct ServerHello(Copyable, Movable):
     var cipher_suite: UInt16
     var extensions:   List[UInt8]   # raw extension bytes (after 2-byte length)
 
-    fn __init__(out self):
+    def __init__(out self):
         self.random       = List[UInt8]()
         self.session_id   = List[UInt8]()
         self.cipher_suite = 0
         self.extensions   = List[UInt8]()
 
-    fn __copyinit__(out self, copy: Self):
+    def __copyinit__(out self, copy: Self):
         self.random       = copy.random.copy()
         self.session_id   = copy.session_id.copy()
         self.cipher_suite = copy.cipher_suite
         self.extensions   = copy.extensions.copy()
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self.random       = take.random^
         self.session_id   = take.session_id^
         self.cipher_suite = take.cipher_suite
@@ -89,45 +89,45 @@ struct ServerHello(Copyable, Movable):
 # Internal helpers
 # ============================================================================
 
-fn _append_u8(mut out: List[UInt8], v: UInt8):
+def _append_u8(mut out: List[UInt8], v: UInt8):
     out.append(v)
 
 
-fn _append_u16be(mut out: List[UInt8], v: UInt16):
+def _append_u16be(mut out: List[UInt8], v: UInt16):
     out.append(UInt8(v >> 8))
     out.append(UInt8(v & 0xFF))
 
 
-fn _append_u24be(mut out: List[UInt8], v: Int):
+def _append_u24be(mut out: List[UInt8], v: Int):
     out.append(UInt8((v >> 16) & 0xFF))
     out.append(UInt8((v >> 8) & 0xFF))
     out.append(UInt8(v & 0xFF))
 
 
-fn _append_bytes(mut out: List[UInt8], src: List[UInt8]):
+def _append_bytes(mut out: List[UInt8], src: List[UInt8]):
     for i in range(len(src)):
         out.append(src[i])
 
 
-fn _read_u8(data: List[UInt8], off: Int) raises -> UInt8:
+def _read_u8(data: List[UInt8], off: Int) raises -> UInt8:
     if off >= len(data):
         raise Error("tls_msg: read_u8 out of bounds")
     return data[off]
 
 
-fn _read_u16be(data: List[UInt8], off: Int) raises -> UInt16:
+def _read_u16be(data: List[UInt8], off: Int) raises -> UInt16:
     if off + 1 >= len(data):
         raise Error("tls_msg: read_u16be out of bounds")
     return (UInt16(data[off]) << 8) | UInt16(data[off + 1])
 
 
-fn _read_u24be(data: List[UInt8], off: Int) raises -> Int:
+def _read_u24be(data: List[UInt8], off: Int) raises -> Int:
     if off + 2 >= len(data):
         raise Error("tls_msg: read_u24be out of bounds")
     return (Int(data[off]) << 16) | (Int(data[off + 1]) << 8) | Int(data[off + 2])
 
 
-fn _slice(data: List[UInt8], start: Int, end: Int) raises -> List[UInt8]:
+def _slice(data: List[UInt8], start: Int, end: Int) raises -> List[UInt8]:
     if end > len(data) or start > end:
         raise Error("tls_msg: slice out of bounds start=" + String(start) + " end=" + String(end) + " len=" + String(len(data)))
     var out = List[UInt8](capacity=end - start)
@@ -140,7 +140,7 @@ fn _slice(data: List[UInt8], start: Int, end: Int) raises -> List[UInt8]:
 # build_client_hello
 # ============================================================================
 
-fn build_client_hello(
+def build_client_hello(
     client_random: List[UInt8],
     session_id:    List[UInt8],
     key_share_pub: List[UInt8],
@@ -249,7 +249,7 @@ fn build_client_hello(
 # build_finished
 # ============================================================================
 
-fn build_finished(verify_data: List[UInt8]) -> List[UInt8]:
+def build_finished(verify_data: List[UInt8]) -> List[UInt8]:
     """Build TLS 1.3 Finished handshake message. verify_data must be 32 bytes."""
     var out = List[UInt8](capacity=4 + len(verify_data))
     _append_u8(out, HS_FINISHED)
@@ -262,7 +262,7 @@ fn build_finished(verify_data: List[UInt8]) -> List[UInt8]:
 # parse_handshake_msg
 # ============================================================================
 
-fn parse_handshake_msg(data: List[UInt8], offset: Int) raises -> Tuple[HandshakeMsg, Int]:
+def parse_handshake_msg(data: List[UInt8], offset: Int) raises -> Tuple[HandshakeMsg, Int]:
     """Parse one handshake message. Returns (msg, next_offset)."""
     if offset + 4 > len(data):
         raise Error("parse_handshake_msg: not enough bytes for header")
@@ -282,7 +282,7 @@ fn parse_handshake_msg(data: List[UInt8], offset: Int) raises -> Tuple[Handshake
 # parse_server_hello
 # ============================================================================
 
-fn parse_server_hello(body: List[UInt8]) raises -> ServerHello:
+def parse_server_hello(body: List[UInt8]) raises -> ServerHello:
     """Parse ServerHello body. Returns ServerHello struct."""
     var off = 0
     if off + 2 > len(body):
@@ -334,7 +334,7 @@ fn parse_server_hello(body: List[UInt8]) raises -> ServerHello:
 # parse_server_hello_key_share
 # ============================================================================
 
-fn parse_server_hello_key_share(ext_bytes: List[UInt8]) raises -> List[UInt8]:
+def parse_server_hello_key_share(ext_bytes: List[UInt8]) raises -> List[UInt8]:
     """Find key_share extension and return 32-byte x25519 server public key."""
     var off = 0
     while off + 4 <= len(ext_bytes):
@@ -366,7 +366,7 @@ fn parse_server_hello_key_share(ext_bytes: List[UInt8]) raises -> List[UInt8]:
 # parse_certificate_chain (TLS 1.3)
 # ============================================================================
 
-fn parse_certificate_chain(body: List[UInt8]) raises -> List[List[UInt8]]:
+def parse_certificate_chain(body: List[UInt8]) raises -> List[List[UInt8]]:
     """Parse TLS 1.3 Certificate message body → list of DER cert bytes."""
     var off = 0
 
@@ -406,7 +406,7 @@ fn parse_certificate_chain(body: List[UInt8]) raises -> List[List[UInt8]]:
 # parse_cert_verify
 # ============================================================================
 
-fn parse_cert_verify(body: List[UInt8]) raises -> Tuple[UInt16, List[UInt8]]:
+def parse_cert_verify(body: List[UInt8]) raises -> Tuple[UInt16, List[UInt8]]:
     """Parse CertificateVerify body → (sig_scheme, sig_bytes)."""
     if len(body) < 4:
         raise Error("parse_cert_verify: too short")
@@ -422,7 +422,7 @@ fn parse_cert_verify(body: List[UInt8]) raises -> Tuple[UInt16, List[UInt8]]:
 # parse_finished
 # ============================================================================
 
-fn parse_finished(body: List[UInt8]) raises -> List[UInt8]:
+def parse_finished(body: List[UInt8]) raises -> List[UInt8]:
     """Parse Finished body → 32-byte (SHA-256) or 48-byte (SHA-384) verify_data."""
     if len(body) != 32 and len(body) != 48:
         raise Error("parse_finished: expected 32 or 48 bytes, got " + String(len(body)))

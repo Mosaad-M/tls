@@ -63,7 +63,7 @@ struct TlsKeys(Copyable, Movable):
     var server_seqno:      UInt64
     var resumption_secret: List[UInt8]
 
-    fn __init__(out self):
+    def __init__(out self):
         self.cipher            = 0
         self.client_write_key  = List[UInt8]()
         self.client_write_iv   = List[UInt8]()
@@ -73,7 +73,7 @@ struct TlsKeys(Copyable, Movable):
         self.server_seqno      = 0
         self.resumption_secret = List[UInt8]()
 
-    fn __copyinit__(out self, copy: Self):
+    def __copyinit__(out self, copy: Self):
         self.cipher            = copy.cipher
         self.client_write_key  = copy.client_write_key.copy()
         self.client_write_iv   = copy.client_write_iv.copy()
@@ -83,7 +83,7 @@ struct TlsKeys(Copyable, Movable):
         self.server_seqno      = copy.server_seqno
         self.resumption_secret = copy.resumption_secret.copy()
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self.cipher            = take.cipher
         self.client_write_key  = take.client_write_key^
         self.client_write_iv   = take.client_write_iv^
@@ -98,7 +98,7 @@ struct TlsKeys(Copyable, Movable):
 # TCP I/O helpers (FFI: read / write system calls)
 # ============================================================================
 
-fn _tcp_read(fd: Int32, n: Int) raises -> List[UInt8]:
+def _tcp_read(fd: Int32, n: Int) raises -> List[UInt8]:
     """Read exactly n bytes from the socket fd. Raises on error or EOF."""
     if n == 0:
         return List[UInt8]()
@@ -117,7 +117,7 @@ fn _tcp_read(fd: Int32, n: Int) raises -> List[UInt8]:
     return out^
 
 
-fn _tcp_write(fd: Int32, data: List[UInt8]) raises:
+def _tcp_write(fd: Int32, data: List[UInt8]) raises:
     """Write all bytes to the socket fd."""
     var n = len(data)
     if n == 0:
@@ -139,12 +139,12 @@ fn _tcp_write(fd: Int32, data: List[UInt8]) raises:
 # Internal TLS helpers
 # ============================================================================
 
-fn _append_bytes(mut out: List[UInt8], src: List[UInt8]):
+def _append_bytes(mut out: List[UInt8], src: List[UInt8]):
     for i in range(len(src)):
         out.append(src[i])
 
 
-fn _make_tls_record(content_type: UInt8, data: List[UInt8]) -> List[UInt8]:
+def _make_tls_record(content_type: UInt8, data: List[UInt8]) -> List[UInt8]:
     """Wrap data in TLS record (5-byte header + data)."""
     var n = len(data)
     var out = List[UInt8](capacity=5 + n)
@@ -157,7 +157,7 @@ fn _make_tls_record(content_type: UInt8, data: List[UInt8]) -> List[UInt8]:
     return out^
 
 
-fn _read_tls_record(fd: Int32) raises -> Tuple[UInt8, List[UInt8]]:
+def _read_tls_record(fd: Int32) raises -> Tuple[UInt8, List[UInt8]]:
     """Read one TLS record. Returns (content_type, body)."""
     var header = _tcp_read(fd, 5)
     var content_type = header[0]
@@ -168,7 +168,7 @@ fn _read_tls_record(fd: Int32) raises -> Tuple[UInt8, List[UInt8]]:
     return (content_type, body^)
 
 
-fn _wrap_hs_msg(msg_type: UInt8, body: List[UInt8]) -> List[UInt8]:
+def _wrap_hs_msg(msg_type: UInt8, body: List[UInt8]) -> List[UInt8]:
     """Wrap body in a 4-byte Handshake header."""
     var out = List[UInt8](capacity=4 + len(body))
     out.append(msg_type)
@@ -180,25 +180,25 @@ fn _wrap_hs_msg(msg_type: UInt8, body: List[UInt8]) -> List[UInt8]:
     return out^
 
 
-fn _transcript_hash(h: SHA256) -> List[UInt8]:
+def _transcript_hash(h: SHA256) -> List[UInt8]:
     """Get current transcript hash without consuming the hasher."""
     var h_copy = h.copy()
     return h_copy.finalize()
 
 
-fn _transcript_hash_sha384(h: SHA384) -> List[UInt8]:
+def _transcript_hash_sha384(h: SHA384) -> List[UInt8]:
     """Get current SHA-384 transcript hash without consuming the hasher."""
     var h_copy = h.copy()
     return h_copy.finalize()
 
 
-fn _key_len_for_cipher(cipher: UInt8) -> Int:
+def _key_len_for_cipher(cipher: UInt8) -> Int:
     if cipher == CIPHER_AES_128_GCM:
         return 16
     return 32
 
 
-fn _cipher_from_suite(suite: UInt16) raises -> UInt8:
+def _cipher_from_suite(suite: UInt16) raises -> UInt8:
     if suite == 0x1301:
         return CIPHER_AES_128_GCM
     if suite == 0x1302:
@@ -208,7 +208,7 @@ fn _cipher_from_suite(suite: UInt16) raises -> UInt8:
     raise Error("tls: unsupported cipher suite " + String(Int(suite)))
 
 
-fn _verify_cert_verify_sig(
+def _verify_cert_verify_sig(
     cert:       X509Cert,
     sig_scheme: UInt16,
     sig_bytes:  List[UInt8],
@@ -250,7 +250,7 @@ fn _verify_cert_verify_sig(
 # Read all encrypted server handshake messages until Finished
 # ============================================================================
 
-fn _read_server_hs_messages(
+def _read_server_hs_messages(
     fd:         Int32,
     cipher:     UInt8,
     hs_key:     List[UInt8],
@@ -309,7 +309,7 @@ fn _read_server_hs_messages(
     return all_msgs^
 
 
-fn _find_msg(messages: List[HandshakeMsg], msg_type: UInt8) raises -> List[UInt8]:
+def _find_msg(messages: List[HandshakeMsg], msg_type: UInt8) raises -> List[UInt8]:
     """Find first message of the given type. Raises if not found."""
     for i in range(len(messages)):
         if messages[i].msg_type == msg_type:
@@ -321,7 +321,7 @@ fn _find_msg(messages: List[HandshakeMsg], msg_type: UInt8) raises -> List[UInt8
 # tls13_after_server_hello — complete TLS 1.3 handshake after SH exchange
 # ============================================================================
 
-fn tls13_after_server_hello(
+def tls13_after_server_hello(
     fd:                Int32,
     hostname:          String,
     trust_anchors:     List[X509Cert],
@@ -512,7 +512,7 @@ fn tls13_after_server_hello(
 # tls13_client_handshake — full TLS 1.3 client handshake over a TCP socket
 # ============================================================================
 
-fn _tls13_handshake_impl(
+def _tls13_handshake_impl(
     fd:            Int32,
     hostname:      String,
     trust_anchors: List[X509Cert],
@@ -577,7 +577,7 @@ fn _tls13_handshake_impl(
     )
 
 
-fn tls13_client_handshake(
+def tls13_client_handshake(
     fd:            Int32,
     hostname:      String,
     trust_anchors: List[X509Cert],
@@ -607,8 +607,8 @@ fn tls13_client_handshake(
 # Alert handling
 # ============================================================================
 
-fn tls_send_alert(
-    write_fn: fn(List[UInt8]) raises -> None,
+def tls_send_alert(
+    write_fn: def(List[UInt8]) raises -> None,
     keys:     TlsKeys,
     level:    UInt8,
     code:     UInt8,
@@ -627,7 +627,7 @@ fn tls_send_alert(
         write_fn(_make_tls_record(CTYPE_ALERT, alert_body))
 
 
-fn tls_handle_incoming_alert(alert_body: List[UInt8]) raises:
+def tls_handle_incoming_alert(alert_body: List[UInt8]) raises:
     """Handle an incoming TLS alert record body (RFC 8446 §6). Always raises.
 
     alert_body[0] = level (1=warning, 2=fatal)
@@ -703,17 +703,17 @@ fn tls_handle_incoming_alert(alert_body: List[UInt8]) raises:
 # Public TCP I/O — re-exported for use by tls/socket.mojo
 # ============================================================================
 
-fn tls_tcp_read(fd: Int32, n: Int) raises -> List[UInt8]:
+def tls_tcp_read(fd: Int32, n: Int) raises -> List[UInt8]:
     """Read exactly n bytes from tcp socket fd."""
     return _tcp_read(fd, n)
 
 
-fn tls_tcp_write(fd: Int32, data: List[UInt8]) raises:
+def tls_tcp_write(fd: Int32, data: List[UInt8]) raises:
     """Write all bytes to tcp socket fd."""
     _tcp_write(fd, data)
 
 
-fn tls_send_plaintext_alert(fd: Int32, code: UInt8):
+def tls_send_plaintext_alert(fd: Int32, code: UInt8):
     """Send a plaintext TLS fatal alert. Best-effort — swallows send errors."""
     var body = List[UInt8](capacity=2)
     body.append(ALERT_LEVEL_FATAL)
@@ -725,6 +725,6 @@ fn tls_send_plaintext_alert(fd: Int32, code: UInt8):
         pass
 
 
-fn tls_cipher_from_suite(suite: UInt16) raises -> UInt8:
+def tls_cipher_from_suite(suite: UInt16) raises -> UInt8:
     """Convert TLS 1.3 cipher suite identifier to CIPHER_* constant."""
     return _cipher_from_suite(suite)
