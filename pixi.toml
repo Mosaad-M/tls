@@ -38,6 +38,7 @@ test-prf = "mojo run -I . tests/test_prf.mojo"
 test-message12 = "mojo run -I . tests/test_message12.mojo"
 test-record12 = "mojo run -I . tests/test_record12.mojo"
 test-connection12 = "mojo run -I . tests/test_connection12.mojo"
+bench = "mojo run -I . bench/bench_crypto.mojo"
 format-hash = "mblack crypto/hash.mojo tests/test_hash.mojo"
 
 # Composite task — excludes test-connection, test-connection12, test-socket
