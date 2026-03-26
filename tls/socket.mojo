@@ -35,7 +35,7 @@ from tls.connection import (
     ALERT_LEVEL_WARNING, ALERT_CLOSE_NOTIFY,
 )
 from tls.connection12 import (
-    tls12_client_handshake, TlsKeys12,
+    tls12_client_handshake, tls12_client_handshake_mtls, TlsKeys12,
 )
 from tls.message import (
     build_client_hello, parse_handshake_msg,
@@ -257,6 +257,91 @@ struct TlsSocket(Movable):
             except e:
                 self._is12 = False  # reset to safe state on handshake failure
                 raise Error(String(e))
+
+    def connect_with_client_cert(
+        mut self,
+        hostname:      String,
+        trust_anchors: List[X509Cert],
+        client_cert:   List[UInt8],   # DER-encoded leaf certificate
+        client_key:    List[UInt8],   # 32-byte P-256 private scalar
+    ) raises:
+        """TLS 1.2 mTLS handshake with P-256 ECDSA client authentication.
+
+        Raises if TLS 1.3 is negotiated (TLS 1.3 client auth is deferred to v1.3.0).
+        Both client_cert and client_key must be non-empty.
+        """
+        if len(client_cert) == 0 or len(client_key) == 0:
+            raise Error("mTLS: must provide both client_cert and client_key")
+
+        var ecdhe_private = csprng_bytes(32)
+        var key_share_pub = x25519_public_key(ecdhe_private)
+        var client_random = csprng_bytes(32)
+
+        var ch_msg = build_client_hello(client_random, List[UInt8](), key_share_pub, hostname)
+        var ch_n = len(ch_msg)
+        var ch_record = List[UInt8](capacity=5 + ch_n)
+        ch_record.append(0x16)
+        ch_record.append(0x03)
+        ch_record.append(0x01)
+        ch_record.append(UInt8((ch_n >> 8) & 0xFF))
+        ch_record.append(UInt8(ch_n & 0xFF))
+        _sock_append_bytes(ch_record, ch_msg)
+        tls_tcp_write(self._fd, ch_record)
+
+        var th    = SHA256()
+        var th384 = SHA384()
+        th.update(ch_msg)
+        th384.update(ch_msg)
+
+        # Read ServerHello
+        var sh_rec_type: UInt8
+        var sh_rec_body: List[UInt8]
+        while True:
+            var header = tls_tcp_read(self._fd, 5)
+            var rtype = header[0]
+            var rlen = (Int(header[3]) << 8) | Int(header[4])
+            var rbody = tls_tcp_read(self._fd, rlen)
+            if rtype == CTYPE_CHANGE_CIPHER_SPEC:
+                continue
+            if rtype == CTYPE_ALERT:
+                tls_handle_incoming_alert(rbody)
+                raise Error("mTLS: alert before ServerHello")
+            sh_rec_type = rtype
+            sh_rec_body = rbody^
+            break
+
+        if sh_rec_type != CTYPE_HANDSHAKE:
+            raise Error("mTLS: expected Handshake record for ServerHello")
+
+        var sh_parse  = parse_handshake_msg(sh_rec_body, 0)
+        var sh_msg    = sh_parse[0].copy()
+        if sh_msg.msg_type != HS_SERVER_HELLO:
+            raise Error("mTLS: expected ServerHello")
+
+        var sh_full = _sock_wrap_hs_msg(HS_SERVER_HELLO, sh_msg.body)
+        th.update(sh_full)
+        th384.update(sh_full)
+
+        var sv = parse_server_hello_version(sh_msg.body)
+        var cipher_suite = sv[0]
+        var server_random = sv[1].copy()
+        var use_tls13 = sv[3]
+
+        if use_tls13:
+            raise Error("mTLS: requires TLS 1.2; server negotiated TLS 1.3")
+
+        var use_sha384 = (cipher_suite == 0xC030 or cipher_suite == 0xC02C)
+        try:
+            self._keys12 = tls12_client_handshake_mtls(
+                self._fd, hostname, trust_anchors,
+                client_random, server_random, cipher_suite,
+                th, th384, use_sha384,
+                client_cert, client_key,
+            )
+            self._is12 = True
+        except e:
+            self._is12 = False
+            raise Error(String(e))
 
     def send(mut self, data: List[UInt8]) raises -> Int:
         """Encrypt data as a TLS ApplicationData record and write to socket."""

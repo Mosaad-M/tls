@@ -32,7 +32,7 @@ from crypto.cert import X509Cert, cert_parse, cert_chain_verify
 from crypto.asn1 import asn1_parse_ecdsa_sig, asn1_parse_ecdsa_sig_48
 from crypto.curve25519 import x25519_public_key, x25519
 from crypto.random import csprng_bytes
-from crypto.p256 import p256_ecdsa_verify, p256_public_key, p256_ecdh
+from crypto.p256 import p256_ecdsa_verify, p256_public_key, p256_ecdh, p256_ecdsa_sign
 from crypto.p384 import p384_ecdsa_verify
 from crypto.rsa import rsa_pkcs1_verify
 from tls.message import (
@@ -46,6 +46,10 @@ from tls.message12 import (
     build_change_cipher_spec_body,
     build_finished_body,
     parse_finished_body,
+    parse_certificate_request12,
+    build_client_certificate12,
+    build_client_certificate_verify12,
+    _ecdsa_raw_to_der,
     TLS12_ECDHE_RSA_AES128_GCM_SHA256,
     TLS12_ECDHE_RSA_AES256_GCM_SHA384,
     TLS12_ECDHE_ECDSA_AES128_GCM_SHA256,
@@ -53,6 +57,7 @@ from tls.message12 import (
     NAMED_CURVE_X25519,
     NAMED_CURVE_SECP256R1,
     NAMED_CURVE_SECP384R1,
+    HS_CERTIFICATE_REQUEST,
 )
 from tls.connection import (
     tls_tcp_read, tls_tcp_write,
@@ -301,6 +306,8 @@ def _tls12_handshake_impl(
     transcript_sha256: SHA256,
     transcript_sha384: SHA384,
     use_sha384:     Bool,
+    client_cert:    List[UInt8],   # DER leaf cert (empty = no mTLS)
+    client_key:     List[UInt8],   # 32-byte P-256 private scalar (empty = no mTLS)
 ) raises -> TlsKeys12:
     # Determine cipher parameters
     var key_len = 16
@@ -320,11 +327,23 @@ def _tls12_handshake_impl(
     var ske_body  = _find_msg12(srv_msgs, HS12_SERVER_KEY_EXCHANGE)
     var shd_body  = _find_msg12(srv_msgs, HS12_SERVER_HELLO_DONE)
 
-    # Update transcript in message order
+    # Check for optional CertificateRequest
+    var cert_req_body = List[UInt8]()
+    var has_cert_req = False
+    for i in range(len(srv_msgs)):
+        if srv_msgs[i].msg_type == HS_CERTIFICATE_REQUEST:
+            cert_req_body = srv_msgs[i].body.copy()
+            has_cert_req = True
+            break
+
+    # Update transcript in RFC 5246 §7.3 message order
     th.update(_wrap_hs_msg12(HS_CERTIFICATE, cert_body))
     th384.update(_wrap_hs_msg12(HS_CERTIFICATE, cert_body))
     th.update(_wrap_hs_msg12(HS12_SERVER_KEY_EXCHANGE, ske_body))
     th384.update(_wrap_hs_msg12(HS12_SERVER_KEY_EXCHANGE, ske_body))
+    if has_cert_req:
+        th.update(_wrap_hs_msg12(HS_CERTIFICATE_REQUEST, cert_req_body))
+        th384.update(_wrap_hs_msg12(HS_CERTIFICATE_REQUEST, cert_req_body))
     th.update(_wrap_hs_msg12(HS12_SERVER_HELLO_DONE, shd_body))
     th384.update(_wrap_hs_msg12(HS12_SERVER_HELLO_DONE, shd_body))
 
@@ -405,6 +424,19 @@ def _tls12_handshake_impl(
     for i in range(4):
         server_iv.append(key_block[2 * key_len + 4 + i])
 
+    # ── Step 9a: Send client Certificate (if server requested it) ────────────
+    # RFC 5246 §7.3: Certificate comes BEFORE ClientKeyExchange
+    if has_cert_req:
+        var cli_cert_chain = List[List[UInt8]]()
+        if len(client_cert) > 0:
+            cli_cert_chain.append(client_cert.copy())
+        var cli_cert_msg = build_client_certificate12(cli_cert_chain)
+        # cli_cert_msg already has 4-byte HS header; update transcript directly
+        th.update(cli_cert_msg)
+        th384.update(cli_cert_msg)
+        var cli_cert_record = _make_tls12_record(CTYPE_HANDSHAKE, cli_cert_msg)
+        tls_tcp_write(fd, cli_cert_record)
+
     # ── Step 9: Send ClientKeyExchange ────────────────────────────────────────
     var cke_body = build_client_key_exchange(ecdhe_public)
     var cke_hs   = _wrap_hs_msg12(HS12_CLIENT_KEY_EXCHANGE, cke_body)
@@ -412,6 +444,26 @@ def _tls12_handshake_impl(
     th384.update(cke_hs)
     var cke_record = _make_tls12_record(CTYPE_HANDSHAKE, cke_hs)
     tls_tcp_write(fd, cke_record)
+
+    # ── Step 9b: Send CertificateVerify (if we sent a certificate) ────────────
+    # RFC 5246 §7.4.8: signs transcript hash through ClientKeyExchange
+    if has_cert_req and len(client_cert) > 0 and len(client_key) > 0:
+        var cv_hash: List[UInt8]
+        if use_sha384:
+            cv_hash = _transcript_hash12_384(th384)
+        else:
+            cv_hash = _transcript_hash12(th)
+        var nonce = csprng_bytes(32)
+        var sig_rs = p256_ecdsa_sign(client_key, cv_hash, nonce)
+        var r = sig_rs[0].copy()
+        var s = sig_rs[1].copy()
+        var sig_der = _ecdsa_raw_to_der(r, s)
+        # SHA-256 hash alg (4), ECDSA sig alg (3)
+        var cv_msg = build_client_certificate_verify12(4, 3, sig_der)
+        th.update(cv_msg)
+        th384.update(cv_msg)
+        var cv_record = _make_tls12_record(CTYPE_HANDSHAKE, cv_msg)
+        tls_tcp_write(fd, cv_record)
 
     # ── Step 10: Send ChangeCipherSpec ────────────────────────────────────────
     var ccs_body   = build_change_cipher_spec_body()
@@ -528,6 +580,39 @@ def tls12_client_handshake(
             fd, hostname, trust_anchors,
             client_random, server_random, cipher_suite,
             transcript_sha256, transcript_sha384, use_sha384,
+            List[UInt8](), List[UInt8](),
+        )
+    except e:
+        tls_send_plaintext_alert(fd, 40)  # handshake_failure
+        raise Error(String(e))
+
+
+def tls12_client_handshake_mtls(
+    fd:             Int32,
+    hostname:       String,
+    trust_anchors:  List[X509Cert],
+    client_random:  List[UInt8],
+    server_random:  List[UInt8],
+    cipher_suite:   UInt16,
+    transcript_sha256: SHA256,
+    transcript_sha384: SHA384,
+    use_sha384:     Bool,
+    client_cert:    List[UInt8],   # DER-encoded leaf certificate
+    client_key:     List[UInt8],   # 32-byte P-256 private scalar
+) raises -> TlsKeys12:
+    """TLS 1.2 mTLS handshake: responds to CertificateRequest with P-256 ECDSA auth.
+
+    Both client_cert and client_key must be provided together.
+    Sends a fatal handshake_failure alert before propagating any error.
+    """
+    if len(client_cert) == 0 or len(client_key) == 0:
+        raise Error("mTLS: must provide both client_cert and client_key")
+    try:
+        return _tls12_handshake_impl(
+            fd, hostname, trust_anchors,
+            client_random, server_random, cipher_suite,
+            transcript_sha256, transcript_sha384, use_sha384,
+            client_cert, client_key,
         )
     except e:
         tls_send_plaintext_alert(fd, 40)  # handshake_failure
