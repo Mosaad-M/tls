@@ -38,6 +38,9 @@ test-prf = "mojo run -I . tests/test_prf.mojo"
 test-message12 = "mojo run -I . tests/test_message12.mojo"
 test-record12 = "mojo run -I . tests/test_record12.mojo"
 test-connection12 = "mojo run -I . tests/test_connection12.mojo"
+test-psk-handshake = "mojo run -I . tests/test_psk_handshake.mojo"
+test-session-ticket = "mojo run -I . tests/test_session_ticket.mojo"
+test-p256-sign = "mojo run -I . tests/test_p256_sign.mojo"
 bench = "mojo run -I . bench/bench_crypto.mojo"
 format-hash = "mblack crypto/hash.mojo tests/test_hash.mojo"
 
@@ -50,7 +53,8 @@ test = { depends-on = [
   "test-asn1", "test-cert", "test-cert-sha384", "test-cert-hostname", "test-cert-chain",
   "test-base64", "test-pem", "test-random", "test-sha1", "test-ed25519",
   "test-record", "test-record12", "test-handshake",
-  "test-message", "test-message12", "test-prf", "test-alert"
+  "test-message", "test-message12", "test-prf", "test-alert",
+  "test-psk-handshake", "test-session-ticket", "test-p256-sign"
 ] }
 
 [dependencies]

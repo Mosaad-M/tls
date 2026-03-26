@@ -16,6 +16,7 @@ from crypto.bigint import (
     bigint_mul, bigint_mod, bigint_modmul, bigint_modinv,
     bigint_bit_len, bigint_get_bit, bigint_cswap_inplace,
 )
+from crypto.hmac import hmac_sha256
 
 
 # ============================================================================
@@ -645,3 +646,81 @@ def p256_ecdsa_verify(
     var rx = bigint_mod(affine[0], n)
     if bigint_cmp(rx, r) != 0:
         raise Error("p256: ECDSA signature invalid")
+
+
+def p256_ecdsa_sign(
+    private_key:  List[UInt8],   # 32-byte big-endian scalar in [1, n-1]
+    msg_hash:     List[UInt8],   # 32-byte message hash (e.g. SHA-256 digest)
+    nonce_bytes:  List[UInt8],   # 32-byte caller-provided entropy
+) raises -> Tuple[List[UInt8], List[UInt8]]:
+    """Sign msg_hash with P-256 ECDSA. Returns (r[32], s[32]).
+
+    Nonce k is derived deterministically:
+      k_raw = HMAC-SHA-256(private_key, msg_hash || nonce_bytes)
+      k     = bigint_from_bytes(k_raw) mod n   (clamped into [1, n-1])
+
+    Low-s normalization is applied: if s > n/2 then s = n - s.
+    This prevents signature malleability.
+
+    Safety:
+    - private_key is validated in [1, n-1] before any computation.
+    - k is validated non-zero before use.
+    - r and s are validated non-zero before returning.
+    """
+    if len(private_key) != 32:
+        raise Error("p256_ecdsa_sign: private key must be 32 bytes")
+    if len(msg_hash) != 32:
+        raise Error("p256_ecdsa_sign: msg_hash must be 32 bytes")
+    if len(nonce_bytes) != 32:
+        raise Error("p256_ecdsa_sign: nonce_bytes must be 32 bytes")
+
+    var p = _p256_p()
+    var n = _p256_n()
+
+    # Validate private key
+    var d = bigint_from_bytes(private_key)
+    if bigint_is_zero(d) or bigint_cmp(d, n) >= 0:
+        raise Error("p256_ecdsa_sign: private key out of range [1, n-1]")
+
+    # Derive nonce k: HMAC-SHA-256(private_key, msg_hash || nonce_bytes)
+    var k_input = List[UInt8](capacity=64)
+    for i in range(32):
+        k_input.append(msg_hash[i])
+    for i in range(32):
+        k_input.append(nonce_bytes[i])
+    var k_raw = hmac_sha256(private_key, k_input)
+    var k_big = bigint_from_bytes(k_raw)
+    var k = bigint_mod(k_big, n)
+    if bigint_is_zero(k):
+        raise Error("p256_ecdsa_sign: degenerate nonce k=0; retry with different nonce_bytes")
+
+    # R = k * G; r = R.x mod n
+    var gx = _p256_gx()
+    var gy = _p256_gy()
+    var R_pt = _scalar_mul_affine(k, gx, gy, p)
+    if R_pt.inf:
+        raise Error("p256_ecdsa_sign: degenerate R point; retry with different nonce_bytes")
+    var R_affine = _to_affine(R_pt, p)
+    var r = bigint_mod(R_affine[0], n)
+    if bigint_is_zero(r):
+        raise Error("p256_ecdsa_sign: degenerate r=0; retry with different nonce_bytes")
+
+    # s = k^(-1) * (e + r*d) mod n
+    var e = bigint_mod(bigint_from_bytes(msg_hash), n)
+    var rd = bigint_modmul(r.copy(), d, n)
+    var e_plus_rd = bigint_add(e, rd)
+    if bigint_cmp(e_plus_rd, n) >= 0:
+        e_plus_rd = bigint_sub(e_plus_rd, n)
+    var k_inv = bigint_modinv(k, n)
+    var s = bigint_modmul(k_inv, e_plus_rd, n)
+    if bigint_is_zero(s):
+        raise Error("p256_ecdsa_sign: degenerate s=0; retry with different nonce_bytes")
+
+    # Low-s normalization: if s > n/2, replace s = n - s
+    # n/2 computed as right-shift; compare s against it
+    # Equivalent: if 2*s > n then s = n - s
+    var s2 = bigint_add(s.copy(), s.copy())
+    if bigint_cmp(s2, n) > 0:
+        s = bigint_sub(n, s)
+
+    return (bigint_to_bytes(r, 32), bigint_to_bytes(s, 32))

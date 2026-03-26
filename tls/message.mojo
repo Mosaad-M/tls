@@ -39,6 +39,15 @@ comptime CIPHER_TLS_AES_256_GCM_SHA384       : UInt16 = 0x1302
 comptime CIPHER_TLS_CHACHA20_POLY1305_SHA256 : UInt16 = 0x1303
 
 
+# ── PSK / session ticket extensions ──────────────────────────────────────────
+comptime EXT_PRE_SHARED_KEY      : UInt16 = 0x0029
+comptime EXT_PSK_KEY_EXCH_MODES  : UInt16 = 0x002D
+
+# ── PSK key-exchange modes ────────────────────────────────────────────────────
+comptime PSK_KE_MODE    : UInt8 = 0   # psk_ke (no FS — not advertised)
+comptime PSK_DHE_KE_MODE: UInt8 = 1   # psk_dhe_ke (keeps forward secrecy)
+
+
 # ============================================================================
 # Parsed message structs
 # ============================================================================
@@ -427,3 +436,293 @@ def parse_finished(body: List[UInt8]) raises -> List[UInt8]:
     if len(body) != 32 and len(body) != 48:
         raise Error("parse_finished: expected 32 or 48 bytes, got " + String(len(body)))
     return body.copy()
+
+
+# ============================================================================
+# SessionTicket — TLS 1.3 NewSessionTicket (RFC 8446 §4.6.1)
+# ============================================================================
+
+struct SessionTicket(Copyable, Movable):
+    """Parsed TLS 1.3 NewSessionTicket with derived PSK."""
+    var lifetime_secs: UInt32       # ticket_lifetime (seconds)
+    var age_add:       UInt32       # ticket_age_add  (obfuscation mask)
+    var nonce:         List[UInt8]  # ticket_nonce
+    var ticket:        List[UInt8]  # opaque identity bytes sent in ClientHello pre_shared_key
+    var psk:           List[UInt8]  # PSK derived by connection layer (empty until set)
+
+    def __init__(out self):
+        self.lifetime_secs = 0
+        self.age_add       = 0
+        self.nonce         = List[UInt8]()
+        self.ticket        = List[UInt8]()
+        self.psk           = List[UInt8]()
+
+    def __copyinit__(out self, copy: Self):
+        self.lifetime_secs = copy.lifetime_secs
+        self.age_add       = copy.age_add
+        self.nonce         = copy.nonce.copy()
+        self.ticket        = copy.ticket.copy()
+        self.psk           = copy.psk.copy()
+
+    def __moveinit__(out self, deinit take: Self):
+        self.lifetime_secs = take.lifetime_secs
+        self.age_add       = take.age_add
+        self.nonce         = take.nonce^
+        self.ticket        = take.ticket^
+        self.psk           = take.psk^
+
+
+def parse_new_session_ticket(body: List[UInt8]) raises -> SessionTicket:
+    """Parse TLS 1.3 NewSessionTicket body (handshake type 0x04).
+
+    RFC 8446 §4.6.1 wire format:
+      uint32  ticket_lifetime
+      uint32  ticket_age_add
+      opaque  ticket_nonce<0..255>       (1-byte length)
+      opaque  ticket<1..2^16-1>          (2-byte length)
+      Extension extensions<0..2^16-2>   (2-byte length)
+
+    All length fields are validated before indexing.
+    Unknown extensions are structurally skipped.
+    Raises with a descriptive message on any truncation.
+    """
+    var off = 0
+    var n = len(body)
+
+    # ticket_lifetime (4 bytes)
+    if off + 4 > n:
+        raise Error("NewSessionTicket: truncated at ticket_lifetime")
+    var lifetime = (UInt32(body[off]) << 24) | (UInt32(body[off+1]) << 16) | (UInt32(body[off+2]) << 8) | UInt32(body[off+3])
+    off += 4
+
+    # ticket_age_add (4 bytes)
+    if off + 4 > n:
+        raise Error("NewSessionTicket: truncated at ticket_age_add")
+    var age_add = (UInt32(body[off]) << 24) | (UInt32(body[off+1]) << 16) | (UInt32(body[off+2]) << 8) | UInt32(body[off+3])
+    off += 4
+
+    # ticket_nonce (1-byte length prefix)
+    if off + 1 > n:
+        raise Error("NewSessionTicket: truncated at ticket_nonce length")
+    var nonce_len = Int(body[off])
+    off += 1
+    if off + nonce_len > n:
+        raise Error("NewSessionTicket: truncated at ticket_nonce data")
+    var nonce = _slice(body, off, off + nonce_len)
+    off += nonce_len
+
+    # ticket identity (2-byte length prefix)
+    if off + 2 > n:
+        raise Error("NewSessionTicket: truncated at ticket length")
+    var ticket_len = Int(_read_u16be(body, off))
+    off += 2
+    if ticket_len == 0:
+        raise Error("NewSessionTicket: ticket must be non-empty")
+    if off + ticket_len > n:
+        raise Error("NewSessionTicket: truncated at ticket data")
+    var ticket = _slice(body, off, off + ticket_len)
+    off += ticket_len
+
+    # Extensions (2-byte total length, then skip each structurally)
+    if off + 2 <= n:
+        var ext_total = Int(_read_u16be(body, off))
+        off += 2
+        var ext_end = off + ext_total
+        if ext_end > n:
+            raise Error("NewSessionTicket: truncated at extensions")
+        # Skip each extension: type(2) + length(2) + data
+        while off + 4 <= ext_end:
+            var ext_len = Int(_read_u16be(body, off + 2))
+            off += 4 + ext_len
+            if off > ext_end:
+                raise Error("NewSessionTicket: extension overruns extensions block")
+
+    var st = SessionTicket()
+    st.lifetime_secs = lifetime
+    st.age_add       = age_add
+    st.nonce         = nonce^
+    st.ticket        = ticket^
+    return st^
+
+
+# ============================================================================
+# build_client_hello_with_psk
+# ============================================================================
+
+def build_client_hello_with_psk(
+    client_random:  List[UInt8],
+    session_id:     List[UInt8],
+    key_share_pub:  List[UInt8],
+    sni:            String,
+    ticket:         SessionTicket,
+    ticket_send_time_ms: UInt32,    # current time in ms (for obfuscated_ticket_age)
+) -> List[UInt8]:
+    """Build a TLS 1.3 ClientHello with PSK resumption extensions.
+
+    Appends psk_key_exchange_modes and pre_shared_key extensions after the
+    standard extensions. The pre_shared_key binder field is zeroed — the caller
+    must:
+      1. Hash this ClientHello (including zeroed binder)
+      2. Compute the real binder = tls13_psk_binder(binder_key, transcript_hash)
+      3. Overwrite the last 32 bytes of the returned buffer with the binder
+
+    Safety: Only psk_dhe_ke mode is advertised (preserves forward secrecy).
+    Returns raw Handshake bytes (type=0x01 + 3-byte length + body).
+    """
+    var body = List[UInt8](capacity=512)
+
+    # legacy_version = 0x0303
+    _append_u16be(body, 0x0303)
+    _append_bytes(body, client_random)
+
+    # session_id
+    _append_u8(body, UInt8(len(session_id)))
+    _append_bytes(body, session_id)
+
+    # cipher_suites (same as build_client_hello)
+    _append_u16be(body, 14)
+    _append_u16be(body, CIPHER_TLS_AES_128_GCM_SHA256)
+    _append_u16be(body, CIPHER_TLS_CHACHA20_POLY1305_SHA256)
+    _append_u16be(body, CIPHER_TLS_AES_256_GCM_SHA384)
+    _append_u16be(body, 0xC02F)
+    _append_u16be(body, 0xC030)
+    _append_u16be(body, 0xC02B)
+    _append_u16be(body, 0xC02C)
+
+    # compression_methods: [null]
+    _append_u8(body, 1)
+    _append_u8(body, 0)
+
+    # ── Extensions ───────────────────────────────────────────────────────────
+
+    var exts = List[UInt8](capacity=256)
+
+    # server_name (SNI)
+    var sni_bytes_span = sni.as_bytes()
+    var sni_bytes = List[UInt8](capacity=len(sni_bytes_span))
+    for i in range(len(sni_bytes_span)):
+        sni_bytes.append(sni_bytes_span[i])
+    var sni_name_len = len(sni_bytes)
+    var sni_list_len = 1 + 2 + sni_name_len
+    var sni_ext_data_len = 2 + sni_list_len
+    _append_u16be(exts, EXT_SERVER_NAME)
+    _append_u16be(exts, UInt16(sni_ext_data_len))
+    _append_u16be(exts, UInt16(sni_list_len))
+    _append_u8(exts, 0)
+    _append_u16be(exts, UInt16(sni_name_len))
+    _append_bytes(exts, sni_bytes)
+
+    # supported_versions
+    _append_u16be(exts, EXT_SUPPORTED_VERSIONS)
+    _append_u16be(exts, 5)
+    _append_u8(exts, 4)
+    _append_u16be(exts, 0x0304)
+    _append_u16be(exts, 0x0303)
+
+    # supported_groups
+    _append_u16be(exts, EXT_SUPPORTED_GROUPS)
+    _append_u16be(exts, 6)
+    _append_u16be(exts, 4)
+    _append_u16be(exts, GROUP_X25519)
+    _append_u16be(exts, 0x0017)
+
+    # signature_algorithms
+    _append_u16be(exts, EXT_SIG_ALGS)
+    _append_u16be(exts, 14)
+    _append_u16be(exts, 12)
+    _append_u16be(exts, 0x0403)
+    _append_u16be(exts, 0x0502)
+    _append_u16be(exts, 0x0401)
+    _append_u16be(exts, 0x0804)
+    _append_u16be(exts, 0x0501)
+    _append_u16be(exts, 0x0601)
+
+    # key_share: x25519
+    var ks_entry_len = 2 + 2 + 32
+    _append_u16be(exts, EXT_KEY_SHARE)
+    _append_u16be(exts, UInt16(2 + ks_entry_len))
+    _append_u16be(exts, UInt16(ks_entry_len))
+    _append_u16be(exts, GROUP_X25519)
+    _append_u16be(exts, 32)
+    _append_bytes(exts, key_share_pub)
+
+    # psk_key_exchange_modes (0x002D): only psk_dhe_ke = 1
+    # RFC 8446 §4.2.9: ext_data = modes_len(1) + mode(1)
+    _append_u16be(exts, EXT_PSK_KEY_EXCH_MODES)
+    _append_u16be(exts, 2)    # ext data length
+    _append_u8(exts, 1)       # modes list length
+    _append_u8(exts, PSK_DHE_KE_MODE)   # 0x01
+
+    # pre_shared_key (0x0029) — MUST be last extension (RFC 8446 §4.2.11)
+    # Wire format:
+    #   identities<6..2^16-1>: (identity<1..2^16-1> + obfuscated_ticket_age(4))*
+    #   binders<33..2^16-1>:   binder_entry(1-byte len + 32 bytes)*
+    var ticket_len = len(ticket.ticket)
+    var obf_age = ticket_send_time_ms + ticket.age_add   # RFC 8446 §4.2.11.1
+
+    # Identity entry: 2-byte identity_len + identity + 4-byte obfuscated_age
+    var identity_entry_len = 2 + ticket_len + 4
+    var identities_len = identity_entry_len   # single identity
+
+    # Binder entry: 1-byte binder_len + 32-byte zeroed binder placeholder
+    var binders_len = 1 + 32   # single binder
+
+    var psk_ext_data_len = 2 + identities_len + 2 + binders_len
+    _append_u16be(exts, EXT_PRE_SHARED_KEY)
+    _append_u16be(exts, UInt16(psk_ext_data_len))
+
+    # identities list
+    _append_u16be(exts, UInt16(identities_len))
+    _append_u16be(exts, UInt16(ticket_len))
+    _append_bytes(exts, ticket.ticket)
+    _append_u8(exts, UInt8((obf_age >> 24) & 0xFF))
+    _append_u8(exts, UInt8((obf_age >> 16) & 0xFF))
+    _append_u8(exts, UInt8((obf_age >> 8) & 0xFF))
+    _append_u8(exts, UInt8(obf_age & 0xFF))
+
+    # binders list (zeroed placeholder — caller must patch before sending)
+    _append_u16be(exts, UInt16(binders_len))
+    _append_u8(exts, 32)   # binder length
+    for _ in range(32):
+        _append_u8(exts, 0)   # zeroed binder
+
+    # Append extensions to body
+    _append_u16be(body, UInt16(len(exts)))
+    _append_bytes(body, exts)
+
+    # Wrap in Handshake header
+    var out = List[UInt8](capacity=4 + len(body))
+    _append_u8(out, HS_CLIENT_HELLO)
+    _append_u24be(out, len(body))
+    _append_bytes(out, body)
+    return out^
+
+
+# ============================================================================
+# parse_server_hello_selected_identity
+# ============================================================================
+
+def parse_server_hello_selected_identity(ext_bytes: List[UInt8]) -> Int:
+    """Find pre_shared_key extension in ServerHello and return selected_identity index.
+
+    Returns -1 if the extension is absent (PSK rejected, full handshake).
+    Returns the selected identity index (typically 0) if PSK was accepted.
+    """
+    var off = 0
+    while off + 4 <= len(ext_bytes):
+        var ext_type = UInt16(0)
+        if off + 1 < len(ext_bytes):
+            ext_type = (UInt16(ext_bytes[off]) << 8) | UInt16(ext_bytes[off + 1])
+        var ext_len = 0
+        if off + 3 < len(ext_bytes):
+            ext_len = (Int(ext_bytes[off + 2]) << 8) | Int(ext_bytes[off + 3])
+        off += 4
+        if off + ext_len > len(ext_bytes):
+            return -1
+        if ext_type == EXT_PRE_SHARED_KEY:
+            # selected_identity is a single uint16
+            if ext_len >= 2:
+                return (Int(ext_bytes[off]) << 8) | Int(ext_bytes[off + 1])
+            return -1
+        off += ext_len
+    return -1

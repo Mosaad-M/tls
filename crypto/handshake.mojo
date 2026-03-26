@@ -236,6 +236,63 @@ def tls13_verify_finished_sha384(
 # CertificateVerify support
 # ============================================================================
 
+# ============================================================================
+# PSK / Session Ticket key schedule (RFC 8446 §4.6.1, §7.1)
+# ============================================================================
+
+def tls13_psk_from_ticket(
+    resumption_secret: List[UInt8],
+    ticket_nonce: List[UInt8],
+) raises -> List[UInt8]:
+    """Derive PSK from resumption_secret and ticket nonce.
+
+    RFC 8446 §4.6.1:
+      PSK = HKDF-Expand-Label(resumption_secret, "resumption", ticket_nonce, 32)
+
+    ticket_nonce comes from the NewSessionTicket message.
+    Returns 32 bytes (SHA-256 cipher schedule).
+    """
+    return hkdf_expand_label(resumption_secret, "resumption", ticket_nonce, 32)
+
+
+def tls13_early_secret_from_psk(psk: List[UInt8]) -> List[UInt8]:
+    """Compute TLS 1.3 Early Secret seeded with PSK.
+
+    RFC 8446 §7.1: Early Secret = HKDF-Extract(0^32, PSK)
+    Use instead of tls13_early_secret() for PSK resumption.
+    Returns 32 bytes.
+    """
+    return hkdf_extract(_zeros32(), psk)
+
+
+def tls13_binder_key(early_secret: List[UInt8]) raises -> List[UInt8]:
+    """Compute the PSK binder key.
+
+    RFC 8446 §7.1:
+      binder_key = Derive-Secret(early_secret, "res binder", "")
+                 = HKDF-Expand-Label(early_secret, "res binder", SHA256(""), 32)
+    Returns 32 bytes.
+    """
+    var h_empty = _sha256_empty()
+    return tls13_derive_secret(early_secret, "res binder", h_empty)
+
+
+def tls13_psk_binder(
+    binder_key: List[UInt8],
+    transcript_hash: List[UInt8],
+) raises -> List[UInt8]:
+    """Compute the PSK binder value (RFC 8446 §4.2.11.2).
+
+    binder = HMAC-SHA-256(Finished-Key(binder_key), transcript_hash)
+    where Finished-Key = HKDF-Expand-Label(binder_key, "finished", "", 32)
+
+    transcript_hash covers ClientHello up to (not including) the binder field.
+    Returns 32 bytes.
+    """
+    var fk = tls13_finished_key(binder_key)
+    return tls13_compute_finished(fk, transcript_hash)
+
+
 def tls13_cert_verify_input(context: String, transcript_hash: List[UInt8]) -> List[UInt8]:
     """Build the CertificateVerify message content to be signed/verified.
 
