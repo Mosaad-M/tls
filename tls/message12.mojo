@@ -32,6 +32,12 @@ comptime TLS12_ECDHE_ECDSA_AES128_GCM_SHA256 : UInt16 = 0xC02B
 comptime TLS12_ECDHE_ECDSA_AES256_GCM_SHA384 : UInt16 = 0xC02C
 
 
+# ── TLS 1.2 handshake types ───────────────────────────────────────────────────
+comptime HS_CERTIFICATE_REQUEST : UInt8 = 0x0D
+comptime HS_CERTIFICATE         : UInt8 = 0x0B
+comptime HS_CERTIFICATE_VERIFY  : UInt8 = 0x0F
+
+
 # ============================================================================
 # parse_server_hello_version
 # ============================================================================
@@ -195,3 +201,190 @@ def parse_finished_body(body: List[UInt8]) raises -> List[UInt8]:
     if 4 + vd_len > len(body):
         raise Error("parse_finished_body: body truncated")
     return _slice(body, 4, 4 + vd_len)
+
+
+# ============================================================================
+# CertificateRequest12
+# ============================================================================
+
+struct CertificateRequest12(Copyable, Movable):
+    """RFC 5246 §7.4.4 CertificateRequest parsed fields."""
+    var certificate_types:         List[UInt8]    # e.g. [1=RSA, 64=ECDSA]
+    var supported_signature_algs:  List[UInt16]   # packed (hash_alg << 8 | sig_alg)
+    var certificate_authorities:   List[List[UInt8]]  # DER-encoded DNs (may be empty)
+
+    def __init__(out self):
+        self.certificate_types        = List[UInt8]()
+        self.supported_signature_algs = List[UInt16]()
+        self.certificate_authorities  = List[List[UInt8]]()
+
+    def __copyinit__(out self, copy: Self):
+        self.certificate_types        = copy.certificate_types.copy()
+        self.supported_signature_algs = copy.supported_signature_algs.copy()
+        self.certificate_authorities  = List[List[UInt8]]()
+        for i in range(len(copy.certificate_authorities)):
+            self.certificate_authorities.append(copy.certificate_authorities[i].copy())
+
+    def __moveinit__(out self, deinit take: Self):
+        self.certificate_types        = take.certificate_types^
+        self.supported_signature_algs = take.supported_signature_algs^
+        self.certificate_authorities  = take.certificate_authorities^
+
+
+# ============================================================================
+# parse_certificate_request12
+# ============================================================================
+
+def parse_certificate_request12(body: List[UInt8]) raises -> CertificateRequest12:
+    """RFC 5246 §7.4.4 — parse CertificateRequest handshake body."""
+    var off = 0
+    var cr = CertificateRequest12()
+
+    # certificate_types: 1-byte count + bytes
+    if off >= len(body):
+        raise Error("parse_certreq12: truncated at types_len")
+    var types_len = Int(body[off])
+    off += 1
+    if off + types_len > len(body):
+        raise Error("parse_certreq12: truncated at types")
+    for i in range(types_len):
+        cr.certificate_types.append(body[off + i])
+    off += types_len
+
+    # supported_signature_algorithms: 2-byte length + list of 2-byte pairs
+    if off + 2 > len(body):
+        raise Error("parse_certreq12: truncated at sig_algs_len")
+    var algs_len = Int(_read_u16be(body, off))
+    off += 2
+    if off + algs_len > len(body):
+        raise Error("parse_certreq12: truncated at sig_algs")
+    var algs_end = off + algs_len
+    while off + 2 <= algs_end:
+        var pair = (UInt16(body[off]) << 8) | UInt16(body[off + 1])
+        cr.supported_signature_algs.append(pair)
+        off += 2
+    off = algs_end
+
+    # certificate_authorities: 2-byte total length + list of (2-byte dn_len + DN bytes)
+    if off + 2 > len(body):
+        raise Error("parse_certreq12: truncated at ca_list_len")
+    var ca_list_len = Int(_read_u16be(body, off))
+    off += 2
+    if off + ca_list_len > len(body):
+        raise Error("parse_certreq12: truncated at ca_list")
+    var ca_end = off + ca_list_len
+    while off + 2 <= ca_end:
+        var dn_len = Int(_read_u16be(body, off))
+        off += 2
+        if off + dn_len > ca_end:
+            raise Error("parse_certreq12: truncated at ca dn")
+        cr.certificate_authorities.append(_slice(body, off, off + dn_len))
+        off += dn_len
+
+    return cr^
+
+
+# ============================================================================
+# _ecdsa_raw_to_der
+# ============================================================================
+
+def _ecdsa_raw_to_der(r: List[UInt8], s: List[UInt8]) raises -> List[UInt8]:
+    """Encode raw (r[32], s[32]) as DER SEQUENCE { INTEGER r, INTEGER s }.
+
+    Strips leading zero bytes; prepends 0x00 if high bit is set (sign extension).
+    """
+    # Strip leading zeros from r and s
+    var ri = 0
+    while ri < len(r) - 1 and r[ri] == 0:
+        ri += 1
+    var si = 0
+    while si < len(s) - 1 and s[si] == 0:
+        si += 1
+
+    var r_trim = _slice(r, ri, len(r))
+    var s_trim = _slice(s, si, len(s))
+
+    # Prepend 0x00 if high bit set (INTEGER is signed)
+    var r_der = List[UInt8]()
+    if r_trim[0] >= 0x80:
+        r_der.append(0x00)
+    for i in range(len(r_trim)):
+        r_der.append(r_trim[i])
+
+    var s_der = List[UInt8]()
+    if s_trim[0] >= 0x80:
+        s_der.append(0x00)
+    for i in range(len(s_trim)):
+        s_der.append(s_trim[i])
+
+    # SEQUENCE { INTEGER r, INTEGER s }
+    var content = List[UInt8]()
+    content.append(0x02)  # INTEGER tag
+    content.append(UInt8(len(r_der)))
+    for i in range(len(r_der)):
+        content.append(r_der[i])
+    content.append(0x02)  # INTEGER tag
+    content.append(UInt8(len(s_der)))
+    for i in range(len(s_der)):
+        content.append(s_der[i])
+
+    var out = List[UInt8]()
+    out.append(0x30)  # SEQUENCE tag
+    out.append(UInt8(len(content)))
+    for i in range(len(content)):
+        out.append(content[i])
+    return out^
+
+
+# ============================================================================
+# build_client_certificate12
+# ============================================================================
+
+def build_client_certificate12(cert_chain: List[List[UInt8]]) -> List[UInt8]:
+    """RFC 5246 §7.4.6 — build Certificate handshake message body.
+
+    An empty cert_chain produces a 'no certificate' response (valid per RFC).
+    Each entry is a DER-encoded certificate.
+    """
+    # Build the certificate_list: each entry is 3-byte length + DER bytes
+    var certs_body = List[UInt8]()
+    for i in range(len(cert_chain)):
+        var cert = cert_chain[i].copy()
+        var n = len(cert)
+        _append_u24be(certs_body, n)
+        _append_bytes(certs_body, cert)
+
+    # Wrap in outer 3-byte length
+    var out = List[UInt8]()
+    _append_u8(out, HS_CERTIFICATE)  # 0x0B
+    _append_u24be(out, 3 + len(certs_body))  # total body = 3-byte list length + certs
+    _append_u24be(out, len(certs_body))       # certificate_list length
+    _append_bytes(out, certs_body)
+    return out^
+
+
+# ============================================================================
+# build_client_certificate_verify12
+# ============================================================================
+
+def build_client_certificate_verify12(
+    sig_hash_alg: UInt8,   # e.g. 4 = SHA-256
+    sig_sig_alg:  UInt8,   # e.g. 3 = ECDSA
+    sig_bytes:    List[UInt8],
+) -> List[UInt8]:
+    """RFC 5246 §7.4.8 — build CertificateVerify handshake message body.
+
+    sig_bytes is the DER-encoded signature (output of _ecdsa_raw_to_der).
+    """
+    # body = sig_hash_alg(1) + sig_sig_alg(1) + 2-byte sig_len + sig_bytes
+    var body = List[UInt8]()
+    _append_u8(body, sig_hash_alg)
+    _append_u8(body, sig_sig_alg)
+    _append_u16be(body, UInt16(len(sig_bytes)))
+    _append_bytes(body, sig_bytes)
+
+    var out = List[UInt8]()
+    _append_u8(out, HS_CERTIFICATE_VERIFY)  # 0x0F
+    _append_u24be(out, len(body))
+    _append_bytes(out, body)
+    return out^

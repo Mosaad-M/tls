@@ -41,6 +41,7 @@ test-connection12 = "mojo run -I . tests/test_connection12.mojo"
 test-psk-handshake = "mojo run -I . tests/test_psk_handshake.mojo"
 test-session-ticket = "mojo run -I . tests/test_session_ticket.mojo"
 test-p256-sign = "mojo run -I . tests/test_p256_sign.mojo"
+test-message12-mtls = "mojo run -I . tests/test_message12_mtls.mojo"
 bench = "mojo run -I . bench/bench_crypto.mojo"
 format-hash = "mblack crypto/hash.mojo tests/test_hash.mojo"
 
@@ -54,7 +55,8 @@ test = { depends-on = [
   "test-base64", "test-pem", "test-random", "test-sha1", "test-ed25519",
   "test-record", "test-record12", "test-handshake",
   "test-message", "test-message12", "test-prf", "test-alert",
-  "test-psk-handshake", "test-session-ticket", "test-p256-sign"
+  "test-psk-handshake", "test-session-ticket", "test-p256-sign",
+  "test-message12-mtls"
 ] }
 
 [dependencies]

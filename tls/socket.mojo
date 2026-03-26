@@ -39,8 +39,10 @@ from tls.connection12 import (
 )
 from tls.message import (
     build_client_hello, parse_handshake_msg,
-    HS_SERVER_HELLO,
+    parse_new_session_ticket, SessionTicket,
+    HS_SERVER_HELLO, HS_NEW_SESSION_TICKET,
 )
+from crypto.handshake import tls13_psk_from_ticket
 from tls.message12 import parse_server_hello_version
 
 
@@ -408,8 +410,29 @@ struct TlsSocket(Movable):
                 tls_handle_incoming_alert(plaintext)
                 raise Error("tls_socket: alert (unreachable)")
 
+            if inner_type == CTYPE_HANDSHAKE:
+                # Post-handshake messages: parse and collect NewSessionTicket
+                var pos = 0
+                while pos < len(plaintext):
+                    try:
+                        var hs = parse_handshake_msg(plaintext, pos)
+                        var msg = hs[0]
+                        pos = hs[1]
+                        if msg.msg_type == HS_NEW_SESSION_TICKET:
+                            try:
+                                var ticket = parse_new_session_ticket(msg.body)
+                                ticket.psk = tls13_psk_from_ticket(
+                                    self._keys.resumption_secret, ticket.nonce
+                                )
+                                self._keys.session_tickets.append(ticket^)
+                            except:
+                                pass  # malformed ticket — ignore, do not abort
+                    except:
+                        break  # incomplete message — stop parsing
+                continue
+
             if inner_type != CTYPE_APPLICATION_DATA:
-                continue  # NewSessionTicket, etc.
+                continue  # other post-handshake types
 
             _sock_append_bytes(self._buf, plaintext)
             return  # one record successfully read
@@ -535,3 +558,13 @@ struct TlsSocket(Movable):
                 except:
                     pass
         _ = external_call["close", Int32](self._fd)
+
+    def session_tickets(self) -> List[SessionTicket]:
+        """Return copies of NewSessionTicket records received from the server.
+
+        Tickets are collected transparently during recv() calls.
+        Returns an empty list for TLS 1.2 connections or when no tickets arrived.
+        """
+        if self._is12:
+            return List[SessionTicket]()
+        return self._keys.session_tickets.copy()

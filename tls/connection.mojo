@@ -36,9 +36,10 @@ from tls.message import (
     build_client_hello, build_finished,
     parse_handshake_msg, parse_server_hello, parse_server_hello_key_share,
     parse_certificate_chain, parse_cert_verify, parse_finished,
+    parse_new_session_ticket, SessionTicket,
     HandshakeMsg,
     HS_SERVER_HELLO, HS_ENCRYPTED_EXTS, HS_CERTIFICATE,
-    HS_CERT_VERIFY, HS_FINISHED,
+    HS_CERT_VERIFY, HS_FINISHED, HS_NEW_SESSION_TICKET,
 )
 
 
@@ -62,6 +63,7 @@ struct TlsKeys(Copyable, Movable):
     var client_seqno:      UInt64
     var server_seqno:      UInt64
     var resumption_secret: List[UInt8]
+    var session_tickets:   List[SessionTicket]
 
     def __init__(out self):
         self.cipher            = 0
@@ -72,6 +74,7 @@ struct TlsKeys(Copyable, Movable):
         self.client_seqno      = 0
         self.server_seqno      = 0
         self.resumption_secret = List[UInt8]()
+        self.session_tickets   = List[SessionTicket]()
 
     def __copyinit__(out self, copy: Self):
         self.cipher            = copy.cipher
@@ -82,6 +85,7 @@ struct TlsKeys(Copyable, Movable):
         self.client_seqno      = copy.client_seqno
         self.server_seqno      = copy.server_seqno
         self.resumption_secret = copy.resumption_secret.copy()
+        self.session_tickets   = copy.session_tickets.copy()
 
     def __moveinit__(out self, deinit take: Self):
         self.cipher            = take.cipher
@@ -92,6 +96,7 @@ struct TlsKeys(Copyable, Movable):
         self.client_seqno      = take.client_seqno
         self.server_seqno      = take.server_seqno
         self.resumption_secret = take.resumption_secret^
+        self.session_tickets   = take.session_tickets^
 
 
 # ============================================================================
