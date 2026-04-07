@@ -12,7 +12,7 @@ import socket
 import sys
 
 
-def run_server(port: int, certfile: str, keyfile: str, max_conns: int = 1) -> None:
+def run_server(port: int, certfile: str, keyfile: str, max_conns: int = 1, alpn: str = "") -> None:
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_3
     ctx.maximum_version = ssl.TLSVersion.TLSv1_3
@@ -22,6 +22,9 @@ def run_server(port: int, certfile: str, keyfile: str, max_conns: int = 1) -> No
         ctx.set_ciphers("TLS_AES_128_GCM_SHA256:TLS_CHACHA20_POLY1305_SHA256")
     except ssl.SSLError:
         pass
+    # Optional ALPN: comma-separated list e.g. "h2,http/1.1"
+    if alpn:
+        ctx.set_alpn_protocols(alpn.split(","))
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -63,4 +66,5 @@ if __name__ == "__main__":
     certfile = sys.argv[2] if len(sys.argv) > 2 else "tests/server.pem"
     keyfile = sys.argv[3] if len(sys.argv) > 3 else "tests/server.key"
     max_conns = int(sys.argv[4]) if len(sys.argv) > 4 else 1
-    run_server(port, certfile, keyfile, max_conns)
+    alpn = sys.argv[5] if len(sys.argv) > 5 else ""
+    run_server(port, certfile, keyfile, max_conns, alpn)

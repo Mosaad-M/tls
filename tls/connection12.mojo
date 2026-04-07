@@ -411,12 +411,12 @@ def _tls12_handshake_impl(
         key_block = tls12_key_block(master, server_random, client_random, kb_len)
 
     # Extract keys and 4-byte implicit IVs
-    var client_key = List[UInt8](capacity=key_len)
+    var ck = List[UInt8](capacity=key_len)  # client write key
     var server_key = List[UInt8](capacity=key_len)
     var client_iv  = List[UInt8](capacity=4)
     var server_iv  = List[UInt8](capacity=4)
     for i in range(key_len):
-        client_key.append(key_block[i])
+        ck.append(key_block[i])
     for i in range(key_len):
         server_key.append(key_block[key_len + i])
     for i in range(4):
@@ -487,7 +487,7 @@ def _tls12_handshake_impl(
     th.update(fin_hs)
     th384.update(fin_hs)
 
-    var fin_payload = record_seal_12(cipher, client_key, client_iv, UInt64(0), CTYPE_HANDSHAKE, fin_hs)
+    var fin_payload = record_seal_12(cipher, ck, client_iv, UInt64(0), CTYPE_HANDSHAKE, fin_hs)
     var fin_total   = List[UInt8](capacity=5 + len(fin_payload))
     fin_total.append(CTYPE_HANDSHAKE)
     fin_total.append(0x03)
@@ -549,7 +549,7 @@ def _tls12_handshake_impl(
     # ── Step 13: Build and return TlsKeys12 ───────────────────────────────────
     var keys = TlsKeys12()
     keys.cipher           = Int(cipher)
-    keys.client_write_key = client_key^
+    keys.client_write_key = ck^
     keys.server_write_key = server_key^
     keys.client_write_iv  = client_iv^
     keys.server_write_iv  = server_iv^

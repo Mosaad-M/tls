@@ -22,10 +22,11 @@ from tls.message import (
     build_client_hello, build_finished,
     parse_handshake_msg, parse_server_hello, parse_server_hello_key_share,
     parse_certificate_chain, parse_cert_verify, parse_finished,
+    parse_alpn_from_ee,
     HandshakeMsg, ServerHello,
     HS_CLIENT_HELLO, HS_SERVER_HELLO, HS_FINISHED,
     CIPHER_TLS_AES_128_GCM_SHA256, CIPHER_TLS_AES_256_GCM_SHA384, CIPHER_TLS_CHACHA20_POLY1305_SHA256,
-    EXT_SERVER_NAME, EXT_KEY_SHARE,
+    EXT_SERVER_NAME, EXT_KEY_SHARE, EXT_ALPN,
 )
 
 
@@ -75,6 +76,38 @@ def contains_u16(data: List[UInt8], val: UInt16) -> Bool:
             return True
         i += 1
     return False
+
+
+def _slice_local(data: List[UInt8], start: Int, end: Int) -> List[UInt8]:
+    var out = List[UInt8](capacity=end - start)
+    for i in range(start, end):
+        out.append(data[i])
+    return out^
+
+
+def extract_ch_extensions(ch: List[UInt8]) -> List[UInt8]:
+    """Extract the extensions bytes from a ClientHello (assumes empty session_id).
+
+    Layout: header(4) + version(2) + random(32) + sid_len(1) + sid(0)
+            + cs_len(2) + cs(14) + comp_len(1) + comp(1) = 57 bytes fixed
+            + extensions_total_len(2) at [57:59]
+            + extensions at [59 : 59 + ext_total]
+    """
+    var ext_total = (Int(ch[57]) << 8) | Int(ch[58])
+    return _slice_local(ch, 59, 59 + ext_total)
+
+
+def find_ext_in_exts(exts: List[UInt8], target: UInt16) -> Tuple[Bool, Int, Int]:
+    """Walk extension list, return (found, data_offset, data_len) for target type."""
+    var off = 0
+    while off + 4 <= len(exts):
+        var ext_type = (UInt16(exts[off]) << 8) | UInt16(exts[off + 1])
+        var ext_len  = (Int(exts[off + 2]) << 8) | Int(exts[off + 3])
+        off += 4
+        if ext_type == target:
+            return (True, off, ext_len)
+        off += ext_len
+    return (False, 0, 0)
 
 
 def make_random() -> List[UInt8]:
@@ -275,6 +308,109 @@ def test_build_finished() raises:
             raise Error("verify_data[" + String(i) + "] mismatch in built Finished")
 
 
+# ── ALPN extension builder tests ─────────────────────────────────────────────
+
+def test_build_ch_no_alpn_no_ext() raises:
+    # With empty protocols list, EXT_ALPN must NOT appear as an extension type
+    var ch = build_client_hello(make_random(), List[UInt8](), make_key_share(), "example.com", List[String]())
+    var exts = extract_ch_extensions(ch)
+    var result = find_ext_in_exts(exts, EXT_ALPN)
+    if result[0]:
+        raise Error("EXT_ALPN (0x0010) found in extensions when no protocols given")
+
+
+def test_build_ch_alpn_h2_present() raises:
+    # protocols=["h2"] → ALPN extension type 0x0010 must appear with "h2" protocol
+    var protocols = List[String]()
+    protocols.append("h2")
+    var ch = build_client_hello(make_random(), List[UInt8](), make_key_share(), "example.com", protocols)
+    var exts = extract_ch_extensions(ch)
+    var result = find_ext_in_exts(exts, EXT_ALPN)
+    if not result[0]:
+        raise Error("EXT_ALPN (0x0010) not found in extensions with protocols=['h2']")
+    var data_off = result[1]
+    var data_len = result[2]
+    # ext_data: 2-byte ProtocolList len + protocol entries
+    # ProtocolList len should be 3 (02 68 32)
+    if data_len < 5:
+        raise Error("ALPN ext data too short: " + String(data_len))
+    var pl_len = (Int(exts[data_off]) << 8) | Int(exts[data_off + 1])
+    if pl_len != 3:
+        raise Error("expected ProtocolList len 3 for ['h2'], got " + String(pl_len))
+    # First entry: len=2, 'h', '2'
+    if exts[data_off + 2] != 2 or exts[data_off + 3] != 0x68 or exts[data_off + 4] != 0x32:
+        raise Error("ALPN 'h2' bytes not correctly encoded")
+
+
+def test_build_ch_alpn_multi_lengths() raises:
+    # protocols=["h2","http/1.1"]
+    # ProtocolList = 02 68 32 (3) + 08 68 74 74 70 2f 31 2e 31 (9) = 12 bytes
+    # ext data = 00 0c (2 bytes) + 12 bytes = 14 bytes total
+    var protocols = List[String]()
+    protocols.append("h2")
+    protocols.append("http/1.1")
+    var ch = build_client_hello(make_random(), List[UInt8](), make_key_share(), "example.com", protocols)
+    var exts = extract_ch_extensions(ch)
+    var result = find_ext_in_exts(exts, EXT_ALPN)
+    if not result[0]:
+        raise Error("EXT_ALPN not found")
+    var data_off = result[1]
+    var data_len = result[2]
+    # ext data length = 2 (ProtocolList len field) + 12 (protocol bytes) = 14
+    if data_len != 14:
+        raise Error("expected ext data length 14 for ['h2','http/1.1'], got " + String(data_len))
+    # ProtocolList length at data_off should be 12
+    var pl_len = (Int(exts[data_off]) << 8) | Int(exts[data_off + 1])
+    if pl_len != 12:
+        raise Error("expected ProtocolList length 12, got " + String(pl_len))
+
+
+# ── parse_alpn_from_ee tests ──────────────────────────────────────────────────
+
+def test_parse_alpn_from_ee_http11() raises:
+    # EE body with ALPN ext containing "http/1.1"
+    # "http/1.1" entry: 08 68 74 74 70 2f 31 2e 31 (9 bytes)
+    # ProtocolList length: 00 09
+    # ext data: 00 0b (11 bytes)
+    # ALPN ext: 00 10 00 0b 00 09 08 68 74 74 70 2f 31 2e 31 (15 bytes)
+    # extensions_total_length: 00 0f
+    var body = hex_to_bytes("000f" + "0010" + "000b" + "0009" + "0868747470" + "2f312e31")
+    var proto = parse_alpn_from_ee(body)
+    if proto != "http/1.1":
+        raise Error("expected 'http/1.1', got '" + proto + "'")
+
+
+def test_parse_alpn_from_ee_h2() raises:
+    # EE body with ALPN ext containing "h2"
+    # "h2" entry: 02 68 32 (3 bytes)
+    # ProtocolList length: 00 03
+    # ext data: 00 05 (5 bytes)
+    # ALPN ext: 00 10 00 05 00 03 02 68 32 (9 bytes)
+    # extensions_total_length: 00 09
+    var body = hex_to_bytes("0009" + "0010" + "0005" + "0003" + "026832")
+    var proto = parse_alpn_from_ee(body)
+    if proto != "h2":
+        raise Error("expected 'h2', got '" + proto + "'")
+
+
+def test_parse_alpn_from_ee_absent() raises:
+    # EE body with supported_groups (0x000a) only, no ALPN
+    # ext: 00 0a 00 00 (4 bytes)
+    # extensions_total_length: 00 04
+    var body = hex_to_bytes("0004" + "000a" + "0000")
+    var proto = parse_alpn_from_ee(body)
+    if proto != "":
+        raise Error("expected empty string when ALPN absent, got '" + proto + "'")
+
+
+def test_parse_alpn_from_ee_empty_body() raises:
+    # Empty EncryptedExtensions (no extensions at all)
+    var body = hex_to_bytes("0000")
+    var proto = parse_alpn_from_ee(body)
+    if proto != "":
+        raise Error("expected empty string for empty EE body, got '" + proto + "'")
+
+
 def main() raises:
     var passed = 0
     var failed = 0
@@ -294,6 +430,13 @@ def main() raises:
     run_test("parse_cert_verify: scheme + sig", passed, failed, test_parse_cert_verify)
     run_test("parse_finished: 32-byte verify_data", passed, failed, test_parse_finished)
     run_test("build_finished: correct 4-byte header + body", passed, failed, test_build_finished)
+    run_test("build_client_hello: no ALPN ext when protocols empty", passed, failed, test_build_ch_no_alpn_no_ext)
+    run_test("build_client_hello: ALPN ext present with ['h2']", passed, failed, test_build_ch_alpn_h2_present)
+    run_test("build_client_hello: ALPN ['h2','http/1.1'] lengths correct", passed, failed, test_build_ch_alpn_multi_lengths)
+    run_test("parse_alpn_from_ee: 'http/1.1' returned", passed, failed, test_parse_alpn_from_ee_http11)
+    run_test("parse_alpn_from_ee: 'h2' returned", passed, failed, test_parse_alpn_from_ee_h2)
+    run_test("parse_alpn_from_ee: absent -> empty string", passed, failed, test_parse_alpn_from_ee_absent)
+    run_test("parse_alpn_from_ee: empty EE body -> empty string", passed, failed, test_parse_alpn_from_ee_empty_body)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

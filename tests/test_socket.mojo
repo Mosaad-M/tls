@@ -71,6 +71,22 @@ def _run_server(port: Int, certfile: String, keyfile: String):
     _ = external_call["system", Int32](cmd.unsafe_ptr())
 
 
+def _run_server_alpn(port: Int, certfile: String, keyfile: String, alpn: String):
+    # alpn arg: comma-separated protocol list e.g. "h2,http/1.1"
+    var cmd = (
+        String("python3 tests/tls_test_server.py ")
+        + String(port)
+        + String(" ")
+        + certfile
+        + String(" ")
+        + keyfile
+        + String(" 1 ")
+        + alpn
+        + String(" &")
+    )
+    _ = external_call["system", Int32](cmd.unsafe_ptr())
+
+
 def _kill_server(port: Int):
     var cmd = (
         String("pkill -f 'tls_test_server.py ")
@@ -187,6 +203,39 @@ def test_socket_wrong_cert_raises() raises:
         raise Error("expected raise for hostname mismatch")
 
 
+def test_alpn_negotiated() raises:
+    """ALPN: negotiated_protocol() returns server-selected protocol 'h2'."""
+    # Server advertises only "h2"; client requests "h2".
+    _run_server_alpn(14449, "tests/server.pem", "tests/server.key", "h2")
+    _ = external_call["usleep", Int32](UInt32(1000000))
+    var fd = _tcp_connect(14449)
+    var anchors = _make_trust_anchors()
+    var sock = TlsSocket(fd)
+    var protocols = List[String]()
+    protocols.append("h2")
+    sock.connect("localhost", anchors, protocols)
+    var proto = sock.negotiated_protocol()
+    sock.close()
+    _kill_server(14449)
+    if proto != "h2":
+        raise Error("expected negotiated protocol 'h2', got '" + proto + "'")
+
+
+def test_alpn_no_protocols_empty() raises:
+    """ALPN: negotiated_protocol() returns '' when no ALPN in ClientHello."""
+    _run_server_alpn(14450, "tests/server.pem", "tests/server.key", "h2")
+    _ = external_call["usleep", Int32](UInt32(1000000))
+    var fd = _tcp_connect(14450)
+    var anchors = _make_trust_anchors()
+    var sock = TlsSocket(fd)
+    sock.connect("localhost", anchors)   # no alpn_protocols argument
+    var proto = sock.negotiated_protocol()
+    sock.close()
+    _kill_server(14450)
+    if proto != "":
+        raise Error("expected empty negotiated protocol, got '" + proto + "'")
+
+
 def main() raises:
     var passed = 0
     var failed = 0
@@ -198,6 +247,8 @@ def main() raises:
     run_test("TlsSocket.connect: valid cert succeeds", passed, failed, test_socket_connect)
     run_test("TlsSocket.send+recv: HTTP GET returns 200", passed, failed, test_socket_send_recv)
     run_test("TlsSocket.connect: wrong cert raises", passed, failed, test_socket_wrong_cert_raises)
+    run_test("TlsSocket.negotiated_protocol: 'h2' when server supports h2", passed, failed, test_alpn_negotiated)
+    run_test("TlsSocket.negotiated_protocol: '' when no ALPN advertised", passed, failed, test_alpn_no_protocols_empty)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

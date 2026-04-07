@@ -36,7 +36,7 @@ from tls.message import (
     build_client_hello, build_finished,
     parse_handshake_msg, parse_server_hello, parse_server_hello_key_share,
     parse_certificate_chain, parse_cert_verify, parse_finished,
-    parse_new_session_ticket, SessionTicket,
+    parse_new_session_ticket, parse_alpn_from_ee, SessionTicket,
     HandshakeMsg,
     HS_SERVER_HELLO, HS_ENCRYPTED_EXTS, HS_CERTIFICATE,
     HS_CERT_VERIFY, HS_FINISHED, HS_NEW_SESSION_TICKET,
@@ -55,48 +55,52 @@ comptime ALERT_BAD_CERT      : UInt8 = 42
 # ============================================================================
 
 struct TlsKeys(Copyable, Movable):
-    var cipher:            UInt8
-    var client_write_key:  List[UInt8]
-    var client_write_iv:   List[UInt8]
-    var server_write_key:  List[UInt8]
-    var server_write_iv:   List[UInt8]
-    var client_seqno:      UInt64
-    var server_seqno:      UInt64
-    var resumption_secret: List[UInt8]
-    var session_tickets:   List[SessionTicket]
+    var cipher:                UInt8
+    var client_write_key:      List[UInt8]
+    var client_write_iv:       List[UInt8]
+    var server_write_key:      List[UInt8]
+    var server_write_iv:       List[UInt8]
+    var client_seqno:          UInt64
+    var server_seqno:          UInt64
+    var resumption_secret:     List[UInt8]
+    var session_tickets:       List[SessionTicket]
+    var negotiated_protocol:   String   # ALPN protocol selected by server, "" if none
 
     def __init__(out self):
-        self.cipher            = 0
-        self.client_write_key  = List[UInt8]()
-        self.client_write_iv   = List[UInt8]()
-        self.server_write_key  = List[UInt8]()
-        self.server_write_iv   = List[UInt8]()
-        self.client_seqno      = 0
-        self.server_seqno      = 0
-        self.resumption_secret = List[UInt8]()
-        self.session_tickets   = List[SessionTicket]()
+        self.cipher              = 0
+        self.client_write_key    = List[UInt8]()
+        self.client_write_iv     = List[UInt8]()
+        self.server_write_key    = List[UInt8]()
+        self.server_write_iv     = List[UInt8]()
+        self.client_seqno        = 0
+        self.server_seqno        = 0
+        self.resumption_secret   = List[UInt8]()
+        self.session_tickets     = List[SessionTicket]()
+        self.negotiated_protocol = String("")
 
     def __copyinit__(out self, copy: Self):
-        self.cipher            = copy.cipher
-        self.client_write_key  = copy.client_write_key.copy()
-        self.client_write_iv   = copy.client_write_iv.copy()
-        self.server_write_key  = copy.server_write_key.copy()
-        self.server_write_iv   = copy.server_write_iv.copy()
-        self.client_seqno      = copy.client_seqno
-        self.server_seqno      = copy.server_seqno
-        self.resumption_secret = copy.resumption_secret.copy()
-        self.session_tickets   = copy.session_tickets.copy()
+        self.cipher              = copy.cipher
+        self.client_write_key    = copy.client_write_key.copy()
+        self.client_write_iv     = copy.client_write_iv.copy()
+        self.server_write_key    = copy.server_write_key.copy()
+        self.server_write_iv     = copy.server_write_iv.copy()
+        self.client_seqno        = copy.client_seqno
+        self.server_seqno        = copy.server_seqno
+        self.resumption_secret   = copy.resumption_secret.copy()
+        self.session_tickets     = copy.session_tickets.copy()
+        self.negotiated_protocol = copy.negotiated_protocol
 
     def __moveinit__(out self, deinit take: Self):
-        self.cipher            = take.cipher
-        self.client_write_key  = take.client_write_key^
-        self.client_write_iv   = take.client_write_iv^
-        self.server_write_key  = take.server_write_key^
-        self.server_write_iv   = take.server_write_iv^
-        self.client_seqno      = take.client_seqno
-        self.server_seqno      = take.server_seqno
-        self.resumption_secret = take.resumption_secret^
-        self.session_tickets   = take.session_tickets^
+        self.cipher              = take.cipher
+        self.client_write_key    = take.client_write_key^
+        self.client_write_iv     = take.client_write_iv^
+        self.server_write_key    = take.server_write_key^
+        self.server_write_iv     = take.server_write_iv^
+        self.client_seqno        = take.client_seqno
+        self.server_seqno        = take.server_seqno
+        self.resumption_secret   = take.resumption_secret^
+        self.session_tickets     = take.session_tickets^
+        self.negotiated_protocol = take.negotiated_protocol^
 
 
 # ============================================================================
@@ -390,6 +394,7 @@ def tls13_after_server_hello(
     )
 
     var ee_body   = _find_msg(hs_msgs, HS_ENCRYPTED_EXTS)
+    var alpn_proto = parse_alpn_from_ee(ee_body)
     var cert_body = _find_msg(hs_msgs, HS_CERTIFICATE)
     var cv_body   = _find_msg(hs_msgs, HS_CERT_VERIFY)
     var fin_body  = _find_msg(hs_msgs, HS_FINISHED)
@@ -502,14 +507,15 @@ def tls13_after_server_hello(
         s_ap_iv  = s_kp[1].copy()
 
     var keys = TlsKeys()
-    keys.cipher            = negotiated_cipher
-    keys.client_write_key  = c_ap_key^
-    keys.client_write_iv   = c_ap_iv^
-    keys.server_write_key  = s_ap_key^
-    keys.server_write_iv   = s_ap_iv^
-    keys.client_seqno      = 0
-    keys.server_seqno      = 0
-    keys.resumption_secret = res_secret^
+    keys.cipher              = negotiated_cipher
+    keys.client_write_key    = c_ap_key^
+    keys.client_write_iv     = c_ap_iv^
+    keys.server_write_key    = s_ap_key^
+    keys.server_write_iv     = s_ap_iv^
+    keys.client_seqno        = 0
+    keys.server_seqno        = 0
+    keys.resumption_secret   = res_secret^
+    keys.negotiated_protocol = alpn_proto^
     return keys^
 
 
@@ -518,10 +524,11 @@ def tls13_after_server_hello(
 # ============================================================================
 
 def _tls13_handshake_impl(
-    fd:            Int32,
-    hostname:      String,
-    trust_anchors: List[X509Cert],
-    cipher:        UInt8,
+    fd:             Int32,
+    hostname:       String,
+    trust_anchors:  List[X509Cert],
+    cipher:         UInt8,
+    alpn_protocols: List[String] = List[String](),
 ) raises -> TlsKeys:
     # ── Step 1: ECDHE key pair + client_random ────────────────────────────────
     var ecdhe_private = csprng_bytes(32)
@@ -529,7 +536,7 @@ def _tls13_handshake_impl(
     var client_random = csprng_bytes(32)
 
     # ── Step 2: Build + send ClientHello ─────────────────────────────────────
-    var ch_msg = build_client_hello(client_random, List[UInt8](), key_share_pub, hostname)
+    var ch_msg = build_client_hello(client_random, List[UInt8](), key_share_pub, hostname, alpn_protocols)
 
     # Use legacy version 0x0301 for ClientHello record for max compat
     var ch_n = len(ch_msg)
@@ -583,10 +590,11 @@ def _tls13_handshake_impl(
 
 
 def tls13_client_handshake(
-    fd:            Int32,
-    hostname:      String,
-    trust_anchors: List[X509Cert],
-    cipher:        UInt8,
+    fd:             Int32,
+    hostname:       String,
+    trust_anchors:  List[X509Cert],
+    cipher:         UInt8,
+    alpn_protocols: List[String] = List[String](),
 ) raises -> TlsKeys:
     """Perform a TLS 1.3 client handshake over a connected TCP socket.
 
@@ -594,15 +602,17 @@ def tls13_client_handshake(
     error, so the server can cleanly terminate the connection.
 
     Args:
-        fd:            Connected TCP socket file descriptor.
-        hostname:      Server hostname (SNI + cert verification).
-        trust_anchors: Trusted root CA certificates.
-        cipher:        Preferred cipher hint (server may negotiate differently).
+        fd:             Connected TCP socket file descriptor.
+        hostname:       Server hostname (SNI + cert verification).
+        trust_anchors:  Trusted root CA certificates.
+        cipher:         Preferred cipher hint (server may negotiate differently).
+        alpn_protocols: Optional ALPN protocol names to advertise (e.g. ["h2","http/1.1"]).
     Returns:
-        TlsKeys with application-layer keying material.
+        TlsKeys with application-layer keying material; keys.negotiated_protocol
+        holds the ALPN protocol selected by the server (or "" if none).
     """
     try:
-        return _tls13_handshake_impl(fd, hostname, trust_anchors, cipher)
+        return _tls13_handshake_impl(fd, hostname, trust_anchors, cipher, alpn_protocols)
     except e:
         tls_send_plaintext_alert(fd, 40)  # handshake_failure
         raise Error(String(e))

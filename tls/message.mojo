@@ -2,13 +2,16 @@
 # tls/message.mojo — TLS 1.3 wire-format message builders and parsers
 # ============================================================================
 # Builders:
-#   build_client_hello(client_random, session_id, key_share_pub, sni) → bytes
-#   build_finished(verify_data)                                        → bytes
+#   build_client_hello(client_random, session_id, key_share_pub, sni,
+#                      alpn_protocols=[])                             → bytes
+#   build_client_hello_with_psk(..., alpn_protocols=[])              → bytes
+#   build_finished(verify_data)                                      → bytes
 #
 # Parsers:
 #   parse_handshake_msg(data, offset) → (HandshakeMsg, new_offset)
 #   parse_server_hello(body)          → ServerHello
 #   parse_server_hello_key_share(ext_bytes) → 32-byte x25519 public key
+#   parse_alpn_from_ee(ee_body)       → negotiated protocol String (or "")
 #   parse_certificate_chain(body)     → List[List[UInt8]] (DER certs)
 #   parse_cert_verify(body)           → (sig_scheme: UInt16, sig_bytes)
 #   parse_finished(body)              → 32-byte verify_data
@@ -25,6 +28,7 @@ comptime HS_FINISHED           : UInt8 = 0x14
 
 # ── TLS extension types ───────────────────────────────────────────────────────
 comptime EXT_SERVER_NAME         : UInt16 = 0x0000
+comptime EXT_ALPN                : UInt16 = 0x0010   # RFC 7301
 comptime EXT_SUPPORTED_GROUPS    : UInt16 = 0x000A
 comptime EXT_SIG_ALGS            : UInt16 = 0x000D
 comptime EXT_SUPPORTED_VERSIONS  : UInt16 = 0x002B
@@ -149,14 +153,90 @@ def _slice(data: List[UInt8], start: Int, end: Int) raises -> List[UInt8]:
 # build_client_hello
 # ============================================================================
 
+def _build_alpn_ext(protocols: List[String]) -> List[UInt8]:
+    """Build the ALPN extension bytes (type + length + data) per RFC 7301 §3.1.
+
+    Wire format:
+        ext_type (0x0010)      2 bytes
+        ext_data_length        2 bytes
+          ProtocolList_length  2 bytes
+            protocol_len       1 byte
+            protocol_name      N bytes
+            ...                (repeated)
+    """
+    # Build the ProtocolList content: 1-byte len + name bytes for each protocol
+    var proto_list = List[UInt8](capacity=32)
+    for i in range(len(protocols)):
+        var pb = protocols[i].as_bytes()
+        _append_u8(proto_list, UInt8(len(pb)))
+        for j in range(len(pb)):
+            proto_list.append(pb[j])
+
+    # ext data = 2-byte ProtocolList length + ProtocolList content
+    var pl_len = len(proto_list)
+    var ext_data_len = 2 + pl_len
+
+    var ext = List[UInt8](capacity=4 + ext_data_len)
+    _append_u16be(ext, EXT_ALPN)                   # type
+    _append_u16be(ext, UInt16(ext_data_len))        # ext data length
+    _append_u16be(ext, UInt16(pl_len))              # ProtocolList length
+    _append_bytes(ext, proto_list)
+    return ext^
+
+
+def parse_alpn_from_ee(ee_body: List[UInt8]) -> String:
+    """Parse the ALPN extension from an EncryptedExtensions body.
+
+    Wire format of ee_body:
+        extensions_total_length  2 bytes
+        [ext_type(2) + ext_len(2) + ext_data(ext_len)]*
+
+    Returns the first (and only) protocol name the server selected,
+    or "" if the ALPN extension is absent or the body is malformed.
+    """
+    var n = len(ee_body)
+    if n < 2:
+        return String("")
+    var total = (Int(ee_body[0]) << 8) | Int(ee_body[1])
+    var off = 2
+    var end = off + total
+    if end > n:
+        end = n
+    while off + 4 <= end:
+        var ext_type = (UInt16(ee_body[off]) << 8) | UInt16(ee_body[off + 1])
+        var ext_len  = (Int(ee_body[off + 2]) << 8) | Int(ee_body[off + 3])
+        off += 4
+        if off + ext_len > end:
+            break
+        if ext_type == EXT_ALPN:
+            # ext_data: 2-byte ProtocolList length, then 1-byte name_len + name
+            if ext_len < 4:
+                return String("")
+            # pl_len = protocol list byte count
+            var pl_off = off + 2  # skip ProtocolList length field
+            var name_len = Int(ee_body[pl_off])
+            pl_off += 1
+            if pl_off + name_len > off + ext_len:
+                return String("")
+            var name_bytes = List[UInt8](capacity=name_len + 1)
+            for k in range(name_len):
+                name_bytes.append(ee_body[pl_off + k])
+            return String(unsafe_from_utf8=name_bytes^)
+        off += ext_len
+    return String("")
+
+
 def build_client_hello(
-    client_random: List[UInt8],
-    session_id:    List[UInt8],
-    key_share_pub: List[UInt8],
-    sni:           String,
+    client_random:  List[UInt8],
+    session_id:     List[UInt8],
+    key_share_pub:  List[UInt8],
+    sni:            String,
+    alpn_protocols: List[String] = List[String](),
 ) -> List[UInt8]:
     """Build a TLS 1.3 ClientHello handshake message.
 
+    alpn_protocols: optional list of ALPN protocol names (e.g. ["h2", "http/1.1"]).
+    When non-empty, appends an ALPN extension (RFC 7301) after key_share.
     Returns raw Handshake bytes (type=0x01 + 3-byte length + body).
     """
     var body = List[UInt8](capacity=256)
@@ -241,6 +321,10 @@ def build_client_hello(
     _append_u16be(exts, GROUP_X25519)
     _append_u16be(exts, 32)   # key length
     _append_bytes(exts, key_share_pub)
+
+    # ALPN (RFC 7301) — optional, emitted only when protocols are specified
+    if len(alpn_protocols) > 0:
+        _append_bytes(exts, _build_alpn_ext(alpn_protocols))
 
     # Append extensions length + extensions to body
     _append_u16be(body, UInt16(len(exts)))
@@ -556,6 +640,7 @@ def build_client_hello_with_psk(
     sni:            String,
     ticket:         SessionTicket,
     ticket_send_time_ms: UInt32,    # current time in ms (for obfuscated_ticket_age)
+    alpn_protocols: List[String] = List[String](),
 ) -> List[UInt8]:
     """Build a TLS 1.3 ClientHello with PSK resumption extensions.
 
@@ -645,6 +730,10 @@ def build_client_hello_with_psk(
     _append_u16be(exts, GROUP_X25519)
     _append_u16be(exts, 32)
     _append_bytes(exts, key_share_pub)
+
+    # ALPN — before PSK extensions (pre_shared_key must be last; RFC 8446 §4.2.11)
+    if len(alpn_protocols) > 0:
+        _append_bytes(exts, _build_alpn_ext(alpn_protocols))
 
     # psk_key_exchange_modes (0x002D): only psk_dhe_ke = 1
     # RFC 8446 §4.2.9: ext_data = modes_len(1) + mode(1)

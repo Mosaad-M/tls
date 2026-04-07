@@ -7,8 +7,11 @@
 #
 #   struct TlsSocket(Movable):
 #       def __init__(out self, tcp_fd: Int32 = 0)
-#       def connect(mut self, hostname: String, trust_anchors: List[X509Cert]) raises
+#       def connect(mut self, hostname: String, trust_anchors: List[X509Cert],
+#                   alpn_protocols: List[String] = []) raises
 #           Auto-negotiates TLS 1.3 or TLS 1.2 based on server's ServerHello.
+#       def negotiated_protocol(self) -> String
+#           Returns ALPN protocol selected by the server, or "" if not negotiated.
 #       def send(mut self, data: List[UInt8]) raises -> Int
 #       def recv(mut self, max_bytes: Int) raises -> List[UInt8]
 #       def recv_all(mut self, max_size: Int = 16*1024*1024) raises -> List[UInt8]
@@ -165,8 +168,18 @@ struct TlsSocket(Movable):
         self._buf    = take._buf^
         self._is12   = take._is12
 
-    def connect(mut self, hostname: String, trust_anchors: List[X509Cert]) raises:
-        """Perform TLS handshake, auto-negotiating TLS 1.3 or TLS 1.2."""
+    def connect(
+        mut self,
+        hostname:       String,
+        trust_anchors:  List[X509Cert],
+        alpn_protocols: List[String] = List[String](),
+    ) raises:
+        """Perform TLS handshake, auto-negotiating TLS 1.3 or TLS 1.2.
+
+        alpn_protocols: optional ALPN protocol names (e.g. ["h2", "http/1.1"]).
+        After a successful handshake, call negotiated_protocol() to read the
+        server's selection. Returns "" if ALPN was not advertised or not echoed.
+        """
 
         # ── Generate ECDHE key pair + client_random ───────────────────────────
         var ecdhe_private = csprng_bytes(32)
@@ -174,7 +187,7 @@ struct TlsSocket(Movable):
         var client_random = csprng_bytes(32)
 
         # ── Build + send ClientHello (unified TLS 1.3 + 1.2 cipher suites) ───
-        var ch_msg = build_client_hello(client_random, List[UInt8](), key_share_pub, hostname)
+        var ch_msg = build_client_hello(client_random, List[UInt8](), key_share_pub, hostname, alpn_protocols)
 
         # ClientHello record uses legacy version 0x0301 for compatibility
         var ch_n = len(ch_msg)
@@ -260,10 +273,11 @@ struct TlsSocket(Movable):
 
     def connect_with_client_cert(
         mut self,
-        hostname:      String,
-        trust_anchors: List[X509Cert],
-        client_cert:   List[UInt8],   # DER-encoded leaf certificate
-        client_key:    List[UInt8],   # 32-byte P-256 private scalar
+        hostname:       String,
+        trust_anchors:  List[X509Cert],
+        client_cert:    List[UInt8],   # DER-encoded leaf certificate
+        client_key:     List[UInt8],   # 32-byte P-256 private scalar
+        alpn_protocols: List[String] = List[String](),
     ) raises:
         """TLS 1.2 mTLS handshake with P-256 ECDSA client authentication.
 
@@ -277,7 +291,7 @@ struct TlsSocket(Movable):
         var key_share_pub = x25519_public_key(ecdhe_private)
         var client_random = csprng_bytes(32)
 
-        var ch_msg = build_client_hello(client_random, List[UInt8](), key_share_pub, hostname)
+        var ch_msg = build_client_hello(client_random, List[UInt8](), key_share_pub, hostname, alpn_protocols)
         var ch_n = len(ch_msg)
         var ch_record = List[UInt8](capacity=5 + ch_n)
         ch_record.append(0x16)
@@ -501,7 +515,7 @@ struct TlsSocket(Movable):
                 while pos < len(plaintext):
                     try:
                         var hs = parse_handshake_msg(plaintext, pos)
-                        var msg = hs[0]
+                        var msg = hs[0].copy()
                         pos = hs[1]
                         if msg.msg_type == HS_NEW_SESSION_TICKET:
                             try:
@@ -653,3 +667,15 @@ struct TlsSocket(Movable):
         if self._is12:
             return List[SessionTicket]()
         return self._keys.session_tickets.copy()
+
+    def negotiated_protocol(self) -> String:
+        """Return the ALPN protocol selected by the server during the handshake.
+
+        Returns the protocol name (e.g. "h2" or "http/1.1") if the server
+        echoed an ALPN extension in EncryptedExtensions, or "" if ALPN was
+        not advertised in the ClientHello, not supported by the server, or
+        this is a TLS 1.2 connection (TLS 1.2 ALPN deferred to v1.4.0).
+        """
+        if self._is12:
+            return String("")
+        return self._keys.negotiated_protocol
