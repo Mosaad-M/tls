@@ -20,6 +20,7 @@
 
 from std.ffi import external_call
 from std.memory.unsafe_pointer import alloc
+from std.sys.info import CompilationTarget
 from crypto.cert import X509Cert, cert_parse
 from crypto.pem import pem_decode
 from crypto.hash import SHA256, SHA384
@@ -100,7 +101,10 @@ def load_system_ca_bundle() raises -> List[X509Cert]:
     PEM-decodes all CERTIFICATE blocks, and cert_parses each one.
     Silently skips certs that fail to parse.
     """
-    var path = String("/etc/ssl/certs/ca-certificates.crt")
+    comptime if CompilationTarget.is_macos():
+        var path = String("/etc/ssl/cert.pem")
+    else:
+        var path = String("/etc/ssl/certs/ca-certificates.crt")
     var O_RDONLY: Int32 = 0
     var fd = external_call["open", Int32](path.unsafe_ptr(), O_RDONLY)
     if fd < 0:
