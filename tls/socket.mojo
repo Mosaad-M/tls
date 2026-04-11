@@ -97,14 +97,13 @@ def _sock_wrap_hs_msg(msg_type: UInt8, body: List[UInt8]) -> List[UInt8]:
 def load_system_ca_bundle() raises -> List[X509Cert]:
     """Load trusted CA certificates from the system CA bundle.
 
-    Reads /etc/ssl/certs/ca-certificates.crt (Debian/Ubuntu/WSL),
+    macOS: /etc/ssl/cert.pem
+    Linux: /etc/ssl/certs/ca-certificates.crt
     PEM-decodes all CERTIFICATE blocks, and cert_parses each one.
     Silently skips certs that fail to parse.
     """
-    comptime if CompilationTarget.is_macos():
-        var path = String("/etc/ssl/cert.pem")
-    else:
-        var path = String("/etc/ssl/certs/ca-certificates.crt")
+    comptime CA_BUNDLE = "/etc/ssl/cert.pem" if CompilationTarget.is_macos() else "/etc/ssl/certs/ca-certificates.crt"
+    var path = String(CA_BUNDLE)
     var O_RDONLY: Int32 = 0
     var fd = external_call["open", Int32](path.unsafe_ptr(), O_RDONLY)
     if fd < 0:
