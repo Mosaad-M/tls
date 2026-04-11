@@ -7,6 +7,7 @@
 
 from std.ffi import external_call
 from std.memory.unsafe_pointer import alloc
+from std.sys.info import CompilationTarget
 from tls.connection import (
     tls_send_alert,
     tls_handle_incoming_alert,
@@ -24,22 +25,23 @@ from tls.connection import (
 def _capture_reset() raises:
     """Truncate /tmp/mojo_alert_test.bin to zero bytes."""
     var path = String("/tmp/mojo_alert_test.bin")
-    # O_WRONLY | O_CREAT | O_TRUNC = 1 | 64 | 512 = 577
-    var flags: Int32 = 577
-    var mode:  Int32 = 420   # 0o644
-    var fd = external_call["open", Int32](path.unsafe_ptr(), flags, mode)
+    # O_WRONLY | O_CREAT | O_TRUNC: Linux 1|64|512=577, macOS 1|512|1024=1537
+    comptime FLAGS_RESET = 1537 if CompilationTarget.is_macos() else 577
+    var fd = external_call["open", Int32](path.unsafe_ptr(), Int32(FLAGS_RESET), Int32(420))
     if fd < 0:
         raise Error("capture_reset: open failed")
     _ = external_call["close", Int32](fd)
+    # Mojo FFI does not reliably pass the variadic mode arg to open() on macOS;
+    # use chmod to ensure the file is readable for _capture_read.
+    _ = external_call["chmod", Int32](path.unsafe_ptr(), Int32(420))
 
 
 def _capture_write(data: List[UInt8]) raises:
     """Append data to /tmp/mojo_alert_test.bin."""
     var path = String("/tmp/mojo_alert_test.bin")
-    # O_WRONLY | O_CREAT | O_APPEND = 1 | 64 | 1024 = 1089
-    var flags: Int32 = 1089
-    var mode:  Int32 = 420   # 0o644
-    var fd = external_call["open", Int32](path.unsafe_ptr(), flags, mode)
+    # O_WRONLY | O_CREAT | O_APPEND: Linux 1|64|1024=1089, macOS 1|512|8=521
+    comptime FLAGS_WRITE = 521 if CompilationTarget.is_macos() else 1089
+    var fd = external_call["open", Int32](path.unsafe_ptr(), Int32(FLAGS_WRITE), Int32(420))
     if fd < 0:
         raise Error("capture_write: open failed")
     var n = len(data)
