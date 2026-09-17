@@ -6,7 +6,7 @@
 # ============================================================================
 
 from std.ffi import external_call
-from std.memory.unsafe_pointer import alloc
+from std.memory import alloc
 from crypto.cert import X509Cert, cert_parse
 from crypto.record import CIPHER_AES_128_GCM
 from tls.connection import tls13_client_handshake, TlsKeys
@@ -14,7 +14,7 @@ from tls.connection import tls13_client_handshake, TlsKeys
 
 # ── Test certificate constants ─────────────────────────────────────────────
 # CA (self-signed, TLS Test CA, ECDSA P-256)
-comptime CA_DER_HEX = "3082019230820138a0030201020214573f65a34f1eda3f679a037a6e62e8bfbeb09603300a06082a8648ce3d04030230163114301206035504030c0b544c532054657374204341301e170d3236303330373137333935345a170d3331303330373137333935345a30163114301206035504030c0b544c5320546573742043413059301306072a8648ce3d020106082a8648ce3d0301070342000471185cd463948dea0ac90046f6fc4f385638b7715824723a10d4fa25b69895532047ab52ca3e74261d5b175d27cfb0921f47c26c618c798bf33c48c7b3bb7941a3643062301d0603551d0e04160414896a744421f5317a4cc07a5b7dbef8192c8f4d2b301f0603551d23041830168014896a744421f5317a4cc07a5b7dbef8192c8f4d2b300f0603551d130101ff040530030101ff300f0603551d130101ff040530030101ff300a06082a8648ce3d040302034800304502207d6bca651f67a2edff1bd713578bf452ab4eaacc270e4d94f2ad2984cffb45d5022100a3d7699dccebc90383b97b220b95a85d860476ad98fe7c87bd19df7a9ff4f520"
+comptime CA_DER_HEX = "3082018130820127a003020102021473b219db4dacd566136d712a9fc09cda8f5a50c2300a06082a8648ce3d04030230163114301206035504030c0b544c532054657374204341301e170d3236303931373133343032345a170d3331303931373133343032345a30163114301206035504030c0b544c5320546573742043413059301306072a8648ce3d020106082a8648ce3d03010703420004817e79ec91a4dc46ddbce8c40d9a574d1d6fdc4b14fe09eef893005bf0491cc90a94949a5be09350677082ed75a571c3f2d5925a7b24e83a3056a54eec918ff6a3533051301d0603551d0e041604149e33d94c2566681719b896baeeb843b1a05e8447301f0603551d230418301680149e33d94c2566681719b896baeeb843b1a05e8447300f0603551d130101ff040530030101ff300a06082a8648ce3d040302034800304502202cffda36351d36271e8aca505babcc18bfb636b3ec933bc87305bad0f839154b022100fb148e777f40b849417900b9f9eabef582560e5796ea8c9dfb3237ab4c612f52"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -41,17 +41,17 @@ def _tcp_connect(port: Int) raises -> Int32:
         raise Error("socket() failed")
     var addr = alloc[UInt8](16)
     for i in range(16):
-        (addr + i)[] = 0
-    (addr + 0)[] = 2                              # AF_INET low byte
-    (addr + 1)[] = 0                              # AF_INET high byte
-    (addr + 2)[] = UInt8((port >> 8) & 0xFF)      # sin_port high
-    (addr + 3)[] = UInt8(port & 0xFF)             # sin_port low
-    (addr + 4)[] = 127                            # 127.0.0.1
-    (addr + 5)[] = 0
-    (addr + 6)[] = 0
-    (addr + 7)[] = 1
+        addr[unsafe_offset=i] = 0
+    addr[unsafe_offset=0] = 2                              # AF_INET low byte
+    addr[unsafe_offset=1] = 0                              # AF_INET high byte
+    addr[unsafe_offset=2] = UInt8((port >> 8) & 0xFF)      # sin_port high
+    addr[unsafe_offset=3] = UInt8(port & 0xFF)             # sin_port low
+    addr[unsafe_offset=4] = 127                            # 127.0.0.1
+    addr[unsafe_offset=5] = 0
+    addr[unsafe_offset=6] = 0
+    addr[unsafe_offset=7] = 1
     var ret = external_call["connect", Int32](fd, addr, Int32(16))
-    addr.free()
+    addr.unsafe_free()
     if ret < 0:
         _ = external_call["close", Int32](fd)
         raise Error("connect() failed to 127.0.0.1:" + String(port))
@@ -69,7 +69,7 @@ def _run_server(port: Int, certfile: String, keyfile: String):
         + keyfile
         + String(" &")
     )
-    _ = external_call["system", Int32](cmd.unsafe_ptr())
+    _ = external_call["system", Int32]((cmd + String("\0")).unsafe_ptr())
 
 
 def _kill_server(port: Int):
@@ -79,7 +79,7 @@ def _kill_server(port: Int):
         + String(port)
         + String("'")
     )
-    _ = external_call["system", Int32](cmd.unsafe_ptr())
+    _ = external_call["system", Int32]((cmd + String("\0")).unsafe_ptr())
 
 
 def _make_trust_anchors() raises -> List[X509Cert]:
@@ -88,11 +88,10 @@ def _make_trust_anchors() raises -> List[X509Cert]:
     return anchors^
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -140,8 +139,8 @@ def main() raises:
     print("=== TLS Connection Tests ===")
     print()
 
-    run_test("TLS 1.3 handshake with localhost cert", passed, failed, test_handshake_success)
-    run_test("hostname mismatch cert raises", passed, failed, test_hostname_mismatch)
+    run_test[test_handshake_success]("TLS 1.3 handshake with localhost cert", passed, failed)
+    run_test[test_hostname_mismatch]("hostname mismatch cert raises", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

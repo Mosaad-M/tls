@@ -12,9 +12,9 @@ from crypto.ed25519 import ed25519_public_key, ed25519_sign, ed25519_verify
 
 def hex_to_bytes(s: String) raises -> List[UInt8]:
     """Decode lowercase hex string to byte list."""
-    if len(s) % 2 != 0:
+    if s.byte_length() % 2 != 0:
         raise Error("hex_to_bytes: odd length")
-    var out = List[UInt8](capacity=len(s) // 2)
+    var out = List[UInt8](capacity=s.byte_length() // 2)
     var raw = s.as_bytes()
     for i in range(0, len(raw), 2):
         var hi = _nibble(raw[i])
@@ -47,11 +47,10 @@ def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -392,24 +391,24 @@ def main() raises:
     print("=== Ed25519 Tests (RFC 8032 §6.1) ===")
     print()
 
-    run_test("Vec1: public key", passed, failed, test_vec1_public_key)
-    run_test("Vec1: sign (empty msg)", passed, failed, test_vec1_sign)
-    run_test("Vec1: verify", passed, failed, test_vec1_verify)
+    run_test[test_vec1_public_key]("Vec1: public key", passed, failed)
+    run_test[test_vec1_sign]("Vec1: sign (empty msg)", passed, failed)
+    run_test[test_vec1_verify]("Vec1: verify", passed, failed)
 
-    run_test("Vec2: public key", passed, failed, test_vec2_public_key)
-    run_test("Vec2: sign (1-byte msg)", passed, failed, test_vec2_sign)
-    run_test("Vec2: verify", passed, failed, test_vec2_verify)
+    run_test[test_vec2_public_key]("Vec2: public key", passed, failed)
+    run_test[test_vec2_sign]("Vec2: sign (1-byte msg)", passed, failed)
+    run_test[test_vec2_verify]("Vec2: verify", passed, failed)
 
-    run_test("Vec3: public key", passed, failed, test_vec3_public_key)
-    run_test("Vec3: sign (2-byte msg)", passed, failed, test_vec3_sign)
-    run_test("Vec3: verify", passed, failed, test_vec3_verify)
+    run_test[test_vec3_public_key]("Vec3: public key", passed, failed)
+    run_test[test_vec3_sign]("Vec3: sign (2-byte msg)", passed, failed)
+    run_test[test_vec3_verify]("Vec3: verify", passed, failed)
 
-    run_test("Vec4: public key", passed, failed, test_vec4_public_key)
-    run_test("Vec4: sign (1023-byte msg)", passed, failed, test_vec4_sign)
-    run_test("Vec4: verify", passed, failed, test_vec4_verify)
+    run_test[test_vec4_public_key]("Vec4: public key", passed, failed)
+    run_test[test_vec4_sign]("Vec4: sign (1023-byte msg)", passed, failed)
+    run_test[test_vec4_verify]("Vec4: verify", passed, failed)
 
-    run_test("Invalid signature rejected", passed, failed, test_invalid_sig)
-    run_test("Sign/verify round-trip", passed, failed, test_roundtrip)
+    run_test[test_invalid_sig]("Invalid signature rejected", passed, failed)
+    run_test[test_roundtrip]("Sign/verify round-trip", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

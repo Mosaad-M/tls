@@ -8,7 +8,7 @@
 # ============================================================================
 
 from std.ffi import external_call
-from std.memory.unsafe_pointer import alloc
+from std.memory import alloc
 
 
 def csprng_bytes(n: Int) raises -> List[UInt8]:
@@ -22,20 +22,20 @@ def csprng_bytes(n: Int) raises -> List[UInt8]:
     var pn = len(pb)
     var pbuf = alloc[UInt8](pn + 1)
     for i in range(pn):
-        (pbuf + i)[] = pb[i]
-    (pbuf + pn)[] = 0
+        pbuf[unsafe_offset=i] = pb[i]
+    pbuf[unsafe_offset=pn] = 0
 
     var fd = external_call["open", Int32](pbuf, Int32(0))  # O_RDONLY = 0
-    pbuf.free()
+    pbuf.unsafe_free()
     if fd < 0:
         raise Error("csprng_bytes: cannot open /dev/urandom")
 
     var buf = alloc[UInt8](n)
     var total = 0
     while total < n:
-        var got = external_call["read", Int](fd, buf + total, n - total)
+        var got = external_call["read", Int](fd, buf.unsafe_offset(total), n - total)
         if got <= 0:
-            buf.free()
+            buf.unsafe_free()
             _ = external_call["close", Int32](fd)
             raise Error("csprng_bytes: read from /dev/urandom failed")
         total += got
@@ -43,6 +43,6 @@ def csprng_bytes(n: Int) raises -> List[UInt8]:
 
     var out = List[UInt8](capacity=n)
     for i in range(n):
-        out.append((buf + i)[])
-    buf.free()
+        out.append(buf[unsafe_offset=i])
+    buf.unsafe_free()
     return out^

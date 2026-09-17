@@ -36,16 +36,15 @@ def hex_to_bytes(h: String) -> List[UInt8]:
 
 def make_bytes(value: UInt8, count: Int) -> List[UInt8]:
     var out = List[UInt8](capacity=count)
-    for i in range(count):
+    for _ in range(count):
         out.append(value)
     return out^
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -59,7 +58,7 @@ def run_test(
 # ── Tests ──────────────────────────────────────────────────────────────────
 
 def test_p_hash_sha256_48() raises:
-    """p_hash_sha256: secret=0x01*32, seed=0x02*32 → 48 bytes."""
+    """P_hash_sha256: secret=0x01*32, seed=0x02*32 → 48 bytes."""
     var secret = make_bytes(0x01, 32)
     var seed   = make_bytes(0x02, 32)
     var expected = hex_to_bytes(
@@ -75,7 +74,7 @@ def test_p_hash_sha256_48() raises:
 
 
 def test_p_hash_sha384_48() raises:
-    """p_hash_sha384: secret=0x01*32, seed=0x02*32 → 48 bytes."""
+    """P_hash_sha384: secret=0x01*32, seed=0x02*32 → 48 bytes."""
     var secret = make_bytes(0x01, 32)
     var seed   = make_bytes(0x02, 32)
     var expected = hex_to_bytes(
@@ -91,7 +90,7 @@ def test_p_hash_sha384_48() raises:
 
 
 def test_prf_sha256_100() raises:
-    """prf_sha256: label='test label', secret=0x01*32, seed=0x02*32 → 100 bytes."""
+    """Prf_sha256: label='test label', secret=0x01*32, seed=0x02*32 → 100 bytes."""
     var secret = make_bytes(0x01, 32)
     var seed   = make_bytes(0x02, 32)
     var expected = hex_to_bytes(
@@ -109,7 +108,7 @@ def test_prf_sha256_100() raises:
 
 
 def test_tls12_master_secret() raises:
-    """tls12_master_secret: pre_master=0x03*48, randoms=0x04*32 || 0x05*32."""
+    """Tls12_master_secret: pre_master=0x03*48, randoms=0x04*32 || 0x05*32."""
     var pre_master     = make_bytes(0x03, 48)
     var client_random  = make_bytes(0x04, 32)
     var server_random  = make_bytes(0x05, 32)
@@ -126,7 +125,7 @@ def test_tls12_master_secret() raises:
 
 
 def test_tls12_key_block() raises:
-    """tls12_key_block: 40 bytes of key material."""
+    """Tls12_key_block: 40 bytes of key material."""
     # Use master secret derived in test above
     var pre_master     = make_bytes(0x03, 48)
     var client_random  = make_bytes(0x04, 32)
@@ -145,7 +144,7 @@ def test_tls12_key_block() raises:
 
 
 def test_tls12_verify_data_client() raises:
-    """tls12_verify_data 'client finished' → 12 bytes."""
+    """Tls12_verify_data 'client finished' → 12 bytes."""
     var pre_master     = make_bytes(0x03, 48)
     var client_random  = make_bytes(0x04, 32)
     var server_random  = make_bytes(0x05, 32)
@@ -161,7 +160,7 @@ def test_tls12_verify_data_client() raises:
 
 
 def test_tls12_verify_data_server() raises:
-    """tls12_verify_data 'server finished' → 12 bytes."""
+    """Tls12_verify_data 'server finished' → 12 bytes."""
     var pre_master     = make_bytes(0x03, 48)
     var client_random  = make_bytes(0x04, 32)
     var server_random  = make_bytes(0x05, 32)
@@ -177,7 +176,7 @@ def test_tls12_verify_data_server() raises:
 
 
 def test_prf_sha384_100() raises:
-    """prf_sha384: label='test label', secret=0x01*32, seed=0x02*32 → 100 bytes."""
+    """Prf_sha384: label='test label', secret=0x01*32, seed=0x02*32 → 100 bytes."""
     var secret = make_bytes(0x01, 32)
     var seed   = make_bytes(0x02, 32)
     var expected = hex_to_bytes(
@@ -201,14 +200,14 @@ def main() raises:
     print("=== TLS 1.2 PRF Tests ===")
     print()
 
-    run_test("p_hash_sha256: 48 bytes", passed, failed, test_p_hash_sha256_48)
-    run_test("p_hash_sha384: 48 bytes", passed, failed, test_p_hash_sha384_48)
-    run_test("prf_sha256: 100 bytes", passed, failed, test_prf_sha256_100)
-    run_test("prf_sha384: 100 bytes", passed, failed, test_prf_sha384_100)
-    run_test("tls12_master_secret: 48 bytes", passed, failed, test_tls12_master_secret)
-    run_test("tls12_key_block: 40 bytes", passed, failed, test_tls12_key_block)
-    run_test("tls12_verify_data client finished", passed, failed, test_tls12_verify_data_client)
-    run_test("tls12_verify_data server finished", passed, failed, test_tls12_verify_data_server)
+    run_test[test_p_hash_sha256_48]("p_hash_sha256: 48 bytes", passed, failed)
+    run_test[test_p_hash_sha384_48]("p_hash_sha384: 48 bytes", passed, failed)
+    run_test[test_prf_sha256_100]("prf_sha256: 100 bytes", passed, failed)
+    run_test[test_prf_sha384_100]("prf_sha384: 100 bytes", passed, failed)
+    run_test[test_tls12_master_secret]("tls12_master_secret: 48 bytes", passed, failed)
+    run_test[test_tls12_key_block]("tls12_key_block: 40 bytes", passed, failed)
+    run_test[test_tls12_verify_data_client]("tls12_verify_data client finished", passed, failed)
+    run_test[test_tls12_verify_data_server]("tls12_verify_data server finished", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

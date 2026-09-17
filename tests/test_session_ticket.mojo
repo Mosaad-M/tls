@@ -54,7 +54,11 @@ def assert_true(cond: Bool, label: String) raises:
         raise Error(label + ": expected True")
 
 
-def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
+def run_test[test_fn: def() thin raises -> None](
+    name: String,
+    mut passed: Int,
+    mut failed: Int,
+):
     try:
         test_fn()
         print("  PASS:", name)
@@ -277,16 +281,16 @@ def main() raises:
     print("=== Session Ticket Parser Tests ===")
     print()
 
-    run_test("parse valid minimal ticket",       passed, failed, test_parse_valid_minimal)
-    run_test("parse non-empty nonce",            passed, failed, test_parse_nonempty_nonce)
-    run_test("truncated at lifetime",            passed, failed, test_truncated_at_lifetime)
-    run_test("truncated at age_add",             passed, failed, test_truncated_at_age_add)
-    run_test("truncated at nonce",               passed, failed, test_truncated_at_nonce)
-    run_test("truncated at ticket",              passed, failed, test_truncated_at_ticket)
-    run_test("zero-length ticket raises",        passed, failed, test_zero_length_ticket_raises)
-    run_test("with extensions (skipped)",        passed, failed, test_with_extensions)
-    run_test("psk initially empty",              passed, failed, test_psk_initially_empty)
-    run_test("large ticket (4 KB)",              passed, failed, test_large_ticket)
+    run_test[test_parse_valid_minimal]("parse valid minimal ticket", passed, failed)
+    run_test[test_parse_nonempty_nonce]("parse non-empty nonce", passed, failed)
+    run_test[test_truncated_at_lifetime]("truncated at lifetime", passed, failed)
+    run_test[test_truncated_at_age_add]("truncated at age_add", passed, failed)
+    run_test[test_truncated_at_nonce]("truncated at nonce", passed, failed)
+    run_test[test_truncated_at_ticket]("truncated at ticket", passed, failed)
+    run_test[test_zero_length_ticket_raises]("zero-length ticket raises", passed, failed)
+    run_test[test_with_extensions]("with extensions (skipped)", passed, failed)
+    run_test[test_psk_initially_empty]("psk initially empty", passed, failed)
+    run_test[test_large_ticket]("large ticket (4 KB)", passed, failed)
 
     print()
     print("Results:", String(passed), "passed,", String(failed), "failed,", String(passed + failed), "total")

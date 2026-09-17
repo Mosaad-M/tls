@@ -18,7 +18,7 @@ from tls.message12 import (
 
 def make_bytes(value: UInt8, count: Int) -> List[UInt8]:
     var out = List[UInt8](capacity=count)
-    for i in range(count):
+    for _ in range(count):
         out.append(value)
     return out^
 
@@ -33,11 +33,10 @@ def contains_u16(data: List[UInt8], value: UInt16) -> Bool:
     return False
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -51,7 +50,7 @@ def run_test(
 # ── build_client_hello tests ───────────────────────────────────────────────
 
 def test_ch_includes_tls12_suite() raises:
-    """build_client_hello now includes 0xC02F (TLS_ECDHE_RSA_AES128_GCM_SHA256)."""
+    """Build_client_hello now includes 0xC02F (TLS_ECDHE_RSA_AES128_GCM_SHA256)."""
     var random   = make_bytes(0x01, 32)
     var key_share = make_bytes(0x02, 32)
     var ch = build_client_hello(random, List[UInt8](), key_share, "example.com")
@@ -60,7 +59,7 @@ def test_ch_includes_tls12_suite() raises:
 
 
 def test_ch_supported_versions_includes_tls12() raises:
-    """build_client_hello supported_versions extension includes 0x0303 (TLS 1.2)."""
+    """Build_client_hello supported_versions extension includes 0x0303 (TLS 1.2)."""
     var random   = make_bytes(0x01, 32)
     var key_share = make_bytes(0x02, 32)
     var ch = build_client_hello(random, List[UInt8](), key_share, "example.com")
@@ -77,7 +76,7 @@ def _build_server_hello_tls13() -> List[UInt8]:
     body.append(0x03)
     body.append(0x03)
     # random = 32 zeros
-    for i in range(32):
+    for _ in range(32):
         body.append(0x00)
     # session_id_len = 0
     body.append(0x00)
@@ -98,7 +97,7 @@ def _build_server_hello_tls13() -> List[UInt8]:
     exts.append(0x00); exts.append(0x24)  # len = 36
     exts.append(0x00); exts.append(0x1d)  # group = x25519
     exts.append(0x00); exts.append(0x20)  # key_len = 32
-    for i in range(32):
+    for _ in range(32):
         exts.append(0x01)
 
     # Append extensions length + extensions to body
@@ -116,7 +115,7 @@ def _build_server_hello_tls12() -> List[UInt8]:
     body.append(0x03)
     body.append(0x03)
     # random = 32 bytes of 0x01
-    for i in range(32):
+    for _ in range(32):
         body.append(0x01)
     # session_id_len = 0
     body.append(0x00)
@@ -132,7 +131,7 @@ def _build_server_hello_tls12() -> List[UInt8]:
 
 
 def test_parse_server_hello_version_tls13() raises:
-    """parse_server_hello_version: TLS 1.3 ServerHello → use_tls13=True."""
+    """Parse_server_hello_version: TLS 1.3 ServerHello → use_tls13=True."""
     var body = _build_server_hello_tls13()
     var result = parse_server_hello_version(body)
     var use_tls13 = result[3]
@@ -144,7 +143,7 @@ def test_parse_server_hello_version_tls13() raises:
 
 
 def test_parse_server_hello_version_tls12() raises:
-    """parse_server_hello_version: TLS 1.2 ServerHello (no sup_ver ext) → use_tls13=False."""
+    """Parse_server_hello_version: TLS 1.2 ServerHello (no sup_ver ext) → use_tls13=False."""
     var body = _build_server_hello_tls12()
     var result = parse_server_hello_version(body)
     var use_tls13 = result[3]
@@ -164,19 +163,19 @@ def _build_ske() -> List[UInt8]:
     body.append(0x00)        # named_curve hi
     body.append(0x1d)        # named_curve lo = x25519
     body.append(0x20)        # pubkey_len = 32
-    for i in range(32):
+    for _ in range(32):
         body.append(0x02)    # pubkey bytes = 0x02
     body.append(0x04)        # sig_hash = SHA-256
     body.append(0x01)        # sig_sig = RSA
     body.append(0x00)        # sig_len hi
     body.append(0x10)        # sig_len lo = 16
-    for i in range(16):
+    for _ in range(16):
         body.append(0x03)    # sig bytes = 0x03
     return body^
 
 
 def test_parse_server_key_exchange_x25519_rsa() raises:
-    """parse_server_key_exchange: x25519 pubkey + RSA sig extracted correctly."""
+    """Parse_server_key_exchange: x25519 pubkey + RSA sig extracted correctly."""
     var body = _build_ske()
     var result = parse_server_key_exchange(body)
     var named_curve = result[0]
@@ -202,7 +201,7 @@ def test_parse_server_key_exchange_x25519_rsa() raises:
 
 
 def test_parse_server_key_exchange_truncated() raises:
-    """parse_server_key_exchange: truncated body raises."""
+    """Parse_server_key_exchange: truncated body raises."""
     var body = List[UInt8]()
     body.append(0x03)  # curve_type only — too short
     var raised = False
@@ -217,7 +216,7 @@ def test_parse_server_key_exchange_truncated() raises:
 # ── build_client_key_exchange test ────────────────────────────────────────
 
 def test_build_client_key_exchange() raises:
-    """build_client_key_exchange: 1-byte length prefix + key bytes."""
+    """Build_client_key_exchange: 1-byte length prefix + key bytes."""
     var pubkey = make_bytes(0x04, 32)
     var cke = build_client_key_exchange(pubkey)
     if len(cke) != 33:
@@ -232,7 +231,7 @@ def test_build_client_key_exchange() raises:
 # ── build_finished_body / parse_finished_body roundtrip ──────────────────
 
 def test_finished_body_roundtrip() raises:
-    """build_finished_body + parse_finished_body roundtrip."""
+    """Build_finished_body + parse_finished_body roundtrip."""
     var verify_data = make_bytes(0x05, 12)
     var body = build_finished_body(verify_data)
     # Should be: 0x14 + 3-byte length + 12 bytes = 16 bytes total
@@ -255,14 +254,14 @@ def main() raises:
     print("=== TLS 1.2 Message Tests ===")
     print()
 
-    run_test("build_client_hello: includes 0xC02F", passed, failed, test_ch_includes_tls12_suite)
-    run_test("build_client_hello: supported_versions includes TLS 1.2", passed, failed, test_ch_supported_versions_includes_tls12)
-    run_test("parse_server_hello_version: TLS 1.3 → use_tls13=True", passed, failed, test_parse_server_hello_version_tls13)
-    run_test("parse_server_hello_version: TLS 1.2 → use_tls13=False", passed, failed, test_parse_server_hello_version_tls12)
-    run_test("parse_server_key_exchange: x25519+RSA fields extracted", passed, failed, test_parse_server_key_exchange_x25519_rsa)
-    run_test("parse_server_key_exchange: truncated body raises", passed, failed, test_parse_server_key_exchange_truncated)
-    run_test("build_client_key_exchange: length prefix + key", passed, failed, test_build_client_key_exchange)
-    run_test("build/parse_finished_body roundtrip", passed, failed, test_finished_body_roundtrip)
+    run_test[test_ch_includes_tls12_suite]("build_client_hello: includes 0xC02F", passed, failed)
+    run_test[test_ch_supported_versions_includes_tls12]("build_client_hello: supported_versions includes TLS 1.2", passed, failed)
+    run_test[test_parse_server_hello_version_tls13]("parse_server_hello_version: TLS 1.3 → use_tls13=True", passed, failed)
+    run_test[test_parse_server_hello_version_tls12]("parse_server_hello_version: TLS 1.2 → use_tls13=False", passed, failed)
+    run_test[test_parse_server_key_exchange_x25519_rsa]("parse_server_key_exchange: x25519+RSA fields extracted", passed, failed)
+    run_test[test_parse_server_key_exchange_truncated]("parse_server_key_exchange: truncated body raises", passed, failed)
+    run_test[test_build_client_key_exchange]("build_client_key_exchange: length prefix + key", passed, failed)
+    run_test[test_finished_body_roundtrip]("build/parse_finished_body roundtrip", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

@@ -12,11 +12,10 @@
 from crypto.cert import cert_parse, cert_san_names, cert_hostname_match
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -124,13 +123,13 @@ def main() raises:
     print("=== Cert SAN / Hostname Tests ===")
     print()
 
-    run_test("cert_san_names returns 3 entries", passed, failed, test_san_names)
-    run_test("hostname_match: exact match", passed, failed, test_match_exact)
-    run_test("hostname_match: wildcard match", passed, failed, test_match_wildcard)
-    run_test("hostname_match: other.net", passed, failed, test_match_other)
-    run_test("hostname_match: 2-subdomain raises", passed, failed, test_no_match_two_subdomains)
-    run_test("hostname_match: evil.com raises", passed, failed, test_no_match_evil)
-    run_test("CN-only fallback", passed, failed, test_cn_only_fallback)
+    run_test[test_san_names]("cert_san_names returns 3 entries", passed, failed)
+    run_test[test_match_exact]("hostname_match: exact match", passed, failed)
+    run_test[test_match_wildcard]("hostname_match: wildcard match", passed, failed)
+    run_test[test_match_other]("hostname_match: other.net", passed, failed)
+    run_test[test_no_match_two_subdomains]("hostname_match: 2-subdomain raises", passed, failed)
+    run_test[test_no_match_evil]("hostname_match: evil.com raises", passed, failed)
+    run_test[test_cn_only_fallback]("CN-only fallback", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

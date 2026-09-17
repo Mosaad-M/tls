@@ -9,7 +9,7 @@
 # ============================================================================
 
 from std.ffi import external_call
-from std.memory.unsafe_pointer import alloc
+from std.memory import alloc
 from crypto.hash import SHA256, SHA384, sha256, sha384
 from crypto.handshake import (
     tls13_early_secret, tls13_handshake_secret, tls13_master_secret,
@@ -114,15 +114,15 @@ def _tcp_read(fd: Int32, n: Int) raises -> List[UInt8]:
     var buf = alloc[UInt8](n)
     var total = 0
     while total < n:
-        var got = external_call["read", Int](fd, buf + total, n - total)
+        var got = external_call["read", Int](fd, buf.unsafe_offset(total), n - total)
         if got <= 0:
-            buf.free()
+            buf.unsafe_free()
             raise Error("tls: tcp read failed or connection closed")
         total += got
     var out = List[UInt8](capacity=n)
     for i in range(n):
-        out.append((buf + i)[])
-    buf.free()
+        out.append(buf[unsafe_offset=i])
+    buf.unsafe_free()
     return out^
 
 
@@ -133,15 +133,15 @@ def _tcp_write(fd: Int32, data: List[UInt8]) raises:
         return
     var buf = alloc[UInt8](n)
     for i in range(n):
-        (buf + i)[] = data[i]
+        buf[unsafe_offset=i] = data[i]
     var total = 0
     while total < n:
-        var sent = external_call["write", Int](Int(fd), buf + total, n - total)
+        var sent = external_call["write", Int](Int(fd), buf.unsafe_offset(total), n - total)
         if sent <= 0:
-            buf.free()
+            buf.unsafe_free()
             raise Error("tls: tcp write failed")
         total += sent
-    buf.free()
+    buf.unsafe_free()
 
 
 # ============================================================================
@@ -622,8 +622,7 @@ def tls13_client_handshake(
 # Alert handling
 # ============================================================================
 
-def tls_send_alert(
-    write_fn: def(List[UInt8]) raises -> None,
+def tls_send_alert[write_fn: def(List[UInt8]) thin raises -> None](
     keys:     TlsKeys,
     level:    UInt8,
     code:     UInt8,

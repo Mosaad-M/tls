@@ -18,11 +18,10 @@ from crypto.sha1 import sha1, SHA1
 from crypto.base64 import base64_encode
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -143,11 +142,11 @@ def main() raises:
     print("=== SHA-1 Tests ===")
     print()
 
-    run_test("sha1('') = da39...", passed, failed, test_sha1_empty)
-    run_test("sha1('abc') = a999...", passed, failed, test_sha1_abc)
-    run_test("sha1(448-bit msg) = 8498...", passed, failed, test_sha1_448bit)
-    run_test("sha1('a'*100) multi-block", passed, failed, test_sha1_multiblock)
-    run_test("sha1 WebSocket accept-key (RFC 6455 §1.3)", passed, failed, test_sha1_websocket_accept)
+    run_test[test_sha1_empty]("sha1('') = da39...", passed, failed)
+    run_test[test_sha1_abc]("sha1('abc') = a999...", passed, failed)
+    run_test[test_sha1_448bit]("sha1(448-bit msg) = 8498...", passed, failed)
+    run_test[test_sha1_multiblock]("sha1('a'*100) multi-block", passed, failed)
+    run_test[test_sha1_websocket_accept]("sha1 WebSocket accept-key (RFC 6455 §1.3)", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

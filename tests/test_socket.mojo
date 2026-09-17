@@ -6,7 +6,7 @@
 # ============================================================================
 
 from std.ffi import external_call
-from std.memory.unsafe_pointer import alloc
+from std.memory import alloc
 from crypto.cert import X509Cert, cert_parse
 from crypto.record import CIPHER_AES_128_GCM
 from tls.socket import TlsSocket, load_system_ca_bundle
@@ -14,7 +14,7 @@ from tls.socket import TlsSocket, load_system_ca_bundle
 
 # ── Test certificate constants ─────────────────────────────────────────────
 # CA (self-signed, TLS Test CA, ECDSA P-256) — same as test_connection.mojo
-comptime CA_DER_HEX = "3082019230820138a0030201020214573f65a34f1eda3f679a037a6e62e8bfbeb09603300a06082a8648ce3d04030230163114301206035504030c0b544c532054657374204341301e170d3236303330373137333935345a170d3331303330373137333935345a30163114301206035504030c0b544c5320546573742043413059301306072a8648ce3d020106082a8648ce3d0301070342000471185cd463948dea0ac90046f6fc4f385638b7715824723a10d4fa25b69895532047ab52ca3e74261d5b175d27cfb0921f47c26c618c798bf33c48c7b3bb7941a3643062301d0603551d0e04160414896a744421f5317a4cc07a5b7dbef8192c8f4d2b301f0603551d23041830168014896a744421f5317a4cc07a5b7dbef8192c8f4d2b300f0603551d130101ff040530030101ff300f0603551d130101ff040530030101ff300a06082a8648ce3d040302034800304502207d6bca651f67a2edff1bd713578bf452ab4eaacc270e4d94f2ad2984cffb45d5022100a3d7699dccebc90383b97b220b95a85d860476ad98fe7c87bd19df7a9ff4f520"
+comptime CA_DER_HEX = "3082018130820127a003020102021473b219db4dacd566136d712a9fc09cda8f5a50c2300a06082a8648ce3d04030230163114301206035504030c0b544c532054657374204341301e170d3236303931373133343032345a170d3331303931373133343032345a30163114301206035504030c0b544c5320546573742043413059301306072a8648ce3d020106082a8648ce3d03010703420004817e79ec91a4dc46ddbce8c40d9a574d1d6fdc4b14fe09eef893005bf0491cc90a94949a5be09350677082ed75a571c3f2d5925a7b24e83a3056a54eec918ff6a3533051301d0603551d0e041604149e33d94c2566681719b896baeeb843b1a05e8447301f0603551d230418301680149e33d94c2566681719b896baeeb843b1a05e8447300f0603551d130101ff040530030101ff300a06082a8648ce3d040302034800304502202cffda36351d36271e8aca505babcc18bfb636b3ec933bc87305bad0f839154b022100fb148e777f40b849417900b9f9eabef582560e5796ea8c9dfb3237ab4c612f52"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -41,17 +41,17 @@ def _tcp_connect(port: Int) raises -> Int32:
         raise Error("socket() failed")
     var addr = alloc[UInt8](16)
     for i in range(16):
-        (addr + i)[] = 0
-    (addr + 0)[] = 2
-    (addr + 1)[] = 0
-    (addr + 2)[] = UInt8((port >> 8) & 0xFF)
-    (addr + 3)[] = UInt8(port & 0xFF)
-    (addr + 4)[] = 127
-    (addr + 5)[] = 0
-    (addr + 6)[] = 0
-    (addr + 7)[] = 1
+        addr[unsafe_offset=i] = 0
+    addr[unsafe_offset=0] = 2
+    addr[unsafe_offset=1] = 0
+    addr[unsafe_offset=2] = UInt8((port >> 8) & 0xFF)
+    addr[unsafe_offset=3] = UInt8(port & 0xFF)
+    addr[unsafe_offset=4] = 127
+    addr[unsafe_offset=5] = 0
+    addr[unsafe_offset=6] = 0
+    addr[unsafe_offset=7] = 1
     var ret = external_call["connect", Int32](fd, addr, Int32(16))
-    addr.free()
+    addr.unsafe_free()
     if ret < 0:
         _ = external_call["close", Int32](fd)
         raise Error("connect() failed to 127.0.0.1:" + String(port))
@@ -68,7 +68,7 @@ def _run_server(port: Int, certfile: String, keyfile: String):
         + keyfile
         + String(" 2 &")   # max_conns=2 for send+recv test
     )
-    _ = external_call["system", Int32](cmd.unsafe_ptr())
+    _ = external_call["system", Int32]((cmd + String("\0")).unsafe_ptr())
 
 
 def _run_server_alpn(port: Int, certfile: String, keyfile: String, alpn: String):
@@ -84,7 +84,7 @@ def _run_server_alpn(port: Int, certfile: String, keyfile: String, alpn: String)
         + alpn
         + String(" &")
     )
-    _ = external_call["system", Int32](cmd.unsafe_ptr())
+    _ = external_call["system", Int32]((cmd + String("\0")).unsafe_ptr())
 
 
 def _kill_server(port: Int):
@@ -93,7 +93,7 @@ def _kill_server(port: Int):
         + String(port)
         + String("'")
     )
-    _ = external_call["system", Int32](cmd.unsafe_ptr())
+    _ = external_call["system", Int32]((cmd + String("\0")).unsafe_ptr())
 
 
 def _make_trust_anchors() raises -> List[X509Cert]:
@@ -102,11 +102,10 @@ def _make_trust_anchors() raises -> List[X509Cert]:
     return anchors^
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -120,7 +119,7 @@ def run_test(
 # ── Tests ──────────────────────────────────────────────────────────────────
 
 def test_load_system_ca_bundle() raises:
-    """load_system_ca_bundle() returns at least 40 trusted CA certs.
+    """Load_system_ca_bundle() returns at least 40 trusted CA certs.
 
     Note: only SHA-256-compatible certs (P-256 ECDSA or RSA) are parsed;
     others (P-384, SHA-384 etc.) are silently skipped.
@@ -243,12 +242,12 @@ def main() raises:
     print("=== TLS Socket Tests ===")
     print()
 
-    run_test("load_system_ca_bundle: >= 40 parseable certs", passed, failed, test_load_system_ca_bundle)
-    run_test("TlsSocket.connect: valid cert succeeds", passed, failed, test_socket_connect)
-    run_test("TlsSocket.send+recv: HTTP GET returns 200", passed, failed, test_socket_send_recv)
-    run_test("TlsSocket.connect: wrong cert raises", passed, failed, test_socket_wrong_cert_raises)
-    run_test("TlsSocket.negotiated_protocol: 'h2' when server supports h2", passed, failed, test_alpn_negotiated)
-    run_test("TlsSocket.negotiated_protocol: '' when no ALPN advertised", passed, failed, test_alpn_no_protocols_empty)
+    run_test[test_load_system_ca_bundle]("load_system_ca_bundle: >= 40 parseable certs", passed, failed)
+    run_test[test_socket_connect]("TlsSocket.connect: valid cert succeeds", passed, failed)
+    run_test[test_socket_send_recv]("TlsSocket.send+recv: HTTP GET returns 200", passed, failed)
+    run_test[test_socket_wrong_cert_raises]("TlsSocket.connect: wrong cert raises", passed, failed)
+    run_test[test_alpn_negotiated]("TlsSocket.negotiated_protocol: 'h2' when server supports h2", passed, failed)
+    run_test[test_alpn_no_protocols_empty]("TlsSocket.negotiated_protocol: '' when no ALPN advertised", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

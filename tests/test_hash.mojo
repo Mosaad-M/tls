@@ -43,11 +43,10 @@ def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -299,26 +298,26 @@ def main() raises:
     print("=== SHA-256 / SHA-384 / SHA-512 Tests ===")
     print()
 
-    run_test("SHA-256 empty string", passed, failed, test_sha256_empty)
-    run_test("SHA-256 'abc'", passed, failed, test_sha256_abc)
-    run_test("SHA-256 448-bit message", passed, failed, test_sha256_448bit)
-    run_test("SHA-256 896-bit message", passed, failed, test_sha256_896bit)
-    run_test("SHA-256 1,000,000 x 'a'", passed, failed, test_sha256_one_million_a)
-    run_test("SHA-256 streaming (1-byte)", passed, failed, test_sha256_streaming)
-    run_test("SHA-256 64-byte block boundary", passed, failed, test_sha256_two_block)
+    run_test[test_sha256_empty]("SHA-256 empty string", passed, failed)
+    run_test[test_sha256_abc]("SHA-256 'abc'", passed, failed)
+    run_test[test_sha256_448bit]("SHA-256 448-bit message", passed, failed)
+    run_test[test_sha256_896bit]("SHA-256 896-bit message", passed, failed)
+    run_test[test_sha256_one_million_a]("SHA-256 1,000,000 x 'a'", passed, failed)
+    run_test[test_sha256_streaming]("SHA-256 streaming (1-byte)", passed, failed)
+    run_test[test_sha256_two_block]("SHA-256 64-byte block boundary", passed, failed)
 
-    run_test("SHA-384 empty string", passed, failed, test_sha384_empty)
-    run_test("SHA-384 'abc'", passed, failed, test_sha384_abc)
-    run_test("SHA-384 448-bit message", passed, failed, test_sha384_448bit)
-    run_test("SHA-384 896-bit message", passed, failed, test_sha384_896bit)
-    run_test("SHA-384 1,000,000 x 'a'", passed, failed, test_sha384_one_million_a)
-    run_test("SHA-384 streaming (1-byte)", passed, failed, test_sha384_streaming)
+    run_test[test_sha384_empty]("SHA-384 empty string", passed, failed)
+    run_test[test_sha384_abc]("SHA-384 'abc'", passed, failed)
+    run_test[test_sha384_448bit]("SHA-384 448-bit message", passed, failed)
+    run_test[test_sha384_896bit]("SHA-384 896-bit message", passed, failed)
+    run_test[test_sha384_one_million_a]("SHA-384 1,000,000 x 'a'", passed, failed)
+    run_test[test_sha384_streaming]("SHA-384 streaming (1-byte)", passed, failed)
 
-    run_test("SHA-512 empty string", passed, failed, test_sha512_empty)
-    run_test("SHA-512 'abc'", passed, failed, test_sha512_abc)
-    run_test("SHA-512 448-bit message", passed, failed, test_sha512_448bit)
-    run_test("SHA-512 896-bit message", passed, failed, test_sha512_896bit)
-    run_test("SHA-512 streaming (1-byte)", passed, failed, test_sha512_streaming)
+    run_test[test_sha512_empty]("SHA-512 empty string", passed, failed)
+    run_test[test_sha512_abc]("SHA-512 'abc'", passed, failed)
+    run_test[test_sha512_448bit]("SHA-512 448-bit message", passed, failed)
+    run_test[test_sha512_896bit]("SHA-512 896-bit message", passed, failed)
+    run_test[test_sha512_streaming]("SHA-512 streaming (1-byte)", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

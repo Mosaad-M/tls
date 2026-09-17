@@ -44,7 +44,11 @@ def assert_true(cond: Bool, label: String) raises:
         raise Error(label + ": expected True")
 
 
-def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
+def run_test[test_fn: def() thin raises -> None](
+    name: String,
+    mut passed: Int,
+    mut failed: Int,
+):
     try:
         test_fn()
         print("  PASS:", name)
@@ -303,16 +307,16 @@ def main() raises:
     print("=== P-256 ECDSA Sign Tests ===")
     print()
 
-    run_test("sign-verify round-trip",          passed, failed, test_sign_verify_roundtrip)
-    run_test("deterministic (same inputs)",      passed, failed, test_deterministic)
-    run_test("different nonce → different sig", passed, failed, test_different_nonce_different_sig)
-    run_test("wrong hash fails verify",          passed, failed, test_wrong_hash_fails_verify)
-    run_test("wrong pubkey fails verify",        passed, failed, test_wrong_pubkey_fails_verify)
-    run_test("low-s normalization",              passed, failed, test_low_s_normalization)
-    run_test("zero private key raises",          passed, failed, test_zero_private_key_raises)
-    run_test("private key = n raises",           passed, failed, test_n_private_key_raises)
-    run_test("multi-message round-trip",         passed, failed, test_multi_message_roundtrip)
-    run_test("wrong key length raises",          passed, failed, test_wrong_key_length_raises)
+    run_test[test_sign_verify_roundtrip]("sign-verify round-trip", passed, failed)
+    run_test[test_deterministic]("deterministic (same inputs)", passed, failed)
+    run_test[test_different_nonce_different_sig]("different nonce → different sig", passed, failed)
+    run_test[test_wrong_hash_fails_verify]("wrong hash fails verify", passed, failed)
+    run_test[test_wrong_pubkey_fails_verify]("wrong pubkey fails verify", passed, failed)
+    run_test[test_low_s_normalization]("low-s normalization", passed, failed)
+    run_test[test_zero_private_key_raises]("zero private key raises", passed, failed)
+    run_test[test_n_private_key_raises]("private key = n raises", passed, failed)
+    run_test[test_multi_message_roundtrip]("multi-message round-trip", passed, failed)
+    run_test[test_wrong_key_length_raises]("wrong key length raises", passed, failed)
 
     print()
     print("Results:", String(passed), "passed,", String(failed), "failed,", String(passed + failed), "total")

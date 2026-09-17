@@ -66,7 +66,11 @@ def assert_true(cond: Bool, label: String) raises:
         raise Error(label + ": expected True")
 
 
-def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
+def run_test[test_fn: def() thin raises -> None](
+    name: String,
+    mut passed: Int,
+    mut failed: Int,
+):
     try:
         test_fn()
         print("  PASS:", name)
@@ -357,18 +361,18 @@ def main() raises:
     print("=== TLS 1.2 mTLS Message Tests ===")
     print()
 
-    run_test("parse valid CertificateRequest12",          passed, failed, test_parse_valid_certreq)
-    run_test("parse CertificateRequest12 multiple",       passed, failed, test_parse_certreq_multi)
-    run_test("parse CertificateRequest12 with CA",        passed, failed, test_parse_certreq_with_ca)
-    run_test("truncated at types_len raises",             passed, failed, test_certreq_truncated_at_types)
-    run_test("truncated at sig_algs_len raises",          passed, failed, test_certreq_truncated_at_algs)
-    run_test("truncated at ca_list_len raises",           passed, failed, test_certreq_truncated_at_ca)
-    run_test("build_client_certificate12 empty chain",    passed, failed, test_build_cert12_empty)
-    run_test("build_client_certificate12 single cert",    passed, failed, test_build_cert12_single)
-    run_test("build_client_certificate_verify12 header",  passed, failed, test_build_cert_verify12)
-    run_test("_ecdsa_raw_to_der basic high-bit padding",  passed, failed, test_ecdsa_raw_to_der_basic)
-    run_test("_ecdsa_raw_to_der leading zeros stripped",  passed, failed, test_ecdsa_raw_to_der_leading_zeros)
-    run_test("_ecdsa_raw_to_der all-zero r",              passed, failed, test_ecdsa_raw_to_der_zero_r)
+    run_test[test_parse_valid_certreq]("parse valid CertificateRequest12", passed, failed)
+    run_test[test_parse_certreq_multi]("parse CertificateRequest12 multiple", passed, failed)
+    run_test[test_parse_certreq_with_ca]("parse CertificateRequest12 with CA", passed, failed)
+    run_test[test_certreq_truncated_at_types]("truncated at types_len raises", passed, failed)
+    run_test[test_certreq_truncated_at_algs]("truncated at sig_algs_len raises", passed, failed)
+    run_test[test_certreq_truncated_at_ca]("truncated at ca_list_len raises", passed, failed)
+    run_test[test_build_cert12_empty]("build_client_certificate12 empty chain", passed, failed)
+    run_test[test_build_cert12_single]("build_client_certificate12 single cert", passed, failed)
+    run_test[test_build_cert_verify12]("build_client_certificate_verify12 header", passed, failed)
+    run_test[test_ecdsa_raw_to_der_basic]("_ecdsa_raw_to_der basic high-bit padding", passed, failed)
+    run_test[test_ecdsa_raw_to_der_leading_zeros]("_ecdsa_raw_to_der leading zeros stripped", passed, failed)
+    run_test[test_ecdsa_raw_to_der_zero_r]("_ecdsa_raw_to_der all-zero r", passed, failed)
 
     print()
     print("Results:", String(passed), "passed,", String(failed), "failed,", String(passed + failed), "total")

@@ -48,7 +48,11 @@ def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
+def run_test[test_fn: def() thin raises -> None](
+    name: String,
+    mut passed: Int,
+    mut failed: Int,
+):
     try:
         test_fn()
         print("  PASS:", name)
@@ -402,21 +406,21 @@ def main() raises:
     var failed = 0
     print("=== TLS 1.3 Handshake Key Schedule Tests ===")
     print()
-    run_test("Early Secret (0^32 PSK)",       passed, failed, test_early_secret)
-    run_test("HKDF-Expand-Label 'derived'",   passed, failed, test_expand_label_derived)
-    run_test("Derive-Secret",                 passed, failed, test_derive_secret)
-    run_test("Traffic key and IV derivation", passed, failed, test_traffic_keys)
-    run_test("Finished key derivation",       passed, failed, test_finished_key)
-    run_test("Compute Finished verify_data",  passed, failed, test_compute_finished)
-    run_test("Verify Finished valid",         passed, failed, test_verify_finished_valid)
-    run_test("Verify Finished reject bad",    passed, failed, test_verify_finished_reject)
-    run_test("CertificateVerify input",                passed, failed, test_cert_verify_input)
-    run_test("Full key schedule (RFC 8448)",           passed, failed, test_full_key_schedule)
-    run_test("SHA-384 Early Secret",                   passed, failed, test_early_secret_sha384)
-    run_test("SHA-384 Handshake Secret (RFC 8448 DHE)", passed, failed, test_handshake_secret_sha384)
-    run_test("SHA-384 Derive-Secret",                  passed, failed, test_derive_secret_sha384)
-    run_test("SHA-384 Finished key + compute",         passed, failed, test_finished_sha384)
-    run_test("SHA-384 Verify Finished accept + reject", passed, failed, test_verify_finished_sha384_accept_reject)
+    run_test[test_early_secret]("Early Secret (0^32 PSK)", passed, failed)
+    run_test[test_expand_label_derived]("HKDF-Expand-Label 'derived'", passed, failed)
+    run_test[test_derive_secret]("Derive-Secret", passed, failed)
+    run_test[test_traffic_keys]("Traffic key and IV derivation", passed, failed)
+    run_test[test_finished_key]("Finished key derivation", passed, failed)
+    run_test[test_compute_finished]("Compute Finished verify_data", passed, failed)
+    run_test[test_verify_finished_valid]("Verify Finished valid", passed, failed)
+    run_test[test_verify_finished_reject]("Verify Finished reject bad", passed, failed)
+    run_test[test_cert_verify_input]("CertificateVerify input", passed, failed)
+    run_test[test_full_key_schedule]("Full key schedule (RFC 8448)", passed, failed)
+    run_test[test_early_secret_sha384]("SHA-384 Early Secret", passed, failed)
+    run_test[test_handshake_secret_sha384]("SHA-384 Handshake Secret (RFC 8448 DHE)", passed, failed)
+    run_test[test_derive_secret_sha384]("SHA-384 Derive-Secret", passed, failed)
+    run_test[test_finished_sha384]("SHA-384 Finished key + compute", passed, failed)
+    run_test[test_verify_finished_sha384_accept_reject]("SHA-384 Verify Finished accept + reject", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:

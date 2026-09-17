@@ -6,7 +6,7 @@
 # ============================================================================
 
 from std.ffi import external_call
-from std.memory.unsafe_pointer import alloc
+from std.memory import alloc
 from std.sys.info import CompilationTarget
 from tls.connection import (
     tls_send_alert,
@@ -48,9 +48,9 @@ def _capture_write(data: List[UInt8]) raises:
     if n > 0:
         var buf = alloc[UInt8](n)
         for i in range(n):
-            (buf + i)[] = data[i]
+            buf[unsafe_offset=i] = data[i]
         _ = external_call["write", Int](Int(fd), buf, n)
-        buf.free()
+        buf.unsafe_free()
     _ = external_call["close", Int32](fd)
 
 
@@ -66,18 +66,17 @@ def _capture_read() raises -> List[UInt8]:
     _ = external_call["close", Int32](fd)
     var out = List[UInt8](capacity=Int(n))
     for i in range(Int(n)):
-        out.append((buf + i)[])
-    buf.free()
+        out.append(buf[unsafe_offset=i])
+    buf.unsafe_free()
     return out^
 
 
 # ── run_test helper ────────────────────────────────────────────────────────
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -91,10 +90,10 @@ def run_test(
 # ── Tests ──────────────────────────────────────────────────────────────────
 
 def test_send_alert_warning_close_notify() raises:
-    """tls_send_alert with empty keys sends 7-byte plaintext alert record."""
+    """Tls_send_alert with empty keys sends 7-byte plaintext alert record."""
     _capture_reset()
     var empty_keys = TlsKeys()
-    tls_send_alert(_capture_write, empty_keys, ALERT_LEVEL_WARNING, ALERT_CLOSE_NOTIFY)
+    tls_send_alert[_capture_write](empty_keys, ALERT_LEVEL_WARNING, ALERT_CLOSE_NOTIFY)
     var captured = _capture_read()
     # Expected: [0x15, 0x03, 0x03, 0x00, 0x02, level, code]
     if len(captured) != 7:
@@ -112,10 +111,10 @@ def test_send_alert_warning_close_notify() raises:
 
 
 def test_send_alert_fatal_bad_cert() raises:
-    """tls_send_alert with FATAL + BAD_CERT produces correct bytes."""
+    """Tls_send_alert with FATAL + BAD_CERT produces correct bytes."""
     _capture_reset()
     var empty_keys = TlsKeys()
-    tls_send_alert(_capture_write, empty_keys, ALERT_LEVEL_FATAL, ALERT_BAD_CERT)
+    tls_send_alert[_capture_write](empty_keys, ALERT_LEVEL_FATAL, ALERT_BAD_CERT)
     var captured = _capture_read()
     if len(captured) != 7:
         raise Error("expected 7 bytes, got " + String(len(captured)))
@@ -126,7 +125,7 @@ def test_send_alert_fatal_bad_cert() raises:
 
 
 def test_handle_close_notify() raises:
-    """tls_handle_incoming_alert raises for close_notify."""
+    """Tls_handle_incoming_alert raises for close_notify."""
     var alert = List[UInt8]()
     alert.append(1)  # warning
     alert.append(0)  # close_notify
@@ -140,7 +139,7 @@ def test_handle_close_notify() raises:
 
 
 def test_handle_bad_certificate() raises:
-    """tls_handle_incoming_alert raises for bad_certificate."""
+    """Tls_handle_incoming_alert raises for bad_certificate."""
     var alert = List[UInt8]()
     alert.append(2)   # fatal
     alert.append(42)  # bad_certificate
@@ -154,7 +153,7 @@ def test_handle_bad_certificate() raises:
 
 
 def test_handle_malformed_alert() raises:
-    """tls_handle_incoming_alert raises for empty (malformed) alert."""
+    """Tls_handle_incoming_alert raises for empty (malformed) alert."""
     var empty = List[UInt8]()
     var raised = False
     try:
@@ -172,11 +171,11 @@ def main() raises:
     print("=== TLS Alert Tests ===")
     print()
 
-    run_test("tls_send_alert: warning/close_notify 7-byte record", passed, failed, test_send_alert_warning_close_notify)
-    run_test("tls_send_alert: fatal/bad_certificate bytes", passed, failed, test_send_alert_fatal_bad_cert)
-    run_test("tls_handle_incoming_alert: close_notify raises", passed, failed, test_handle_close_notify)
-    run_test("tls_handle_incoming_alert: bad_certificate raises", passed, failed, test_handle_bad_certificate)
-    run_test("tls_handle_incoming_alert: malformed raises", passed, failed, test_handle_malformed_alert)
+    run_test[test_send_alert_warning_close_notify]("tls_send_alert: warning/close_notify 7-byte record", passed, failed)
+    run_test[test_send_alert_fatal_bad_cert]("tls_send_alert: fatal/bad_certificate bytes", passed, failed)
+    run_test[test_handle_close_notify]("tls_handle_incoming_alert: close_notify raises", passed, failed)
+    run_test[test_handle_bad_certificate]("tls_handle_incoming_alert: bad_certificate raises", passed, failed)
+    run_test[test_handle_malformed_alert]("tls_handle_incoming_alert: malformed raises", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

@@ -60,7 +60,11 @@ def assert_bigint_val(a: BigInt, expected_hex: String, n_bytes: Int, label: Stri
         raise Error(label + ": got " + got + ", want " + expected_hex)
 
 
-def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
+def run_test[test_fn: def() thin raises -> None](
+    name: String,
+    mut passed: Int,
+    mut failed: Int,
+):
     try:
         test_fn()
         print("  PASS:", name)
@@ -362,30 +366,30 @@ def main() raises:
     var failed = 0
     print("=== BigInt Tests ===")
     print()
-    run_test("zero and one",                   passed, failed, test_zero_one)
-    run_test("from_u64",                       passed, failed, test_from_u64)
-    run_test("from/to bytes roundtrip",        passed, failed, test_from_to_bytes_roundtrip)
-    run_test("from bytes leading zeros",       passed, failed, test_from_to_bytes_leading_zeros)
-    run_test("add with carry",                 passed, failed, test_add_carry)
-    run_test("add large values",               passed, failed, test_add_large)
-    run_test("sub with borrow",                passed, failed, test_sub_borrow)
-    run_test("sub equal → zero",              passed, failed, test_sub_equal)
-    run_test("mul basic",                      passed, failed, test_mul_basic)
-    run_test("mul by zero",                    passed, failed, test_mul_zero)
-    run_test("mul by one",                     passed, failed, test_mul_one)
-    run_test("bit length",                     passed, failed, test_bit_len)
-    run_test("mod basic (17 mod 5)",           passed, failed, test_mod_basic)
-    run_test("mod exact (100 mod 10)",         passed, failed, test_mod_exact)
-    run_test("mod < n identity",               passed, failed, test_mod_less_than_n)
-    run_test("modexp RSA encrypt (65^17 mod 3233)", passed, failed, test_modexp_textbook_rsa_enc)
-    run_test("modexp RSA decrypt (2790^2753 mod 3233)", passed, failed, test_modexp_textbook_rsa_dec)
-    run_test("modexp base=0",                  passed, failed, test_modexp_base0)
-    run_test("modexp exp=0",                   passed, failed, test_modexp_exp0)
-    run_test("modexp Mersenne-127 (2^65537)",  passed, failed, test_modexp_mersenne127)
-    run_test("modexp P-256 prime (3^65537)",   passed, failed, test_modexp_p256_prime)
-    run_test("modinv small (3 mod 7, 2 mod 7, 1 mod 7)", passed, failed, test_modinv_small)
-    run_test("modinv consistency (a * inv ≡ 1)", passed, failed, test_modinv_consistency)
-    run_test("modinv P-256 order (GCD == Fermat)", passed, failed, test_modinv_p256_order)
+    run_test[test_zero_one]("zero and one", passed, failed)
+    run_test[test_from_u64]("from_u64", passed, failed)
+    run_test[test_from_to_bytes_roundtrip]("from/to bytes roundtrip", passed, failed)
+    run_test[test_from_to_bytes_leading_zeros]("from bytes leading zeros", passed, failed)
+    run_test[test_add_carry]("add with carry", passed, failed)
+    run_test[test_add_large]("add large values", passed, failed)
+    run_test[test_sub_borrow]("sub with borrow", passed, failed)
+    run_test[test_sub_equal]("sub equal → zero", passed, failed)
+    run_test[test_mul_basic]("mul basic", passed, failed)
+    run_test[test_mul_zero]("mul by zero", passed, failed)
+    run_test[test_mul_one]("mul by one", passed, failed)
+    run_test[test_bit_len]("bit length", passed, failed)
+    run_test[test_mod_basic]("mod basic (17 mod 5)", passed, failed)
+    run_test[test_mod_exact]("mod exact (100 mod 10)", passed, failed)
+    run_test[test_mod_less_than_n]("mod < n identity", passed, failed)
+    run_test[test_modexp_textbook_rsa_enc]("modexp RSA encrypt (65^17 mod 3233)", passed, failed)
+    run_test[test_modexp_textbook_rsa_dec]("modexp RSA decrypt (2790^2753 mod 3233)", passed, failed)
+    run_test[test_modexp_base0]("modexp base=0", passed, failed)
+    run_test[test_modexp_exp0]("modexp exp=0", passed, failed)
+    run_test[test_modexp_mersenne127]("modexp Mersenne-127 (2^65537)", passed, failed)
+    run_test[test_modexp_p256_prime]("modexp P-256 prime (3^65537)", passed, failed)
+    run_test[test_modinv_small]("modinv small (3 mod 7, 2 mod 7, 1 mod 7)", passed, failed)
+    run_test[test_modinv_consistency]("modinv consistency (a * inv ≡ 1)", passed, failed)
+    run_test[test_modinv_p256_order]("modinv P-256 order (GCD == Fermat)", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:

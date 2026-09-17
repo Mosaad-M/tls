@@ -40,7 +40,7 @@ def hex_to_bytes(h: String) -> List[UInt8]:
 
 def make_bytes(value: UInt8, count: Int) -> List[UInt8]:
     var out = List[UInt8](capacity=count)
-    for i in range(count):
+    for _ in range(count):
         out.append(value)
     return out^
 
@@ -54,11 +54,10 @@ def bytes_equal(a: List[UInt8], b: List[UInt8]) -> Bool:
     return True
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -72,7 +71,7 @@ def run_test(
 # ── Tests ──────────────────────────────────────────────────────────────────
 
 def test_seal_12_aes128_seqno0() raises:
-    """record_seal_12 AES-128-GCM, seqno=0 matches Python vector."""
+    """Record_seal_12 AES-128-GCM, seqno=0 matches Python vector."""
     var key  = make_bytes(0x01, 16)
     var iv4  = make_bytes(0x02, 4)
     var pt_str = String("Hello, TLS 1.2!")
@@ -89,7 +88,7 @@ def test_seal_12_aes128_seqno0() raises:
 
 
 def test_seal_12_aes128_seqno1() raises:
-    """record_seal_12 AES-128-GCM, seqno=1: explicit nonce differs."""
+    """Record_seal_12 AES-128-GCM, seqno=1: explicit nonce differs."""
     var key  = make_bytes(0x01, 16)
     var iv4  = make_bytes(0x02, 4)
     var pt_str = String("Hello, TLS 1.2!")
@@ -106,7 +105,7 @@ def test_seal_12_aes128_seqno1() raises:
 
 
 def test_seal_12_aes256_seqno0() raises:
-    """record_seal_12 AES-256-GCM, seqno=0 matches Python vector."""
+    """Record_seal_12 AES-256-GCM, seqno=0 matches Python vector."""
     var key  = make_bytes(0x03, 32)
     var iv4  = make_bytes(0x02, 4)
     var pt_str = String("Hello, TLS 1.2!")
@@ -123,7 +122,7 @@ def test_seal_12_aes256_seqno0() raises:
 
 
 def test_open_12_roundtrip() raises:
-    """record_open_12 roundtrip: seal then open → original plaintext."""
+    """Record_open_12 roundtrip: seal then open → original plaintext."""
     var key  = make_bytes(0x01, 16)
     var iv4  = make_bytes(0x02, 4)
     var pt   = make_bytes(0xAB, 64)
@@ -134,7 +133,7 @@ def test_open_12_roundtrip() raises:
 
 
 def test_open_12_tampered_tag_raises() raises:
-    """record_open_12: tampered tag raises authentication error."""
+    """Record_open_12: tampered tag raises authentication error."""
     var key  = make_bytes(0x01, 16)
     var iv4  = make_bytes(0x02, 4)
     var pt   = make_bytes(0xAB, 32)
@@ -151,7 +150,7 @@ def test_open_12_tampered_tag_raises() raises:
 
 
 def test_open_12_wrong_seqno_raises() raises:
-    """record_open_12: decrypting with wrong seqno raises (AAD mismatch)."""
+    """Record_open_12: decrypting with wrong seqno raises (AAD mismatch)."""
     var key  = make_bytes(0x01, 16)
     var iv4  = make_bytes(0x02, 4)
     var pt   = make_bytes(0xAB, 32)
@@ -173,12 +172,12 @@ def main() raises:
     print("=== TLS 1.2 Record Layer Tests ===")
     print()
 
-    run_test("record_seal_12 AES-128 seqno=0", passed, failed, test_seal_12_aes128_seqno0)
-    run_test("record_seal_12 AES-128 seqno=1", passed, failed, test_seal_12_aes128_seqno1)
-    run_test("record_seal_12 AES-256 seqno=0", passed, failed, test_seal_12_aes256_seqno0)
-    run_test("record_open_12 roundtrip", passed, failed, test_open_12_roundtrip)
-    run_test("record_open_12 tampered tag raises", passed, failed, test_open_12_tampered_tag_raises)
-    run_test("record_open_12 wrong seqno raises", passed, failed, test_open_12_wrong_seqno_raises)
+    run_test[test_seal_12_aes128_seqno0]("record_seal_12 AES-128 seqno=0", passed, failed)
+    run_test[test_seal_12_aes128_seqno1]("record_seal_12 AES-128 seqno=1", passed, failed)
+    run_test[test_seal_12_aes256_seqno0]("record_seal_12 AES-256 seqno=0", passed, failed)
+    run_test[test_open_12_roundtrip]("record_open_12 roundtrip", passed, failed)
+    run_test[test_open_12_tampered_tag_raises]("record_open_12 tampered tag raises", passed, failed)
+    run_test[test_open_12_wrong_seqno_raises]("record_open_12 wrong seqno raises", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

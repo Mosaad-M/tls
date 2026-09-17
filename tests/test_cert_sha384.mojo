@@ -21,11 +21,10 @@ def hex_to_bytes(hex: String) -> List[UInt8]:
     return out^
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -144,13 +143,13 @@ def main() raises:
     var failed = 0
     print("=== SHA-384 Cert Signature + RSA-PSS Tests ===")
     print()
-    run_test("parse sha384WithRSAEncryption cert", passed, failed, test1_parse_sha384_rsa_cert)
-    run_test("parse ecdsa-with-SHA384 cert", passed, failed, test2_parse_sha384_ecdsa_cert)
-    run_test("parse rsassa-pss cert", passed, failed, test3_parse_rsa_pss_cert)
-    run_test("cert_verify_sig sha384WithRSA chain", passed, failed, test4_verify_sha384_rsa_chain)
-    run_test("cert_verify_sig sha384WithECDSA chain", passed, failed, test5_verify_sha384_ecdsa_chain)
-    run_test("cert_chain_verify 2-cert SHA-384 RSA chain", passed, failed, test6_chain_verify_sha384_rsa)
-    run_test("cert_chain_verify RSA-PSS root", passed, failed, test7_chain_verify_rsa_pss)
+    run_test[test1_parse_sha384_rsa_cert]("parse sha384WithRSAEncryption cert", passed, failed)
+    run_test[test2_parse_sha384_ecdsa_cert]("parse ecdsa-with-SHA384 cert", passed, failed)
+    run_test[test3_parse_rsa_pss_cert]("parse rsassa-pss cert", passed, failed)
+    run_test[test4_verify_sha384_rsa_chain]("cert_verify_sig sha384WithRSA chain", passed, failed)
+    run_test[test5_verify_sha384_ecdsa_chain]("cert_verify_sig sha384WithECDSA chain", passed, failed)
+    run_test[test6_chain_verify_sha384_rsa]("cert_chain_verify 2-cert SHA-384 RSA chain", passed, failed)
+    run_test[test7_chain_verify_rsa_pss]("cert_chain_verify RSA-PSS root", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:
