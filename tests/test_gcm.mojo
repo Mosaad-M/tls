@@ -45,11 +45,10 @@ def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -265,19 +264,19 @@ def main() raises:
     print("=== AES-GCM Tests ===")
     print()
 
-    run_test("AES-128-GCM TC1 (empty PT/AAD)", passed, failed, test_gcm128_tc1_empty)
-    run_test("AES-128-GCM TC2 (16-byte zero PT)", passed, failed, test_gcm128_tc2_zero_pt)
-    run_test("AES-128-GCM TC3 (64-byte PT, no AAD)", passed, failed, test_gcm128_tc3_known_key)
-    run_test("AES-128-GCM TC4 (60-byte PT + AAD)", passed, failed, test_gcm128_tc4_with_aad)
+    run_test[test_gcm128_tc1_empty]("AES-128-GCM TC1 (empty PT/AAD)", passed, failed)
+    run_test[test_gcm128_tc2_zero_pt]("AES-128-GCM TC2 (16-byte zero PT)", passed, failed)
+    run_test[test_gcm128_tc3_known_key]("AES-128-GCM TC3 (64-byte PT, no AAD)", passed, failed)
+    run_test[test_gcm128_tc4_with_aad]("AES-128-GCM TC4 (60-byte PT + AAD)", passed, failed)
 
-    run_test("AES-256-GCM TC1 (empty PT/AAD)", passed, failed, test_gcm256_tc1_empty)
-    run_test("AES-256-GCM TC2 (16-byte zero PT)", passed, failed, test_gcm256_tc2_zero_pt)
-    run_test("AES-256-GCM TC4 (60-byte PT + AAD)", passed, failed, test_gcm256_tc4_with_aad)
+    run_test[test_gcm256_tc1_empty]("AES-256-GCM TC1 (empty PT/AAD)", passed, failed)
+    run_test[test_gcm256_tc2_zero_pt]("AES-256-GCM TC2 (16-byte zero PT)", passed, failed)
+    run_test[test_gcm256_tc4_with_aad]("AES-256-GCM TC4 (60-byte PT + AAD)", passed, failed)
 
-    run_test("GCM decrypt round-trip", passed, failed, test_gcm_decrypt_roundtrip)
-    run_test("GCM rejects tampered CT", passed, failed, test_gcm_reject_tampered_ct)
-    run_test("GCM rejects tampered tag", passed, failed, test_gcm_reject_tampered_tag)
-    run_test("GCM rejects tampered AAD", passed, failed, test_gcm_reject_tampered_aad)
+    run_test[test_gcm_decrypt_roundtrip]("GCM decrypt round-trip", passed, failed)
+    run_test[test_gcm_reject_tampered_ct]("GCM rejects tampered CT", passed, failed)
+    run_test[test_gcm_reject_tampered_tag]("GCM rejects tampered tag", passed, failed)
+    run_test[test_gcm_reject_tampered_aad]("GCM rejects tampered AAD", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

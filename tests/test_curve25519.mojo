@@ -37,7 +37,11 @@ def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
+def run_test[test_fn: def() thin raises -> None](
+    name: String,
+    mut passed: Int,
+    mut failed: Int,
+):
     try:
         test_fn()
         print("  PASS:", name)
@@ -167,11 +171,11 @@ def main() raises:
     var failed = 0
     print("=== X25519 / Curve25519 Tests ===")
     print()
-    run_test("RFC 7748 Alice public key",        passed, failed, test_x25519_rfc7748_alice)
-    run_test("RFC 7748 Bob public key",          passed, failed, test_x25519_rfc7748_bob)
-    run_test("RFC 7748 shared secret",           passed, failed, test_x25519_rfc7748_shared_secret)
-    run_test("RFC 7748 iterated ×1000",          passed, failed, test_x25519_iterated_1000)
-    run_test("Low-order point → all-zero",       passed, failed, test_x25519_reject_low_order)
+    run_test[test_x25519_rfc7748_alice]("RFC 7748 Alice public key", passed, failed)
+    run_test[test_x25519_rfc7748_bob]("RFC 7748 Bob public key", passed, failed)
+    run_test[test_x25519_rfc7748_shared_secret]("RFC 7748 shared secret", passed, failed)
+    run_test[test_x25519_iterated_1000]("RFC 7748 iterated ×1000", passed, failed)
+    run_test[test_x25519_reject_low_order]("Low-order point → all-zero", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:

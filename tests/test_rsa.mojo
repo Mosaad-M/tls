@@ -28,7 +28,11 @@ def hex_to_bytes(hex: String) raises -> List[UInt8]:
     return out^
 
 
-def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
+def run_test[test_fn: def() thin raises -> None](
+    name: String,
+    mut passed: Int,
+    mut failed: Int,
+):
     try:
         test_fn()
         print("  PASS:", name)
@@ -160,12 +164,12 @@ def main() raises:
     var failed = 0
     print("=== RSA Verification Tests ===")
     print()
-    run_test("PKCS#1 v1.5 valid signature",        passed, failed, test_pkcs1_valid)
-    run_test("PKCS#1 v1.5 reject wrong hash",       passed, failed, test_pkcs1_reject_wrong_hash)
-    run_test("PKCS#1 v1.5 reject tampered sig",     passed, failed, test_pkcs1_reject_tampered_sig)
-    run_test("RSA-PSS valid signature",             passed, failed, test_pss_valid)
-    run_test("RSA-PSS reject wrong hash",           passed, failed, test_pss_reject_wrong_hash)
-    run_test("RSA-PSS reject tampered sig",         passed, failed, test_pss_reject_tampered_sig)
+    run_test[test_pkcs1_valid]("PKCS#1 v1.5 valid signature", passed, failed)
+    run_test[test_pkcs1_reject_wrong_hash]("PKCS#1 v1.5 reject wrong hash", passed, failed)
+    run_test[test_pkcs1_reject_tampered_sig]("PKCS#1 v1.5 reject tampered sig", passed, failed)
+    run_test[test_pss_valid]("RSA-PSS valid signature", passed, failed)
+    run_test[test_pss_reject_wrong_hash]("RSA-PSS reject wrong hash", passed, failed)
+    run_test[test_pss_reject_tampered_sig]("RSA-PSS reject tampered sig", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:

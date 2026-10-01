@@ -37,7 +37,11 @@ def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
+def run_test[test_fn: def() thin raises -> None](
+    name: String,
+    mut passed: Int,
+    mut failed: Int,
+):
     try:
         test_fn()
         print("  PASS:", name)
@@ -123,9 +127,9 @@ def main() raises:
     var failed = 0
     print("=== ChaCha20 Tests ===")
     print()
-    run_test("RFC 8439 §2.3.2 block function", passed, failed, test_chacha20_block)
-    run_test("RFC 8439 §2.4.2 encrypt",        passed, failed, test_chacha20_encrypt)
-    run_test("decrypt roundtrip",              passed, failed, test_chacha20_decrypt_roundtrip)
+    run_test[test_chacha20_block]("RFC 8439 §2.3.2 block function", passed, failed)
+    run_test[test_chacha20_encrypt]("RFC 8439 §2.4.2 encrypt", passed, failed)
+    run_test[test_chacha20_decrypt_roundtrip]("decrypt roundtrip", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:

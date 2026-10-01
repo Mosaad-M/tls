@@ -37,7 +37,11 @@ def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
+def run_test[test_fn: def() thin raises -> None](
+    name: String,
+    mut passed: Int,
+    mut failed: Int,
+):
     try:
         test_fn()
         print("  PASS:", name)
@@ -205,12 +209,12 @@ def main() raises:
     var failed = 0
     print("=== P-256 Tests ===")
     print()
-    run_test("scalar=1 → generator",         passed, failed, test_generator_identity)
-    run_test("Alice public key derivation",   passed, failed, test_public_key_alice)
-    run_test("Bob public key derivation",     passed, failed, test_public_key_bob)
-    run_test("ECDH shared secret",            passed, failed, test_ecdh_shared_secret)
-    run_test("ECDSA verify valid signature",  passed, failed, test_ecdsa_verify)
-    run_test("ECDSA reject tampered sig",     passed, failed, test_ecdsa_reject_bad_sig)
+    run_test[test_generator_identity]("scalar=1 → generator", passed, failed)
+    run_test[test_public_key_alice]("Alice public key derivation", passed, failed)
+    run_test[test_public_key_bob]("Bob public key derivation", passed, failed)
+    run_test[test_ecdh_shared_secret]("ECDH shared secret", passed, failed)
+    run_test[test_ecdsa_verify]("ECDSA verify valid signature", passed, failed)
+    run_test[test_ecdsa_reject_bad_sig]("ECDSA reject tampered sig", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:

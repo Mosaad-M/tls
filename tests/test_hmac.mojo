@@ -60,11 +60,10 @@ def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -294,25 +293,25 @@ def main() raises:
     print("=== HMAC-SHA256 / SHA384 Tests ===")
     print()
 
-    run_test("HMAC-SHA256 TC1 (short key)", passed, failed, test_hmac256_tc1)
-    run_test("HMAC-SHA256 TC2 (string key)", passed, failed, test_hmac256_tc2)
-    run_test("HMAC-SHA256 TC3 (0xdd data)", passed, failed, test_hmac256_tc3)
-    run_test("HMAC-SHA256 TC4 (seq key)", passed, failed, test_hmac256_tc4)
-    run_test("HMAC-SHA256 TC5 (truncation)", passed, failed, test_hmac256_tc5)
-    run_test("HMAC-SHA256 TC6 (long key)", passed, failed, test_hmac256_tc6)
-    run_test("HMAC-SHA256 TC7 (long key+data)", passed, failed, test_hmac256_tc7)
+    run_test[test_hmac256_tc1]("HMAC-SHA256 TC1 (short key)", passed, failed)
+    run_test[test_hmac256_tc2]("HMAC-SHA256 TC2 (string key)", passed, failed)
+    run_test[test_hmac256_tc3]("HMAC-SHA256 TC3 (0xdd data)", passed, failed)
+    run_test[test_hmac256_tc4]("HMAC-SHA256 TC4 (seq key)", passed, failed)
+    run_test[test_hmac256_tc5]("HMAC-SHA256 TC5 (truncation)", passed, failed)
+    run_test[test_hmac256_tc6]("HMAC-SHA256 TC6 (long key)", passed, failed)
+    run_test[test_hmac256_tc7]("HMAC-SHA256 TC7 (long key+data)", passed, failed)
 
-    run_test("HMAC-SHA384 TC1 (short key)", passed, failed, test_hmac384_tc1)
-    run_test("HMAC-SHA384 TC2 (string key)", passed, failed, test_hmac384_tc2)
-    run_test("HMAC-SHA384 TC3 (0xdd data)", passed, failed, test_hmac384_tc3)
-    run_test("HMAC-SHA384 TC4 (seq key)", passed, failed, test_hmac384_tc4)
-    run_test("HMAC-SHA384 TC6 (long key)", passed, failed, test_hmac384_tc6)
-    run_test("HMAC-SHA384 TC7 (long key+data)", passed, failed, test_hmac384_tc7)
+    run_test[test_hmac384_tc1]("HMAC-SHA384 TC1 (short key)", passed, failed)
+    run_test[test_hmac384_tc2]("HMAC-SHA384 TC2 (string key)", passed, failed)
+    run_test[test_hmac384_tc3]("HMAC-SHA384 TC3 (0xdd data)", passed, failed)
+    run_test[test_hmac384_tc4]("HMAC-SHA384 TC4 (seq key)", passed, failed)
+    run_test[test_hmac384_tc6]("HMAC-SHA384 TC6 (long key)", passed, failed)
+    run_test[test_hmac384_tc7]("HMAC-SHA384 TC7 (long key+data)", passed, failed)
 
-    run_test("hmac_equal same bytes", passed, failed, test_hmac_equal_same)
-    run_test("hmac_equal different bytes", passed, failed, test_hmac_equal_diff)
-    run_test("hmac_equal length mismatch", passed, failed, test_hmac_equal_length_mismatch)
-    run_test("hmac_equal single-bit diff", passed, failed, test_hmac_equal_one_bit)
+    run_test[test_hmac_equal_same]("hmac_equal same bytes", passed, failed)
+    run_test[test_hmac_equal_diff]("hmac_equal different bytes", passed, failed)
+    run_test[test_hmac_equal_length_mismatch]("hmac_equal length mismatch", passed, failed)
+    run_test[test_hmac_equal_one_bit]("hmac_equal single-bit diff", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

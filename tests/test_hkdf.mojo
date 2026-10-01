@@ -59,11 +59,10 @@ def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -224,14 +223,14 @@ def main() raises:
     print("=== HKDF-SHA256 Tests ===")
     print()
 
-    run_test("RFC 5869 TC1 extract", passed, failed, test_hkdf_tc1_extract)
-    run_test("RFC 5869 TC1 expand (42 bytes)", passed, failed, test_hkdf_tc1_expand)
-    run_test("RFC 5869 TC2 extract", passed, failed, test_hkdf_tc2_extract)
-    run_test("RFC 5869 TC2 expand (82 bytes)", passed, failed, test_hkdf_tc2_expand)
-    run_test("RFC 5869 TC3 extract (no salt)", passed, failed, test_hkdf_tc3_extract)
-    run_test("RFC 5869 TC3 expand (empty info)", passed, failed, test_hkdf_tc3_expand)
-    run_test("TLS 1.3 expand_label 'derived'", passed, failed, test_expand_label_derived)
-    run_test("TLS 1.3 early_secret chain", passed, failed, test_expand_label_tls13_early_chain)
+    run_test[test_hkdf_tc1_extract]("RFC 5869 TC1 extract", passed, failed)
+    run_test[test_hkdf_tc1_expand]("RFC 5869 TC1 expand (42 bytes)", passed, failed)
+    run_test[test_hkdf_tc2_extract]("RFC 5869 TC2 extract", passed, failed)
+    run_test[test_hkdf_tc2_expand]("RFC 5869 TC2 expand (82 bytes)", passed, failed)
+    run_test[test_hkdf_tc3_extract]("RFC 5869 TC3 extract (no salt)", passed, failed)
+    run_test[test_hkdf_tc3_expand]("RFC 5869 TC3 expand (empty info)", passed, failed)
+    run_test[test_expand_label_derived]("TLS 1.3 expand_label 'derived'", passed, failed)
+    run_test[test_expand_label_tls13_early_chain]("TLS 1.3 early_secret chain", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

@@ -9,11 +9,10 @@
 from crypto.pem import pem_decode
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -112,10 +111,10 @@ def main() raises:
     print("=== PEM Decoder Tests ===")
     print()
 
-    run_test("single CERTIFICATE block", passed, failed, test_single_cert)
-    run_test("two CERTIFICATE blocks", passed, failed, test_two_certs)
-    run_test("wrong label raises", passed, failed, test_wrong_label_raises)
-    run_test("malformed base64 raises", passed, failed, test_malformed_base64_raises)
+    run_test[test_single_cert]("single CERTIFICATE block", passed, failed)
+    run_test[test_two_certs]("two CERTIFICATE blocks", passed, failed)
+    run_test[test_wrong_label_raises]("wrong label raises", passed, failed)
+    run_test[test_malformed_base64_raises]("malformed base64 raises", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

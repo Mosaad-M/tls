@@ -71,7 +71,11 @@ def assert_true(cond: Bool, label: String) raises:
         raise Error(label + ": expected True")
 
 
-def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
+def run_test[test_fn: def() thin raises -> None](
+    name: String,
+    mut passed: Int,
+    mut failed: Int,
+):
     try:
         test_fn()
         print("  PASS:", name)
@@ -255,13 +259,13 @@ def main() raises:
     print("=== PSK Handshake Tests ===")
     print()
 
-    run_test("psk_from_ticket fixed vector",         passed, failed, test_psk_from_ticket_vector)
-    run_test("psk_nonce changes result",             passed, failed, test_psk_nonce_changes_result)
-    run_test("early_secret_from_psk fixed vector",  passed, failed, test_early_secret_from_psk_vector)
-    run_test("early_secret zeros PSK baseline",      passed, failed, test_early_secret_zeros_psk_matches_baseline)
-    run_test("binder_key functional consistency",    passed, failed, test_binder_key_consistency)
-    run_test("psk_binder functional consistency",    passed, failed, test_psk_binder_consistency)
-    run_test("psk_binder transcript sensitivity",   passed, failed, test_psk_binder_transcript_sensitivity)
+    run_test[test_psk_from_ticket_vector]("psk_from_ticket fixed vector", passed, failed)
+    run_test[test_psk_nonce_changes_result]("psk_nonce changes result", passed, failed)
+    run_test[test_early_secret_from_psk_vector]("early_secret_from_psk fixed vector", passed, failed)
+    run_test[test_early_secret_zeros_psk_matches_baseline]("early_secret zeros PSK baseline", passed, failed)
+    run_test[test_binder_key_consistency]("binder_key functional consistency", passed, failed)
+    run_test[test_psk_binder_consistency]("psk_binder functional consistency", passed, failed)
+    run_test[test_psk_binder_transcript_sensitivity]("psk_binder transcript sensitivity", passed, failed)
 
     print()
     print("Results:", String(passed), "passed,", String(failed), "failed,", String(passed + failed), "total")

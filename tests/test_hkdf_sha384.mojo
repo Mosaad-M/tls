@@ -52,7 +52,11 @@ def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
+def run_test[test_fn: def() thin raises -> None](
+    name: String,
+    mut passed: Int,
+    mut failed: Int,
+):
     try:
         test_fn()
         print("  PASS:", name)
@@ -138,9 +142,9 @@ def main() raises:
     var failed = 0
     print("=== HKDF-SHA384 Tests ===")
     print()
-    run_test("hkdf_extract_sha384 matches Python HMAC-SHA384",    passed, failed, test_hkdf_extract_sha384)
-    run_test("hkdf_expand_sha384 64-byte output",                 passed, failed, test_hkdf_expand_sha384)
-    run_test("hkdf_expand_label_sha384 'derived' label",          passed, failed, test_hkdf_expand_label_sha384)
+    run_test[test_hkdf_extract_sha384]("hkdf_extract_sha384 matches Python HMAC-SHA384", passed, failed)
+    run_test[test_hkdf_expand_sha384]("hkdf_expand_sha384 64-byte output", passed, failed)
+    run_test[test_hkdf_expand_label_sha384]("hkdf_expand_label_sha384 'derived' label", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:

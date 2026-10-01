@@ -45,11 +45,10 @@ def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -162,14 +161,14 @@ def main() raises:
     print("=== AES Block Cipher Tests ===")
     print()
 
-    run_test("AES-128 FIPS 197 Appendix B", passed, failed, test_aes128_fips197_b)
-    run_test("AES-128 FIPS 197 Appendix C.1", passed, failed, test_aes128_fips197_c1)
-    run_test("AES-128 zero key/pt", passed, failed, test_aes128_zero)
-    run_test("AES-128 all-0xFF key/pt", passed, failed, test_aes128_all_ff)
+    run_test[test_aes128_fips197_b]("AES-128 FIPS 197 Appendix B", passed, failed)
+    run_test[test_aes128_fips197_c1]("AES-128 FIPS 197 Appendix C.1", passed, failed)
+    run_test[test_aes128_zero]("AES-128 zero key/pt", passed, failed)
+    run_test[test_aes128_all_ff]("AES-128 all-0xFF key/pt", passed, failed)
 
-    run_test("AES-256 FIPS 197 Appendix C.3", passed, failed, test_aes256_fips197_c3)
-    run_test("AES-256 zero key/pt", passed, failed, test_aes256_zero)
-    run_test("AES-256 NIST known vector", passed, failed, test_aes256_known)
+    run_test[test_aes256_fips197_c3]("AES-256 FIPS 197 Appendix C.3", passed, failed)
+    run_test[test_aes256_zero]("AES-256 zero key/pt", passed, failed)
+    run_test[test_aes256_known]("AES-256 NIST known vector", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

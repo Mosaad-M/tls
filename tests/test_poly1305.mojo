@@ -37,7 +37,11 @@ def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
+def run_test[test_fn: def() thin raises -> None](
+    name: String,
+    mut passed: Int,
+    mut failed: Int,
+):
     try:
         test_fn()
         print("  PASS:", name)
@@ -186,12 +190,12 @@ def main() raises:
     var failed = 0
     print("=== Poly1305 / ChaCha20-Poly1305 Tests ===")
     print()
-    run_test("RFC 8439 §2.5.2 Poly1305 MAC",          passed, failed, test_poly1305_mac_rfc8439)
-    run_test("RFC 8439 §2.8.2 AEAD encrypt",           passed, failed, test_chacha20_poly1305_encrypt_rfc8439)
-    run_test("AEAD decrypt roundtrip",                 passed, failed, test_chacha20_poly1305_roundtrip)
-    run_test("AEAD rejects tampered ciphertext",       passed, failed, test_reject_tampered_ct)
-    run_test("AEAD rejects tampered tag",              passed, failed, test_reject_tampered_tag)
-    run_test("AEAD rejects tampered AAD",              passed, failed, test_reject_tampered_aad)
+    run_test[test_poly1305_mac_rfc8439]("RFC 8439 §2.5.2 Poly1305 MAC", passed, failed)
+    run_test[test_chacha20_poly1305_encrypt_rfc8439]("RFC 8439 §2.8.2 AEAD encrypt", passed, failed)
+    run_test[test_chacha20_poly1305_roundtrip]("AEAD decrypt roundtrip", passed, failed)
+    run_test[test_reject_tampered_ct]("AEAD rejects tampered ciphertext", passed, failed)
+    run_test[test_reject_tampered_tag]("AEAD rejects tampered tag", passed, failed)
+    run_test[test_reject_tampered_aad]("AEAD rejects tampered AAD", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:

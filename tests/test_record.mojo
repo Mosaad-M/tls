@@ -43,7 +43,11 @@ def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
+def run_test[test_fn: def() thin raises -> None](
+    name: String,
+    mut passed: Int,
+    mut failed: Int,
+):
     try:
         test_fn()
         print("  PASS:", name)
@@ -211,13 +215,13 @@ def main() raises:
     var failed = 0
     print("=== TLS 1.3 Record Layer Tests ===")
     print()
-    run_test("AES-128-GCM known vector",       passed, failed, test_aes128_known_vector)
-    run_test("AES-128-GCM round-trip",         passed, failed, test_aes128_round_trip)
-    run_test("AES-128-GCM seqno changes nonce", passed, failed, test_aes128_seqno)
-    run_test("AES-256-GCM round-trip",         passed, failed, test_aes256_round_trip)
-    run_test("ChaCha20-Poly1305 round-trip",   passed, failed, test_chacha20_round_trip)
-    run_test("reject tampered record",         passed, failed, test_reject_tampered)
-    run_test("reject wrong seqno",             passed, failed, test_reject_wrong_seqno)
+    run_test[test_aes128_known_vector]("AES-128-GCM known vector", passed, failed)
+    run_test[test_aes128_round_trip]("AES-128-GCM round-trip", passed, failed)
+    run_test[test_aes128_seqno]("AES-128-GCM seqno changes nonce", passed, failed)
+    run_test[test_aes256_round_trip]("AES-256-GCM round-trip", passed, failed)
+    run_test[test_chacha20_round_trip]("ChaCha20-Poly1305 round-trip", passed, failed)
+    run_test[test_reject_tampered]("reject tampered record", passed, failed)
+    run_test[test_reject_wrong_seqno]("reject wrong seqno", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:

@@ -12,11 +12,10 @@
 from crypto.cert import X509Cert, cert_parse, cert_chain_verify
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -144,11 +143,11 @@ def main() raises:
     print("=== Certificate Chain Verification Tests ===")
     print()
 
-    run_test("valid 2-cert chain", passed, failed, test_valid_2cert_chain)
-    run_test("valid 3-cert chain (root→inter→leaf)", passed, failed, test_valid_3cert_chain)
-    run_test("hostname mismatch raises", passed, failed, test_hostname_mismatch)
-    run_test("tampered intermediate raises", passed, failed, test_tampered_intermediate)
-    run_test("unrelated trust anchor raises", passed, failed, test_unrelated_trust_anchor)
+    run_test[test_valid_2cert_chain]("valid 2-cert chain", passed, failed)
+    run_test[test_valid_3cert_chain]("valid 3-cert chain (root→inter→leaf)", passed, failed)
+    run_test[test_hostname_mismatch]("hostname mismatch raises", passed, failed)
+    run_test[test_tampered_intermediate]("tampered intermediate raises", passed, failed)
+    run_test[test_unrelated_trust_anchor]("unrelated trust anchor raises", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

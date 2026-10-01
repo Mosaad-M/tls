@@ -24,7 +24,11 @@ def hex_to_bytes(hex: String) raises -> List[UInt8]:
     return out^
 
 
-def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
+def run_test[test_fn: def() thin raises -> None](
+    name: String,
+    mut passed: Int,
+    mut failed: Int,
+):
     try:
         test_fn()
         print("  PASS:", name)
@@ -201,12 +205,12 @@ def main() raises:
     var failed = 0
     print("=== X.509 Certificate Tests ===")
     print()
-    run_test("parse RSA-2048 cert",           passed, failed, test_parse_rsa_cert)
-    run_test("parse EC P-256 cert",           passed, failed, test_parse_ec_cert)
-    run_test("verify RSA self-signed cert",   passed, failed, test_verify_rsa_self_signed)
-    run_test("verify EC self-signed cert",    passed, failed, test_verify_ec_self_signed)
-    run_test("reject tampered RSA cert",      passed, failed, test_reject_tampered_rsa)
-    run_test("reject tampered EC cert",       passed, failed, test_reject_tampered_ec)
+    run_test[test_parse_rsa_cert]("parse RSA-2048 cert", passed, failed)
+    run_test[test_parse_ec_cert]("parse EC P-256 cert", passed, failed)
+    run_test[test_verify_rsa_self_signed]("verify RSA self-signed cert", passed, failed)
+    run_test[test_verify_ec_self_signed]("verify EC self-signed cert", passed, failed)
+    run_test[test_reject_tampered_rsa]("reject tampered RSA cert", passed, failed)
+    run_test[test_reject_tampered_ec]("reject tampered EC cert", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:

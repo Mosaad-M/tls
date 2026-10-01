@@ -22,11 +22,10 @@ from crypto.asn1 import asn1_parse_ecdsa_sig_48
 from crypto.cert import X509Cert, cert_parse, cert_verify_sig
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -185,12 +184,12 @@ def main() raises:
     print("=== P-384 Tests ===")
     print()
 
-    run_test("p384_ecdsa_verify: valid signature",          passed, failed, test_p384_ecdsa_verify_valid)
-    run_test("p384_ecdsa_verify: bad signature raises",     passed, failed, test_p384_ecdsa_verify_bad_sig)
-    run_test("p384_ecdsa_verify: bad public key raises",    passed, failed, test_p384_ecdsa_verify_bad_key)
-    run_test("asn1_parse_ecdsa_sig_48: 48-byte r and s",    passed, failed, test_asn1_parse_ecdsa_sig_48)
-    run_test("cert_parse P-384 cert → ec_curve=p384",       passed, failed, test_cert_parse_p384)
-    run_test("cert_verify_sig P-384 chain → passes",        passed, failed, test_cert_verify_sig_p384)
+    run_test[test_p384_ecdsa_verify_valid]("p384_ecdsa_verify: valid signature", passed, failed)
+    run_test[test_p384_ecdsa_verify_bad_sig]("p384_ecdsa_verify: bad signature raises", passed, failed)
+    run_test[test_p384_ecdsa_verify_bad_key]("p384_ecdsa_verify: bad public key raises", passed, failed)
+    run_test[test_asn1_parse_ecdsa_sig_48]("asn1_parse_ecdsa_sig_48: 48-byte r and s", passed, failed)
+    run_test[test_cert_parse_p384]("cert_parse P-384 cert → ec_curve=p384", passed, failed)
+    run_test[test_cert_verify_sig_p384]("cert_verify_sig P-384 chain → passes", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

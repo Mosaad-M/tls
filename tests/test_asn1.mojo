@@ -44,7 +44,11 @@ def assert_hex_eq(got: List[UInt8], expected_hex: String, label: String) raises:
         raise Error(label + ": got " + got_hex + ", want " + expected_hex)
 
 
-def run_test(name: String, mut passed: Int, mut failed: Int, test_fn: def () raises -> None):
+def run_test[test_fn: def() thin raises -> None](
+    name: String,
+    mut passed: Int,
+    mut failed: Int,
+):
     try:
         test_fn()
         print("  PASS:", name)
@@ -232,15 +236,15 @@ def main() raises:
     var failed = 0
     print("=== ASN.1 DER Parser Tests ===")
     print()
-    run_test("parse INTEGER TLV",         passed, failed, test_parse_integer)
-    run_test("parse SEQUENCE with children", passed, failed, test_parse_sequence)
-    run_test("long-form length encoding", passed, failed, test_long_form_length)
-    run_test("der_raw_bytes",             passed, failed, test_der_raw_bytes)
-    run_test("BIT STRING payload",        passed, failed, test_bit_str)
-    run_test("OID comparison",            passed, failed, test_oid_eq)
-    run_test("RSA SubjectPublicKeyInfo",  passed, failed, test_parse_rsa_spki)
-    run_test("EC SubjectPublicKeyInfo",   passed, failed, test_parse_ec_spki)
-    run_test("ECDSA DER signature",       passed, failed, test_parse_ecdsa_sig)
+    run_test[test_parse_integer]("parse INTEGER TLV", passed, failed)
+    run_test[test_parse_sequence]("parse SEQUENCE with children", passed, failed)
+    run_test[test_long_form_length]("long-form length encoding", passed, failed)
+    run_test[test_der_raw_bytes]("der_raw_bytes", passed, failed)
+    run_test[test_bit_str]("BIT STRING payload", passed, failed)
+    run_test[test_oid_eq]("OID comparison", passed, failed)
+    run_test[test_parse_rsa_spki]("RSA SubjectPublicKeyInfo", passed, failed)
+    run_test[test_parse_ec_spki]("EC SubjectPublicKeyInfo", passed, failed)
+    run_test[test_parse_ecdsa_sig]("ECDSA DER signature", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:

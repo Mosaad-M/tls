@@ -5,11 +5,10 @@
 from crypto.base64 import base64_encode, base64_decode
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -126,16 +125,16 @@ def main() raises:
     print("=== Base64 Tests ===")
     print()
 
-    run_test("encode ''", passed, failed, test_encode_empty)
-    run_test("encode 'f'", passed, failed, test_encode_f)
-    run_test("encode 'fo'", passed, failed, test_encode_fo)
-    run_test("encode 'foo'", passed, failed, test_encode_foo)
-    run_test("encode 'foobar'", passed, failed, test_encode_foobar)
-    run_test("encode 32 binary bytes", passed, failed, test_encode_32_binary)
-    run_test("decode 'Zg=='", passed, failed, test_decode_f)
-    run_test("decode 'Zm8='", passed, failed, test_decode_fo)
-    run_test("decode 'Zm9v'", passed, failed, test_decode_foo)
-    run_test("decode bad char raises", passed, failed, test_decode_bad_char)
+    run_test[test_encode_empty]("encode ''", passed, failed)
+    run_test[test_encode_f]("encode 'f'", passed, failed)
+    run_test[test_encode_fo]("encode 'fo'", passed, failed)
+    run_test[test_encode_foo]("encode 'foo'", passed, failed)
+    run_test[test_encode_foobar]("encode 'foobar'", passed, failed)
+    run_test[test_encode_32_binary]("encode 32 binary bytes", passed, failed)
+    run_test[test_decode_f]("decode 'Zg=='", passed, failed)
+    run_test[test_decode_fo]("decode 'Zm8='", passed, failed)
+    run_test[test_decode_foo]("decode 'Zm9v'", passed, failed)
+    run_test[test_decode_bad_char]("decode bad char raises", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

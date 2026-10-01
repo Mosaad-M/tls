@@ -30,11 +30,10 @@ from tls.message import (
 )
 
 
-def run_test(
+def run_test[test_fn: def() thin raises -> None](
     name: String,
     mut passed: Int,
     mut failed: Int,
-    test_fn: def () raises -> None,
 ):
     try:
         test_fn()
@@ -418,25 +417,25 @@ def main() raises:
     print("=== TLS Message Tests ===")
     print()
 
-    run_test("build_client_hello type byte = 0x01", passed, failed, test_ch_type_byte)
-    run_test("build_client_hello legacy_version = 0x0303", passed, failed, test_ch_legacy_version)
-    run_test("build_client_hello random at [6:38]", passed, failed, test_ch_random)
-    run_test("build_client_hello cipher suites: 1301+1302+1303 all offered", passed, failed, test_ch_cipher_suites)
-    run_test("build_client_hello SNI extension contains hostname", passed, failed, test_ch_sni)
-    run_test("build_client_hello key_share contains pub key", passed, failed, test_ch_key_share)
-    run_test("parse_handshake_msg: correct type + body", passed, failed, test_parse_handshake_msg)
-    run_test("parse_server_hello: cipher_suite + random", passed, failed, test_parse_server_hello)
-    run_test("parse_certificate_chain: 2 DER blobs", passed, failed, test_parse_certificate_chain)
-    run_test("parse_cert_verify: scheme + sig", passed, failed, test_parse_cert_verify)
-    run_test("parse_finished: 32-byte verify_data", passed, failed, test_parse_finished)
-    run_test("build_finished: correct 4-byte header + body", passed, failed, test_build_finished)
-    run_test("build_client_hello: no ALPN ext when protocols empty", passed, failed, test_build_ch_no_alpn_no_ext)
-    run_test("build_client_hello: ALPN ext present with ['h2']", passed, failed, test_build_ch_alpn_h2_present)
-    run_test("build_client_hello: ALPN ['h2','http/1.1'] lengths correct", passed, failed, test_build_ch_alpn_multi_lengths)
-    run_test("parse_alpn_from_ee: 'http/1.1' returned", passed, failed, test_parse_alpn_from_ee_http11)
-    run_test("parse_alpn_from_ee: 'h2' returned", passed, failed, test_parse_alpn_from_ee_h2)
-    run_test("parse_alpn_from_ee: absent -> empty string", passed, failed, test_parse_alpn_from_ee_absent)
-    run_test("parse_alpn_from_ee: empty EE body -> empty string", passed, failed, test_parse_alpn_from_ee_empty_body)
+    run_test[test_ch_type_byte]("build_client_hello type byte = 0x01", passed, failed)
+    run_test[test_ch_legacy_version]("build_client_hello legacy_version = 0x0303", passed, failed)
+    run_test[test_ch_random]("build_client_hello random at [6:38]", passed, failed)
+    run_test[test_ch_cipher_suites]("build_client_hello cipher suites: 1301+1302+1303 all offered", passed, failed)
+    run_test[test_ch_sni]("build_client_hello SNI extension contains hostname", passed, failed)
+    run_test[test_ch_key_share]("build_client_hello key_share contains pub key", passed, failed)
+    run_test[test_parse_handshake_msg]("parse_handshake_msg: correct type + body", passed, failed)
+    run_test[test_parse_server_hello]("parse_server_hello: cipher_suite + random", passed, failed)
+    run_test[test_parse_certificate_chain]("parse_certificate_chain: 2 DER blobs", passed, failed)
+    run_test[test_parse_cert_verify]("parse_cert_verify: scheme + sig", passed, failed)
+    run_test[test_parse_finished]("parse_finished: 32-byte verify_data", passed, failed)
+    run_test[test_build_finished]("build_finished: correct 4-byte header + body", passed, failed)
+    run_test[test_build_ch_no_alpn_no_ext]("build_client_hello: no ALPN ext when protocols empty", passed, failed)
+    run_test[test_build_ch_alpn_h2_present]("build_client_hello: ALPN ext present with ['h2']", passed, failed)
+    run_test[test_build_ch_alpn_multi_lengths]("build_client_hello: ALPN ['h2','http/1.1'] lengths correct", passed, failed)
+    run_test[test_parse_alpn_from_ee_http11]("parse_alpn_from_ee: 'http/1.1' returned", passed, failed)
+    run_test[test_parse_alpn_from_ee_h2]("parse_alpn_from_ee: 'h2' returned", passed, failed)
+    run_test[test_parse_alpn_from_ee_absent]("parse_alpn_from_ee: absent -> empty string", passed, failed)
+    run_test[test_parse_alpn_from_ee_empty_body]("parse_alpn_from_ee: empty EE body -> empty string", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

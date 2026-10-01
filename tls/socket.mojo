@@ -19,7 +19,7 @@
 # ============================================================================
 
 from std.ffi import external_call
-from std.memory.unsafe_pointer import alloc
+from std.memory import alloc
 from std.sys.info import CompilationTarget
 from crypto.cert import X509Cert, cert_parse
 from crypto.pem import pem_decode
@@ -114,7 +114,7 @@ def load_system_ca_bundle() raises -> List[X509Cert]:
     var buf = alloc[UInt8](buf_size)
     var total: Int = 0
     while total < buf_size:
-        var got = external_call["read", Int](fd, buf + total, buf_size - total)
+        var got = external_call["read", Int](fd, buf.unsafe_offset(total), buf_size - total)
         if got <= 0:
             break
         total += got
@@ -123,8 +123,8 @@ def load_system_ca_bundle() raises -> List[X509Cert]:
     # Collect into List[UInt8], then convert to String
     var raw = List[UInt8](capacity=total)
     for i in range(total):
-        raw.append((buf + i)[])
-    buf.free()
+        raw.append(buf[unsafe_offset=i])
+    buf.unsafe_free()
     var content = String(unsafe_from_utf8=raw^)
 
     # Decode all PEM CERTIFICATE blocks
