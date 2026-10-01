@@ -556,6 +556,31 @@ def _check_cert_validity(tbs_raw: List[UInt8]) raises:
 # cert_chain_verify — verify a certificate chain against trust anchors
 # ============================================================================
 
+def _bytes_exact_eq(a: List[UInt8], b: List[UInt8]) -> Bool:
+    """Exact byte comparison, for key and certificate bytes (unlike
+    _bytes_lower_eq, which is ASCII case-insensitive, for hostnames)."""
+    if len(a) != len(b):
+        return False
+    for i in range(len(a)):
+        if a[i] != b[i]:
+            return False
+    return True
+
+
+def _same_public_key(a: X509Cert, b: X509Cert) -> Bool:
+    """True if both certs carry the same public key (same algorithm, curve
+    and key bytes)."""
+    if a.pub_key_alg != b.pub_key_alg:
+        return False
+    if a.pub_key_alg == "rsa":
+        return len(a.rsa_n) > 0 and _bytes_exact_eq(a.rsa_n, b.rsa_n) and _bytes_exact_eq(a.rsa_e, b.rsa_e)
+    return (
+        a.ec_curve == b.ec_curve
+        and len(a.ec_point) > 0
+        and _bytes_exact_eq(a.ec_point, b.ec_point)
+    )
+
+
 def cert_chain_verify(
     chain:         List[X509Cert],
     trust_anchors: List[X509Cert],
@@ -565,7 +590,13 @@ def cert_chain_verify(
 
     1. cert_hostname_match(chain[0], hostname)
     2. For i in 0..len(chain)-1: cert_verify_sig(chain[i], chain[i+1])
-    3. If chain[-1] not in trust_anchors by signature: try each anchor
+    3. If any cert in the chain carries a trust anchor's public key, the
+       chain is anchored there (every signature below it was verified in
+       step 2 against that key). This is how a cross-signed root is
+       accepted when only the new root is in the CA bundle, e.g. GTS Root
+       R4 sent cross-signed by GlobalSign Root CA, which current Linux CA
+       bundles no longer include.
+    4. Otherwise chain[-1] must be a self-signed anchor or signed by one.
     Raises with descriptive Error on any failure.
     """
     if len(chain) == 0:
@@ -582,7 +613,13 @@ def cert_chain_verify(
     for i in range(len(chain) - 1):
         cert_verify_sig(chain[i], chain[i + 1])
 
-    # Step 3: verify root (chain[-1]) against a trust anchor
+    # Step 3: a cert in the chain whose key is a trust anchor's key is trusted
+    for i in range(len(chain)):
+        for j in range(len(trust_anchors)):
+            if _same_public_key(chain[i], trust_anchors[j]):
+                return  # trusted
+
+    # Step 4: verify root (chain[-1]) against a trust anchor
     var root = chain[len(chain) - 1].copy()
 
     # Try self-signed first (root signed by itself)
@@ -596,7 +633,7 @@ def cert_chain_verify(
     if self_signed:
         # Still must appear in trust_anchors — check by TBS bytes match
         for i in range(len(trust_anchors)):
-            if _bytes_lower_eq(trust_anchors[i].tbs_raw, root.tbs_raw):
+            if _bytes_exact_eq(trust_anchors[i].tbs_raw, root.tbs_raw):
                 return  # trusted
         raise Error("cert_chain_verify: root not in trust anchors")
 
