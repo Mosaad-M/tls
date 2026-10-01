@@ -27,13 +27,13 @@ def _capture_reset() raises:
     var path = String("/tmp/mojo_alert_test.bin")
     # O_WRONLY | O_CREAT | O_TRUNC: Linux 1|64|512=577, macOS 1|512|1024=1537
     comptime FLAGS_RESET = 1537 if CompilationTarget.is_macos() else 577
-    var fd = external_call["open", Int32](path.unsafe_ptr(), Int32(FLAGS_RESET), Int32(420))
+    var fd = external_call["open", Int32](path.as_c_string_slice().unsafe_ptr(), Int32(FLAGS_RESET), Int32(420))
     if fd < 0:
         raise Error("capture_reset: open failed")
     _ = external_call["close", Int32](fd)
     # Mojo FFI does not reliably pass the variadic mode arg to open() on macOS;
     # use chmod to ensure the file is readable for _capture_read.
-    _ = external_call["chmod", Int32](path.unsafe_ptr(), Int32(420))
+    _ = external_call["chmod", Int32](path.as_c_string_slice().unsafe_ptr(), Int32(420))
 
 
 def _capture_write(data: List[UInt8]) raises:
@@ -41,7 +41,7 @@ def _capture_write(data: List[UInt8]) raises:
     var path = String("/tmp/mojo_alert_test.bin")
     # O_WRONLY | O_CREAT | O_APPEND: Linux 1|64|1024=1089, macOS 1|512|8=521
     comptime FLAGS_WRITE = 521 if CompilationTarget.is_macos() else 1089
-    var fd = external_call["open", Int32](path.unsafe_ptr(), Int32(FLAGS_WRITE), Int32(420))
+    var fd = external_call["open", Int32](path.as_c_string_slice().unsafe_ptr(), Int32(FLAGS_WRITE), Int32(420))
     if fd < 0:
         raise Error("capture_write: open failed")
     var n = len(data)
@@ -57,7 +57,7 @@ def _capture_write(data: List[UInt8]) raises:
 def _capture_read() raises -> List[UInt8]:
     """Read all bytes from /tmp/mojo_alert_test.bin."""
     var path = String("/tmp/mojo_alert_test.bin")
-    var fd = external_call["open", Int32](path.unsafe_ptr(), Int32(0), Int32(0))  # O_RDONLY
+    var fd = external_call["open", Int32](path.as_c_string_slice().unsafe_ptr(), Int32(0), Int32(0))  # O_RDONLY
     if fd < 0:
         raise Error("capture_read: open failed")
     var max_size = 4096

@@ -105,7 +105,10 @@ def load_system_ca_bundle() raises -> List[X509Cert]:
     comptime CA_BUNDLE = "/etc/ssl/cert.pem" if CompilationTarget.is_macos() else "/etc/ssl/certs/ca-certificates.crt"
     var path = String(CA_BUNDLE)
     var O_RDONLY: Int32 = 0
-    var fd = external_call["open", Int32](path.unsafe_ptr(), O_RDONLY)
+    # as_c_string_slice() guarantees the NUL terminator open() needs;
+    # path.unsafe_ptr() does not, so open() could read past the string
+    # and fail on Linux depending on what followed it in memory.
+    var fd = external_call["open", Int32](path.as_c_string_slice().unsafe_ptr(), O_RDONLY)
     if fd < 0:
         raise Error("load_system_ca_bundle: cannot open " + path)
 
