@@ -40,6 +40,16 @@ comptime OID_SHA256_WITH_ECDSA = "2a8648ce3d040302"    # 1.2.840.10045.4.3.2
 comptime OID_SUBJECT_ALT_NAME  = "551d11"               # 2.5.29.17
 comptime OID_COMMON_NAME       = "550403"               # 2.5.4.3
 
+# X.509 extensions and key purposes processed by path validation
+comptime OID_BASIC_CONSTRAINTS = "551d13"               # 2.5.29.19
+comptime OID_KEY_USAGE         = "551d0f"               # 2.5.29.15
+comptime OID_EXT_KEY_USAGE     = "551d25"               # 2.5.29.37
+comptime OID_KP_SERVER_AUTH    = "2b06010505070301"     # 1.3.6.1.5.5.7.3.1
+comptime OID_ANY_EXT_KEY_USAGE = "551d2500"             # 2.5.29.37.0
+comptime TAG_BOOLEAN           : UInt8 = 0x01
+comptime TAG_UTC_TIME          : UInt8 = 0x17
+comptime TAG_GENERALIZED_TIME  : UInt8 = 0x18
+
 # Additional signature algorithm OIDs (Session 1)
 comptime OID_SHA1_WITH_RSA     = "2a864886f70d010105"  # 1.2.840.113549.1.1.5  sha1WithRSAEncryption
 comptime OID_SHA384_WITH_RSA   = "2a864886f70d01010c"  # 1.2.840.113549.1.1.12 sha384WithRSAEncryption
