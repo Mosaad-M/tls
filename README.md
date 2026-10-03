@@ -1,174 +1,193 @@
-# tls — Pure Mojo TLS 1.3 + 1.2
+# tls — TLS 1.3 and 1.2 client in pure Mojo
 
-A pure-[Mojo](https://www.modular.com/mojo) implementation of TLS 1.3 and TLS 1.2.
-No OpenSSL, no C wrappers — every cryptographic primitive is implemented in Mojo.
+A TLS client written entirely in [Mojo](https://www.modular.com/mojo): no OpenSSL, no C
+wrappers. The record layer, the handshakes, X.509 path validation and every cryptographic
+primitive (AES-GCM, ChaCha20-Poly1305, SHA-2, X25519, P-256/P-384, RSA) are implemented in
+this repository.
 
-## Features
+> **Upgrade to 1.4.3 or later.** Earlier versions did not check that a certificate's
+> issuer was a CA, so the holder of any publicly trusted certificate could impersonate
+> any host. See [Security status](#security-status) for what is and is not yet hardened.
 
-- **TLS 1.3** (RFC 8446) and **TLS 1.2** (RFC 5246) client
-- Auto-negotiates version from server's ServerHello
-- **Cipher suites**: AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305
-- **Key exchange**: X25519, P-256 (ECDHE), P-384 (ECDHE)
-- **Signatures**: RSA-PSS, RSA-PKCS#1, ECDSA (P-256, P-384)
-- **Certificate verification**: RFC 5280 path validation to a trust anchor
-  (basicConstraints CA, keyUsage, extendedKeyUsage serverAuth, pathLenConstraint,
-  issuer/subject name chaining, unsupported critical extensions rejected), hostname
-  verification, validity dates; signatures are only checked once a chain is anchored
-- **Hash**: SHA-256, SHA-384, SHA-1 (legacy certs only)
-- Loads system CA bundle (`/etc/ssl/certs/ca-certificates.crt`)
-- 300+ unit tests across 37 modules
+## Install
 
-## Module Structure
+With [mojo-pkg](https://github.com/Mosaad-M/mojo-pkg), add the dependency to
+`mojoproject.toml`, then install and pass the generated include flags to `mojo`:
 
+```toml
+[dependencies]
+tls = { git = "Mosaad-M/tls", version = ">=1.4.3" }
+tcp = { git = "Mosaad-M/tcp", version = ">=1.1.0" }   # optional: DNS + connect helper
 ```
-crypto/          Cryptographic primitives
-  hash.mojo      SHA-256, SHA-384, SHA-1
-  hmac.mojo      HMAC
-  hkdf.mojo      HKDF key derivation
-  aes.mojo       AES block cipher
-  gcm.mojo       AES-GCM with 4-bit GHASH table
-  chacha20.mojo  ChaCha20 stream cipher
-  poly1305.mojo  Poly1305 MAC
-  curve25519.mojo X25519 key exchange
-  bigint.mojo    Constant-time big integer arithmetic
-  p256.mojo      NIST P-256 (ECDHE, ECDSA)
-  p384.mojo      NIST P-384 (ECDHE, ECDSA)
-  rsa.mojo       RSA-PKCS#1 and RSA-PSS verification
-  asn1.mojo      ASN.1 DER parser
-  cert.mojo      X.509 certificate parsing and verification
-  pem.mojo       PEM decoder
-  base64.mojo    Base64 encoder/decoder
-  random.mojo    Cryptographically secure random bytes (from /dev/urandom)
-  record.mojo    TLS record-layer seal/open
-  handshake.mojo TLS 1.3 key schedule and handshake helpers
-  prf.mojo       TLS 1.2 PRF (HMAC-SHA256/SHA384)
-
-tls/             TLS protocol layer
-  socket.mojo    TlsSocket — main public API
-  connection.mojo    TLS 1.3 handshake state machine
-  connection12.mojo  TLS 1.2 handshake state machine
-  message.mojo       TLS 1.3 message builders/parsers
-  message12.mojo     TLS 1.2 message builders/parsers
-```
-
-## Security notes
-
-- **1.4.3 fixes a critical certificate-validation flaw.** Earlier versions did not
-  check that an issuing certificate was a CA, so the holder of any publicly trusted
-  certificate could impersonate any host. Upgrade.
-- Name constraints are not enforced: certificates whose path includes a critical
-  `nameConstraints` (or `policyConstraints` / `inhibitAnyPolicy`) extension are
-  rejected rather than accepted unchecked.
-- `tests/live_sites.mojo` checks validation against 20 real sites and badssl.com's
-  broken endpoints (needs network; run before releases that touch validation).
-
-## Requirements
-
-- [Mojo](https://www.modular.com/mojo) >= 0.26.1
-- [pixi](https://pixi.sh) (dependency manager)
-- Linux x86-64
-
-## Installation
 
 ```bash
-git clone https://github.com/Mosaad-M/tls
-cd tls
-pixi install
+mojo-pkg install
+mojo build app.mojo $(cat .mojo_flags)
 ```
+
+Or clone the repository and build with `-I path/to/tls`.
+
+**Requirements:** Mojo >= 1.0.0, on linux-64 or osx-arm64.
 
 ## Usage
 
 ```mojo
-from tcp import TcpSocket          # your TCP socket (or any fd)
+from tcp import TcpSocket
 from tls.socket import TlsSocket, load_system_ca_bundle
 
-fn main() raises:
-    # Load system CA bundle once (parses /etc/ssl/certs/ca-certificates.crt)
+
+def main() raises:
+    # Parse the system CA bundle once and reuse it for every connection
     var trust_anchors = load_system_ca_bundle()
 
-    # Connect TCP
     var tcp = TcpSocket()
     tcp.connect("example.com", 443)
 
-    # Perform TLS handshake (auto-negotiates TLS 1.3 or 1.2)
+    # Handshake: negotiates TLS 1.3 or 1.2 and validates the certificate
+    # chain and hostname; raises if anything fails
     var tls = TlsSocket(tcp.fd)
     tls.connect("example.com", trust_anchors)
 
-    # Send data
-    var req = List[UInt8]()
-    # ... populate req with HTTP request bytes ...
-    _ = tls.send(req)
-
-    # Receive data
+    var request = String(
+        "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n"
+    )
+    var bytes = List[UInt8]()
+    for b in request.as_bytes():
+        bytes.append(b)
+    _ = tls.send(bytes)
     var response = tls.recv_all()
+    print(String(unsafe_from_utf8=response^))
 
     tls.close()
 ```
 
-### TlsSocket API
+`TlsSocket` works on any connected TCP socket file descriptor; the `tcp` package is just a
+convenient way to resolve a hostname and connect.
+
+## API
 
 ```mojo
 struct TlsSocket(Movable):
-    fn __init__(out self, tcp_fd: Int32 = 0)
-    fn connect(mut self, hostname: String, trust_anchors: List[X509Cert]) raises
-    fn send(mut self, data: List[UInt8]) raises -> Int
-    fn recv(mut self, max_bytes: Int) raises -> List[UInt8]
-    fn recv_exact(mut self, n: Int) raises -> List[UInt8]
-    fn recv_all(mut self, max_size: Int = 16*1024*1024) raises -> List[UInt8]
-    fn close(mut self) raises
+    def __init__(out self, tcp_fd: Int32 = 0)
 
-fn load_system_ca_bundle() raises -> List[X509Cert]
+    # Handshake (TLS 1.3 or 1.2). Raises on any protocol or validation failure.
+    def connect(mut self, hostname: String, trust_anchors: List[X509Cert],
+                alpn_protocols: List[String] = List[String]()) raises
+
+    # TLS 1.2 handshake with a P-256 ECDSA client certificate (mTLS).
+    # client_cert: DER leaf certificate; client_key: 32-byte P-256 private scalar.
+    # Raises if the server negotiates TLS 1.3.
+    def connect_with_client_cert(mut self, hostname: String,
+                                 trust_anchors: List[X509Cert],
+                                 client_cert: List[UInt8], client_key: List[UInt8],
+                                 alpn_protocols: List[String] = List[String]()) raises
+
+    def send(mut self, data: List[UInt8]) raises -> Int
+    def recv(mut self, max_bytes: Int) raises -> List[UInt8]                # up to max_bytes
+    def recv_exact(mut self, n: Int) raises -> List[UInt8]                  # exactly n bytes
+    def recv_all(mut self, max_size: Int = 16777216) raises -> List[UInt8]  # until close
+    def close(mut self) raises                         # sends close_notify, closes the fd
+
+    def negotiated_protocol(self) -> String            # ALPN result (TLS 1.3), or ""
+    def session_tickets(self) -> List[SessionTicket]   # tickets received (TLS 1.3)
+
+def load_system_ca_bundle() raises -> List[X509Cert]
 ```
 
-`connect()` auto-negotiates TLS 1.3 or TLS 1.2 based on the server's ServerHello.
-Certificate chain validation and hostname verification are always performed.
+`load_system_ca_bundle` reads `/etc/ssl/certs/ca-certificates.crt` on Linux and
+`/etc/ssl/cert.pem` on macOS (bundles up to 2 MB). Certificates it cannot parse are
+skipped. For your own trust anchors, parse DER certificates with `cert_parse` from
+`crypto.cert`.
 
-## Running Tests
+## What it supports
+
+| | TLS 1.3 | TLS 1.2 |
+|---|---|---|
+| Cipher suites | AES-128-GCM, ChaCha20-Poly1305, AES-256-GCM | ECDHE-RSA and ECDHE-ECDSA with AES-128-GCM or AES-256-GCM |
+| Key exchange | X25519 | X25519, P-256 |
+| Server signatures | ECDSA P-256 and P-384, RSA-PSS (SHA-256), RSA PKCS#1 v1.5 (SHA-256/384/512) | same |
+| SNI | yes | yes |
+| ALPN | yes | offered; the result is not reported |
+| Client certificates | no | P-256 ECDSA |
+
+Not supported: TLS 1.1 and older, CBC or non-ECDHE cipher suites (never offered),
+HelloRetryRequest (a TLS 1.3 server that does not accept X25519 fails the handshake),
+session resumption (tickets are collected but not used), 0-RTT, KeyUpdate and
+post-handshake authentication.
+
+### Certificate validation
+
+Every handshake validates the server's chain against the trust anchors you pass, and
+there is no option to skip it.
+
+- **Path:** the chain must lead to a trust anchor. A certificate carrying an anchor's key
+  counts as the anchor, which handles roots that a server sends cross-signed by an older
+  root. Signatures are verified top-down, and only after the path is anchored.
+- **Issuers:** must be CAs (basicConstraints `cA`) that may sign certificates
+  (`keyCertSign` when keyUsage is present), within their `pathLenConstraint`, with issuer
+  and subject names that chain.
+- **Leaf:** must allow server authentication (`serverAuth` when extendedKeyUsage is
+  present) and signing (`digitalSignature` when keyUsage is present).
+- **Validity:** every certificate below the anchor must be within its validity period;
+  malformed dates are rejected.
+- **Extensions:** certificates with critical extensions that are not processed are
+  rejected. This includes `nameConstraints`, which is not enforced.
+- **Hostname:** matched case-insensitively against subjectAltName dNSName entries, or
+  the subject CN when there are none. A wildcard covers exactly one leftmost label.
+- **Algorithms:** RSA (PKCS#1 v1.5 and PSS) and ECDSA (P-256, P-384) certificate
+  signatures with SHA-256/384/512. SHA-1 signatures are rejected.
+
+## Security status
+
+This library has not had an external audit. An internal review (October 2026) found the
+following, which are **not yet fixed**:
+
+- **Truncation:** `recv_all()` treats an unauthenticated close_notify, or a plain TCP close,
+  as the end of the stream, so a network attacker can cut a response short undetected.
+  Protocols that carry their own length (such as HTTP `Content-Length`) can detect it.
+- **Timing side channels:** AES and GHASH use secret-indexed lookup tables, and P-256
+  signing (used only for TLS 1.2 client certificates) uses variable-time arithmetic.
+- **Missing protocol checks:** the TLS 1.3 downgrade sentinel, TLS 1.2 extended master
+  secret and renegotiation_info, rejection of an all-zero X25519 shared secret, and
+  removal of TLS 1.3 record padding.
+- **Hostname wildcards** such as `*.com` are not rejected.
+- **Robustness:** no socket timeouts, and SIGPIPE is not suppressed.
+
+Fixed in 1.4.3: CA constraints in path validation (critical), fail-closed validity
+parsing, validity no longer checked above the trust anchor, and no signature checks
+before the path is anchored.
+
+## Layout
+
+```
+crypto/  primitives and X.509
+  aes, gcm, chacha20, poly1305           AEAD ciphers
+  hash (SHA-256/384/512), sha1, hmac, hkdf, prf (TLS 1.2 PRF)
+  curve25519, p256, p384, rsa, bigint, ed25519 (not used by TLS)
+  asn1, pem, base64, cert                X.509 parsing and path validation
+  random                                 OS randomness (/dev/urandom)
+  record, handshake                      record protection, TLS 1.3 key schedule
+tls/     protocol
+  socket                                 TlsSocket, the public API
+  connection, connection12               TLS 1.3 and 1.2 handshakes
+  message, message12                     handshake message encoding and parsing
+```
+
+## Development
 
 ```bash
-pixi run test-hash       # SHA-256, SHA-384, SHA-1  (13 tests)
-pixi run test-hmac       # HMAC                     (17 tests)
-pixi run test-hkdf       # HKDF                     (8 tests)
-pixi run test-aes        # AES                      (7 tests)
-pixi run test-gcm        # AES-GCM                  (11 tests)
-pixi run test-chacha20   # ChaCha20                 (3 tests)
-pixi run test-poly1305   # Poly1305                 (6 tests)
-pixi run test-curve25519 # X25519                   (5 tests)
-pixi run test-bigint     # Big integer arithmetic   (24 tests)
-pixi run test-p256       # P-256                    (6 tests)
-pixi run test-p384       # P-384                    (6 tests)
-pixi run test-rsa        # RSA                      (6 tests)
-pixi run test-asn1       # ASN.1 parser             (9 tests)
-pixi run test-cert       # X.509 certificates       (6 tests)
-pixi run test-base64     # Base64                   (10 tests)
-pixi run test-pem        # PEM decoder              (4 tests)
-pixi run test-record     # TLS record layer         (7 tests)
-pixi run test-handshake  # TLS 1.3 key schedule     (15 tests)
-pixi run test-connection # TLS 1.3 handshake        (2 tests)
-pixi run test-socket     # TlsSocket integration    (4 tests)
-pixi run test-alert      # Alert handling           (5 tests)
-pixi run test-message    # TLS 1.3 messages         (12 tests)
-pixi run test-message12  # TLS 1.2 messages         (8 tests)
-pixi run test-record12   # TLS 1.2 record layer     (6 tests)
-pixi run test-connection12 # TLS 1.2 handshake      (5 tests)
-pixi run test-prf        # TLS 1.2 PRF              (8 tests)
-pixi run test-random     # CSPRNG                   (5 tests)
-pixi run test-sha1       # SHA-1                    (5 tests)
-pixi run test-hkdf-sha384     # HKDF-SHA384         (3 tests)
-pixi run test-cert-sha384     # SHA-384 certs        (7 tests)
-pixi run test-cert-hostname   # Hostname verification (7 tests)
-pixi run test-cert-chain      # Certificate chains   (5 tests)
+pixi run test               # unit tests (run in CI on Linux and macOS)
+pixi run test-connection    # TLS 1.3 against a local Python server
+pixi run test-connection12  # TLS 1.2 against a local Python server
+pixi run test-socket        # TlsSocket against a local Python server
+pixi run bench              # primitive benchmarks
+mojo run -I . -I <path to tcp> tests/live_sites.mojo   # real sites + badssl.com (network)
 ```
 
-245 tests total.
-
-## Security Notes
-
-- Constant-time big integer arithmetic (Montgomery ladder for EC scalar multiply, binary extended GCD for field inversion)
-- Sequence number overflow guards (threshold 2^62)
-- Maximum record size enforced (16384 bytes send, 16640 bytes receive)
-- Alert handling per RFC 8446 §6
+The three local-server tests need certificates: run `bash tests/gen_test_certs.sh` and
+paste the printed CA hex into the test files as the script describes.
+`tests/gen_path_fixtures.sh` regenerates the path-validation fixtures.
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+MIT — see [LICENSE](LICENSE).
