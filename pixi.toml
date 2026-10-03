@@ -28,7 +28,10 @@ test-random = "mojo run -I . tests/test_random.mojo"
 test-base64 = "mojo run -I . tests/test_base64.mojo"
 test-pem = "mojo run -I . tests/test_pem.mojo"
 test-cert-hostname = "mojo run -I . tests/test_cert_hostname.mojo"
-test-cert-chain = "mojo run -I . tests/test_cert_chain.mojo"
+test-cert-chain = "mojo run -I . -I tests tests/test_cert_chain.mojo"
+test-cert-path = "mojo run -I . -I tests tests/test_cert_path.mojo"
+test-rsa4096 = "mojo run -I . tests/test_rsa4096.mojo"
+test-sha512-vec = "mojo run -I . tests/test_sha512_vec.mojo"
 test-message = "mojo run -I . tests/test_message.mojo"
 test-connection = "mojo run -I . tests/test_connection.mojo"
 test-socket = "mojo run -I . tests/test_socket.mojo"
@@ -51,12 +54,12 @@ test = { depends-on = [
   "test-hash", "test-hmac", "test-hkdf", "test-hkdf-sha384",
   "test-aes", "test-gcm", "test-chacha20", "test-poly1305",
   "test-bigint", "test-rsa", "test-curve25519", "test-p256", "test-p384",
-  "test-asn1", "test-cert", "test-cert-sha384", "test-cert-hostname", "test-cert-chain",
+  "test-asn1", "test-cert", "test-cert-sha384", "test-cert-hostname", "test-cert-chain", "test-cert-path",
   "test-base64", "test-pem", "test-random", "test-sha1", "test-ed25519",
   "test-record", "test-record12", "test-handshake",
   "test-message", "test-message12", "test-prf", "test-alert",
   "test-psk-handshake", "test-session-ticket", "test-p256-sign",
-  "test-message12-mtls"
+  "test-message12-mtls", "test-rsa4096", "test-sha512-vec"
 ] }
 
 [dependencies]

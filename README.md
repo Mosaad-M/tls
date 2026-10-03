@@ -10,10 +10,13 @@ No OpenSSL, no C wrappers — every cryptographic primitive is implemented in Mo
 - **Cipher suites**: AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305
 - **Key exchange**: X25519, P-256 (ECDHE), P-384 (ECDHE)
 - **Signatures**: RSA-PSS, RSA-PKCS#1, ECDSA (P-256, P-384)
-- **Certificate verification**: full chain validation, hostname verification, validity dates
+- **Certificate verification**: RFC 5280 path validation to a trust anchor
+  (basicConstraints CA, keyUsage, extendedKeyUsage serverAuth, pathLenConstraint,
+  issuer/subject name chaining, unsupported critical extensions rejected), hostname
+  verification, validity dates; signatures are only checked once a chain is anchored
 - **Hash**: SHA-256, SHA-384, SHA-1 (legacy certs only)
 - Loads system CA bundle (`/etc/ssl/certs/ca-certificates.crt`)
-- 245 unit tests across 31 modules
+- 300+ unit tests across 37 modules
 
 ## Module Structure
 
@@ -35,7 +38,7 @@ crypto/          Cryptographic primitives
   cert.mojo      X.509 certificate parsing and verification
   pem.mojo       PEM decoder
   base64.mojo    Base64 encoder/decoder
-  random.mojo    Cryptographically secure random bytes (via getrandom)
+  random.mojo    Cryptographically secure random bytes (from /dev/urandom)
   record.mojo    TLS record-layer seal/open
   handshake.mojo TLS 1.3 key schedule and handshake helpers
   prf.mojo       TLS 1.2 PRF (HMAC-SHA256/SHA384)
@@ -47,6 +50,17 @@ tls/             TLS protocol layer
   message.mojo       TLS 1.3 message builders/parsers
   message12.mojo     TLS 1.2 message builders/parsers
 ```
+
+## Security notes
+
+- **1.4.3 fixes a critical certificate-validation flaw.** Earlier versions did not
+  check that an issuing certificate was a CA, so the holder of any publicly trusted
+  certificate could impersonate any host. Upgrade.
+- Name constraints are not enforced: certificates whose path includes a critical
+  `nameConstraints` (or `policyConstraints` / `inhibitAnyPolicy`) extension are
+  rejected rather than accepted unchecked.
+- `tests/live_sites.mojo` checks validation against 20 real sites and badssl.com's
+  broken endpoints (needs network; run before releases that touch validation).
 
 ## Requirements
 

@@ -4,6 +4,8 @@
 # API:
 #   cert_parse(der)              → X509Cert
 #   cert_verify_sig(cert, issuer) → raises on invalid signature
+#   cert_chain_verify(chain, anchors, hostname) → raises unless the chain is
+#       a valid path to a trust anchor (RFC 5280 §6, see below)
 #
 # Supports:
 #   sha256WithRSAEncryption (PKCS#1 v1.5) and ecdsa-with-SHA256 (P-256)
@@ -24,6 +26,9 @@ from crypto.asn1 import (
     OID_SHA512_WITH_RSA,
     OID_RSA_PSS, OID_HASH_SHA384,
     OID_SUBJECT_ALT_NAME, OID_COMMON_NAME,
+    OID_BASIC_CONSTRAINTS, OID_KEY_USAGE, OID_EXT_KEY_USAGE,
+    OID_KP_SERVER_AUTH, OID_ANY_EXT_KEY_USAGE,
+    TAG_INTEGER, TAG_BOOLEAN, TAG_UTC_TIME, TAG_GENERALIZED_TIME,
 )
 from crypto.rsa import rsa_pkcs1_verify, rsa_pss_verify
 from crypto.p256 import p256_ecdsa_verify
@@ -46,6 +51,21 @@ struct X509Cert(Copyable, Movable):
     var rsa_n:       List[UInt8]   # RSA modulus        (empty for EC keys)
     var rsa_e:       List[UInt8]   # RSA public exponent (empty for EC keys)
     var ec_point:    List[UInt8]   # 65 or 97-byte uncompressed EC point (empty for RSA)
+    # Path validation inputs (RFC 5280), filled by cert_parse
+    var issuer_raw:  List[UInt8]   # DER bytes of the issuer Name
+    var subject_raw: List[UInt8]   # DER bytes of the subject Name
+    var not_before:  Int64          # Unix seconds
+    var not_after:   Int64
+    var validity_error: String      # non-empty if the validity field is malformed
+    var has_basic_constraints: Bool
+    var is_ca:       Bool           # basicConstraints cA
+    var path_len:    Int            # pathLenConstraint, -1 = none
+    var has_key_usage: Bool
+    var key_usage:   UInt16         # bit i = KeyUsage bit i (0 = digitalSignature)
+    var has_eku:     Bool
+    var eku_server_auth: Bool       # id-kp-serverAuth present
+    var eku_any:     Bool           # anyExtendedKeyUsage present
+    var ext_error:   String         # non-empty: unsupported critical or malformed extension
 
     def __init__(out self):
         self.tbs_raw     = List[UInt8]()
@@ -57,6 +77,20 @@ struct X509Cert(Copyable, Movable):
         self.rsa_n       = List[UInt8]()
         self.rsa_e       = List[UInt8]()
         self.ec_point    = List[UInt8]()
+        self.issuer_raw  = List[UInt8]()
+        self.subject_raw = List[UInt8]()
+        self.not_before  = 0
+        self.not_after   = 0
+        self.validity_error = String("")
+        self.has_basic_constraints = False
+        self.is_ca       = False
+        self.path_len    = -1
+        self.has_key_usage = False
+        self.key_usage   = 0
+        self.has_eku     = False
+        self.eku_server_auth = False
+        self.eku_any     = False
+        self.ext_error   = String("")
 
     def __copyinit__(out self, copy: Self):
         self.tbs_raw     = copy.tbs_raw.copy()
@@ -68,6 +102,20 @@ struct X509Cert(Copyable, Movable):
         self.rsa_n       = copy.rsa_n.copy()
         self.rsa_e       = copy.rsa_e.copy()
         self.ec_point    = copy.ec_point.copy()
+        self.issuer_raw  = copy.issuer_raw.copy()
+        self.subject_raw = copy.subject_raw.copy()
+        self.not_before  = copy.not_before
+        self.not_after   = copy.not_after
+        self.validity_error = copy.validity_error
+        self.has_basic_constraints = copy.has_basic_constraints
+        self.is_ca       = copy.is_ca
+        self.path_len    = copy.path_len
+        self.has_key_usage = copy.has_key_usage
+        self.key_usage   = copy.key_usage
+        self.has_eku     = copy.has_eku
+        self.eku_server_auth = copy.eku_server_auth
+        self.eku_any     = copy.eku_any
+        self.ext_error   = copy.ext_error
 
     def __moveinit__(out self, deinit take: Self):
         self.tbs_raw     = take.tbs_raw^
@@ -79,6 +127,20 @@ struct X509Cert(Copyable, Movable):
         self.rsa_n       = take.rsa_n^
         self.rsa_e       = take.rsa_e^
         self.ec_point    = take.ec_point^
+        self.issuer_raw  = take.issuer_raw^
+        self.subject_raw = take.subject_raw^
+        self.not_before  = take.not_before
+        self.not_after   = take.not_after
+        self.validity_error = take.validity_error^
+        self.has_basic_constraints = take.has_basic_constraints
+        self.is_ca       = take.is_ca
+        self.path_len    = take.path_len
+        self.has_key_usage = take.has_key_usage
+        self.key_usage   = take.key_usage
+        self.has_eku     = take.has_eku
+        self.eku_server_auth = take.eku_server_auth
+        self.eku_any     = take.eku_any
+        self.ext_error   = take.ext_error^
 
 
 # ============================================================================
@@ -224,7 +286,155 @@ def cert_parse(der: List[UInt8]) raises -> X509Cert:
     cert.rsa_n       = rsa_n^
     cert.rsa_e       = rsa_e^
     cert.ec_point    = ec_point^
+
+    # ── Names, validity and extensions (used by cert_chain_verify) ──────────
+    # Problems here never make cert_parse fail: trust anchors from the CA
+    # bundle must load as before; path validation rejects such certificates.
+    var base = 1 if (len(tbs_ch) > 0 and tbs_ch[0].tag == TAG_CTX0) else 0
+    cert.issuer_raw  = der_raw_bytes(tbs_elem.content, _child_offset(tbs_elem.content, base + 2))
+    cert.subject_raw = der_raw_bytes(tbs_elem.content, _child_offset(tbs_elem.content, base + 4))
+    _parse_validity(cert, tbs_ch[base + 3])
+    for i in range(base + 6, len(tbs_ch)):
+        if tbs_ch[i].tag == TAG_CTX3:
+            try:
+                _parse_extensions(cert, tbs_ch[i])
+            except e:
+                cert.ext_error = "malformed extensions (" + String(e) + ")"
     return cert^
+
+
+def _hex(b: List[UInt8]) -> String:
+    var out = String()
+    comptime digits = "0123456789abcdef"
+    for i in range(len(b)):
+        out += digits[byte=Int(b[i] >> 4)]
+        out += digits[byte=Int(b[i] & 0x0F)]
+    return out^
+
+
+def _parse_validity(mut cert: X509Cert, validity: DerElem):
+    """Fill not_before/not_after, or validity_error if malformed."""
+    try:
+        if validity.tag != TAG_SEQUENCE:
+            raise Error("not a SEQUENCE")
+        var ch = der_children(validity.content)
+        if len(ch) != 2:
+            raise Error("expected notBefore and notAfter")
+        cert.not_before = _parse_time_elem(ch[0])
+        cert.not_after = _parse_time_elem(ch[1])
+    except e:
+        cert.validity_error = "malformed validity (" + String(e) + ")"
+
+
+def _parse_time_elem(t: DerElem) raises -> Int64:
+    if t.tag == TAG_UTC_TIME:
+        return _parse_asn1_time(t.content, False)
+    if t.tag == TAG_GENERALIZED_TIME:
+        return _parse_asn1_time(t.content, True)
+    raise Error("unknown time type")
+
+
+def _parse_extensions(mut cert: X509Cert, ext_ctx: DerElem) raises:
+    """Parse the [3] extensions block. Critical extensions other than the
+    four processed here make the certificate unusable in a path (RFC 5280
+    §4.2: a certificate with an unrecognized critical extension MUST be
+    rejected); unknown non-critical extensions are ignored."""
+    var outer = der_children(ext_ctx.content)
+    if len(outer) != 1 or outer[0].tag != TAG_SEQUENCE:
+        raise Error("extensions not a SEQUENCE")
+    var exts = der_children(outer[0].content)
+    var seen = List[List[UInt8]]()
+    for i in range(len(exts)):
+        if exts[i].tag != TAG_SEQUENCE:
+            raise Error("extension not a SEQUENCE")
+        var ch = der_children(exts[i].content)
+        var critical = False
+        if len(ch) == 3:
+            if ch[1].tag != TAG_BOOLEAN or len(ch[1].content) != 1:
+                raise Error("bad critical flag")
+            critical = ch[1].content[0] != 0
+        elif len(ch) != 2:
+            raise Error("extension needs 2 or 3 fields")
+        if ch[0].tag != TAG_OID or ch[len(ch) - 1].tag != TAG_OCTET_STRING:
+            raise Error("bad extension fields")
+        for j in range(len(seen)):
+            if _bytes_exact_eq(seen[j], ch[0].content):
+                raise Error("duplicate extension " + _hex(ch[0].content))
+        seen.append(ch[0].content.copy())
+        var oid = ch[0].content.copy()
+        var value = ch[len(ch) - 1].content.copy()
+        if der_oid_eq(oid, OID_BASIC_CONSTRAINTS):
+            _parse_basic_constraints(cert, value)
+        elif der_oid_eq(oid, OID_KEY_USAGE):
+            _parse_key_usage(cert, value)
+        elif der_oid_eq(oid, OID_EXT_KEY_USAGE):
+            _parse_ext_key_usage(cert, value)
+        elif der_oid_eq(oid, OID_SUBJECT_ALT_NAME):
+            pass  # read by cert_san_names
+        elif critical and cert.ext_error.byte_length() == 0:
+            cert.ext_error = "unsupported critical extension " + _hex(oid)
+
+
+def _parse_basic_constraints(mut cert: X509Cert, value: List[UInt8]) raises:
+    """BasicConstraints ::= SEQUENCE { cA BOOLEAN DEFAULT FALSE,
+    pathLenConstraint INTEGER (0..MAX) OPTIONAL }"""
+    var top = der_parse(value, 0)
+    if top[0] != TAG_SEQUENCE or top[2] != len(value):
+        raise Error("basicConstraints not a SEQUENCE")
+    var ch = der_children(top[1])
+    var idx = 0
+    cert.has_basic_constraints = True
+    if idx < len(ch) and ch[idx].tag == TAG_BOOLEAN:
+        if len(ch[idx].content) != 1:
+            raise Error("bad cA flag")
+        cert.is_ca = ch[idx].content[0] != 0
+        idx += 1
+    if idx < len(ch) and ch[idx].tag == TAG_INTEGER:
+        var c = ch[idx].content.copy()
+        if len(c) == 0 or (c[0] & 0x80) != 0:
+            raise Error("negative or empty pathLenConstraint")
+        var v = 0
+        for b in range(len(c)):
+            if v > (1 << 24):
+                break  # absurdly large: effectively unlimited
+            v = v * 256 + Int(c[b])
+        cert.path_len = v
+        idx += 1
+    if idx != len(ch):
+        raise Error("unexpected basicConstraints fields")
+
+
+def _parse_key_usage(mut cert: X509Cert, value: List[UInt8]) raises:
+    """KeyUsage ::= BIT STRING; bit 0 (most significant) = digitalSignature."""
+    var top = der_parse(value, 0)
+    if top[0] != TAG_BIT_STRING or top[2] != len(value) or len(top[1]) < 1:
+        raise Error("keyUsage not a BIT STRING")
+    var bits = top[1].copy()
+    if bits[0] > 7:
+        raise Error("bad keyUsage unused-bits count")
+    var ku: UInt16 = 0
+    for i in range(min(len(bits) - 1, 2)):
+        for b in range(8):
+            if (bits[i + 1] >> UInt8(7 - b)) & 1 != 0:
+                ku |= UInt16(1) << UInt16(i * 8 + b)
+    cert.has_key_usage = True
+    cert.key_usage = ku
+
+
+def _parse_ext_key_usage(mut cert: X509Cert, value: List[UInt8]) raises:
+    """ExtKeyUsageSyntax ::= SEQUENCE SIZE (1..MAX) OF KeyPurposeId"""
+    var top = der_parse(value, 0)
+    if top[0] != TAG_SEQUENCE or top[2] != len(value):
+        raise Error("extKeyUsage not a SEQUENCE")
+    var ch = der_children(top[1])
+    cert.has_eku = True
+    for i in range(len(ch)):
+        if ch[i].tag != TAG_OID:
+            raise Error("extKeyUsage entry not an OID")
+        if der_oid_eq(ch[i].content, OID_KP_SERVER_AUTH):
+            cert.eku_server_auth = True
+        elif der_oid_eq(ch[i].content, OID_ANY_EXT_KEY_USAGE):
+            cert.eku_any = True
 
 
 # ============================================================================
@@ -460,12 +670,23 @@ def cert_hostname_match(cert: X509Cert, hostname: String) raises:
 # Certificate validity period checking
 # ============================================================================
 
-def _parse_asn1_time(content: List[UInt8], is_generalized: Bool) -> Int64:
+def _parse_asn1_time(content: List[UInt8], is_generalized: Bool) raises -> Int64:
     """Parse UTCTime or GeneralizedTime content bytes to Unix epoch seconds.
 
-    UTCTime format:       YYMMDDHHMMSSZ (13 bytes)
+    UTCTime format:         YYMMDDHHMMSSZ   (13 bytes)
     GeneralizedTime format: YYYYMMDDHHMMSSZ (15 bytes)
+    Anything else (other lengths, fractional seconds, offsets, non-digits,
+    out-of-range fields) raises: validity must fail closed (RFC 5280
+    §4.1.2.5 requires these exact forms).
     """
+    var n = 15 if is_generalized else 13
+    if len(content) != n:
+        raise Error("time has wrong length")
+    if content[n - 1] != 90:  # 'Z'
+        raise Error("time must end in Z")
+    for i in range(n - 1):
+        if content[i] < 48 or content[i] > 57:
+            raise Error("time has a non-digit")
     # Byte offset into content where MMDDHHMMSS begins
     var off = 4 if is_generalized else 2
     var year: Int
@@ -480,6 +701,9 @@ def _parse_asn1_time(content: List[UInt8], is_generalized: Bool) -> Int64:
     var hour  = (Int(content[off+4]) - 48) * 10 + (Int(content[off+5]) - 48)
     var minu  = (Int(content[off+6]) - 48) * 10 + (Int(content[off+7]) - 48)
     var sec   = (Int(content[off+8]) - 48) * 10 + (Int(content[off+9]) - 48)
+    if year < 1970 or month < 1 or month > 12 or day < 1 or day > 31 \
+            or hour > 23 or minu > 59 or sec > 59:
+        raise Error("time field out of range")
 
     # Days per month (non-leap year), months 1-indexed
     var dim = InlineArray[Int, 12](fill=0)
@@ -507,49 +731,22 @@ def _parse_asn1_time(content: List[UInt8], is_generalized: Bool) -> Int64:
     return Int64(days) * 86400 + Int64(hour) * 3600 + Int64(minu) * 60 + Int64(sec)
 
 
-def _check_cert_validity(tbs_raw: List[UInt8]) raises:
-    """Check certificate notBefore/notAfter against current time. Raises if expired."""
-    var tbs_elem = der_parse(tbs_raw, 0)
-    if tbs_elem[0] != TAG_SEQUENCE:
-        return  # malformed TBS — skip gracefully
-    var tbs_ch = der_children(tbs_elem[1])
-    var has_version = len(tbs_ch) > 0 and tbs_ch[0].tag == TAG_CTX0
-    var validity_idx = 4 if has_version else 3
-    if len(tbs_ch) <= validity_idx:
-        return  # TBS too short — skip
-
-    var validity_elem = tbs_ch[validity_idx].copy()
-    if validity_elem.tag != TAG_SEQUENCE:
-        return  # validity field not a SEQUENCE
-    var validity_ch = der_children(validity_elem.content)
-    if len(validity_ch) < 2:
-        return  # need notBefore + notAfter
-
-    # ASN.1 time tags: 0x17 = UTCTime, 0x18 = GeneralizedTime
-    var not_after_elem = validity_ch[1].copy()
-    var not_after: Int64
-    if not_after_elem.tag == 0x17:
-        not_after = _parse_asn1_time(not_after_elem.content, False)
-    elif not_after_elem.tag == 0x18:
-        not_after = _parse_asn1_time(not_after_elem.content, True)
-    else:
-        return  # unknown time format — skip
-
-    var now = external_call["time", Int64](Int(0))
-    if now > not_after:
-        raise Error("cert_chain_verify: certificate has expired")
-
-    var not_before_elem = validity_ch[0].copy()
-    var not_before: Int64
-    if not_before_elem.tag == 0x17:
-        not_before = _parse_asn1_time(not_before_elem.content, False)
-    elif not_before_elem.tag == 0x18:
-        not_before = _parse_asn1_time(not_before_elem.content, True)
-    else:
-        return  # unknown time format — skip
-
-    if now < not_before:
-        raise Error("cert_chain_verify: certificate is not yet valid")
+def _check_validity(cert: X509Cert, depth: Int, now: Int64) raises:
+    """Raise unless now is inside the certificate's validity period."""
+    if cert.validity_error.byte_length() > 0:
+        raise Error(
+            "cert_chain_verify: certificate at depth " + String(depth)
+            + " has a " + cert.validity_error
+        )
+    if now > cert.not_after:
+        raise Error(
+            "cert_chain_verify: certificate at depth " + String(depth) + " has expired"
+        )
+    if now < cert.not_before:
+        raise Error(
+            "cert_chain_verify: certificate at depth " + String(depth)
+            + " is not yet valid"
+        )
 
 
 # ============================================================================
@@ -581,71 +778,109 @@ def _same_public_key(a: X509Cert, b: X509Cert) -> Bool:
     )
 
 
+comptime _MAX_CHAIN = 10
+comptime _KU_DIGITAL_SIGNATURE: UInt16 = 1 << 0
+comptime _KU_KEY_CERT_SIGN: UInt16 = 1 << 5
+
+
 def cert_chain_verify(
     chain:         List[X509Cert],
     trust_anchors: List[X509Cert],
     hostname:      String,
 ) raises:
-    """Verify a certificate chain.
+    """Verify that chain (leaf first) is a valid path to a trust anchor for
+    hostname. Raises with a descriptive Error on any failure.
 
-    1. cert_hostname_match(chain[0], hostname)
-    2. For i in 0..len(chain)-1: cert_verify_sig(chain[i], chain[i+1])
-    3. If any cert in the chain carries a trust anchor's public key, the
-       chain is anchored there (every signature below it was verified in
-       step 2 against that key). This is how a cross-signed root is
-       accepted when only the new root is in the CA bundle, e.g. GTS Root
-       R4 sent cross-signed by GlobalSign Root CA, which current Linux CA
-       bundles no longer include.
-    4. Otherwise chain[-1] must be a self-signed anchor or signed by one.
-    Raises with descriptive Error on any failure.
+    1. Anchor the path without checking any signature made by an untrusted
+       key: either the lowest chain[k] carrying a trust anchor's public key
+       (this also accepts a root sent cross-signed by an older root, e.g.
+       GTS Root R4 cross-signed by GlobalSign Root CA), or an anchor whose
+       subject is the top certificate's issuer and whose key verifies it.
+       Chains that reach no anchor fail here, before attacker-chosen keys
+       can reach the bigint code.
+    2. Check every certificate in the path (below the anchor) without
+       cryptography: validity period, issuer name = next subject name, no
+       unsupported critical or malformed extensions; issuers must be CAs
+       (basicConstraints cA, keyCertSign if keyUsage is present) within
+       their pathLenConstraint; the leaf must allow TLS server use
+       (serverAuth if extKeyUsage is present, digitalSignature if keyUsage
+       is present). Certificates above the anchor are ignored, so an
+       expired cross-sign does not break a valid chain.
+    3. Verify signatures top-down, so each key used is already trusted.
+
+    Not supported (rejected when marked critical): nameConstraints,
+    policyConstraints, inhibitAnyPolicy.
     """
-    if len(chain) == 0:
+    var n = len(chain)
+    if n == 0:
         raise Error("cert_chain_verify: empty chain")
+    if n > _MAX_CHAIN:
+        raise Error(
+            "cert_chain_verify: chain too long (" + String(n)
+            + " certificates, max " + String(_MAX_CHAIN) + ")"
+        )
 
-    # Step 0: validity period check for each cert in chain
-    for i in range(len(chain)):
-        _check_cert_validity(chain[i].tbs_raw)
-
-    # Step 1: hostname match on leaf
     cert_hostname_match(chain[0], hostname)
 
-    # Step 2: verify each cert against the next in chain
-    for i in range(len(chain) - 1):
-        cert_verify_sig(chain[i], chain[i + 1])
-
-    # Step 3: a cert in the chain whose key is a trust anchor's key is trusted
-    for i in range(len(chain)):
+    # ── 1. Anchor the path ───────────────────────────────────────────────────
+    var top = -1          # the path is chain[0..top]
+    var top_is_anchor = False  # chain[top] carries a trust anchor's key
+    for i in range(n):
         for j in range(len(trust_anchors)):
             if _same_public_key(chain[i], trust_anchors[j]):
-                return  # trusted
+                top = i
+                top_is_anchor = True
+                break
+        if top >= 0:
+            break
+    if top < 0:
+        for j in range(len(trust_anchors)):
+            if not _bytes_exact_eq(trust_anchors[j].subject_raw, chain[n - 1].issuer_raw):
+                continue
+            var ok = False
+            try:
+                cert_verify_sig(chain[n - 1], trust_anchors[j])  # trusted key
+                ok = True
+            except:
+                pass
+            if ok:
+                top = n - 1
+                break
+    if top < 0:
+        raise Error("cert_chain_verify: chain not trusted (no path to a trust anchor)")
 
-    # Step 4: verify root (chain[-1]) against a trust anchor
-    var root = chain[len(chain) - 1].copy()
+    # chain[top] stands in for the anchor when it carries the anchor's key
+    var last = top - 1 if top_is_anchor else top
+    if last < 0:
+        return  # the leaf itself is a trust anchor
 
-    # Try self-signed first (root signed by itself)
-    var self_signed = False
-    try:
-        cert_verify_sig(root, root)
-        self_signed = True
-    except:
-        pass
+    # ── 2. Structural checks on chain[0..last] (no cryptography) ─────────────
+    var now = external_call["time", Int64](Int(0))
+    var cas_below = 0  # non-self-issued intermediate CAs below the current one
+    for i in range(last + 1):
+        ref c = chain[i]
+        var at = "cert_chain_verify: certificate at depth " + String(i)
+        _check_validity(c, i, now)
+        if c.ext_error.byte_length() > 0:
+            raise Error(at + " has an " + c.ext_error)
+        if i < top and not _bytes_exact_eq(c.issuer_raw, chain[i + 1].subject_raw):
+            raise Error(at + ": issuer name does not match the next certificate's subject")
+        if i == 0:
+            if c.has_eku and not (c.eku_server_auth or c.eku_any):
+                raise Error(at + ": extendedKeyUsage does not allow serverAuth")
+            if c.has_key_usage and (c.key_usage & _KU_DIGITAL_SIGNATURE) == 0:
+                raise Error(at + ": keyUsage does not allow digitalSignature")
+            continue
+        # chain[i] issued chain[i-1]: it must be a CA allowed to sign certs
+        if not (c.has_basic_constraints and c.is_ca):
+            raise Error(at + " is not a CA (basicConstraints cA) but issued the certificate below it")
+        if c.has_key_usage and (c.key_usage & _KU_KEY_CERT_SIGN) == 0:
+            raise Error(at + ": keyUsage does not allow keyCertSign")
+        if c.path_len >= 0 and cas_below > c.path_len:
+            raise Error(at + ": path length constraint exceeded")
+        if not _bytes_exact_eq(c.issuer_raw, c.subject_raw):
+            cas_below += 1
 
-    if self_signed:
-        # Still must appear in trust_anchors — check by TBS bytes match
-        for i in range(len(trust_anchors)):
-            if _bytes_exact_eq(trust_anchors[i].tbs_raw, root.tbs_raw):
-                return  # trusted
-        raise Error("cert_chain_verify: root not in trust anchors")
-
-    # Try each trust anchor to sign the root
-    for i in range(len(trust_anchors)):
-        var ok = False
-        try:
-            cert_verify_sig(root, trust_anchors[i])
-            ok = True
-        except:
-            pass
-        if ok:
-            return  # trusted
-
-    raise Error("cert_chain_verify: chain root not trusted by any anchor")
+    # ── 3. Signatures, top-down (each key is trusted before it is used) ──────
+    for i in range(top - 1, -1, -1):
+        cert_verify_sig(chain[i], chain[i + 1])
