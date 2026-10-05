@@ -14,6 +14,8 @@ PORT="${PORT:-14460}"
 WORK="$(mktemp -d)"
 trap 'kill "$SERVER" 2>/dev/null || true; cp "$WORK/server.log" "${KU_LOG:-/dev/null}" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 
+source tests/interop_certs.sh
+
 # Build first: the server's stdin lines must arrive one at a time after the
 # client has connected, or s_server reads "hello\nk\n" as one chunk of data.
 mojo build -I . tests/keyupdate_client.mojo -o "$WORK/keyupdate_client"
@@ -25,12 +27,12 @@ mojo build -I . tests/keyupdate_client.mojo -o "$WORK/keyupdate_client"
     sleep 1; echo "K"
     sleep 1; echo "after-K"
     sleep 4
-} | openssl s_server -accept "$PORT" -tls1_3 -cert tests/server.pem -key tests/server.key \
+} | openssl s_server -accept "$PORT" -tls1_3 -cert "$WORK/server.pem" -key "$WORK/server.key" \
         -ign_eof -msg > "$WORK/server.log" 2>&1 &
 SERVER=$!
 
 sleep 1
-CA_HEX="$(openssl x509 -in tests/ca.pem -outform DER | xxd -p | tr -d '\n')"
+kill -0 "$SERVER" 2>/dev/null || { echo "FAIL: s_server did not start (port $PORT busy?)"; exit 1; }
 "$WORK/keyupdate_client" "$PORT" "$CA_HEX"
 sleep 2
 # -msg logs each handshake message: ">>>" sent by the server, "<<<" received.

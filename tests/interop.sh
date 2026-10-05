@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Interop scenarios against `openssl s_server` (local; needs OpenSSL 3.x,
-# e.g. the one in the pixi environment).
+# Interop scenarios against `openssl s_server` (needs OpenSSL 3.x, e.g. the
+# one in the pixi environment; runs in CI). Certificates are generated per
+# run by tests/interop_certs.sh.
 #
 # Each scenario starts s_server with specific settings and checks, from the
 # -www status page, that the handshake succeeded with the expected protocol,
@@ -14,18 +15,7 @@ PORT=14470
 FAILURES=0
 
 mojo build -I . tests/interop_client.mojo -o "$WORK/client" >/dev/null
-CA_HEX="$(openssl x509 -in tests/ca.pem -outform DER | xxd -p | tr -d '\n')"
-
-# P-256 client certificate signed by the test CA (generated per run)
-openssl ecparam -name prime256v1 -genkey -noout -out "$WORK/client.key" 2>/dev/null
-openssl req -new -key "$WORK/client.key" -subj "/CN=interop-client" -out "$WORK/client.csr" 2>/dev/null
-printf 'extendedKeyUsage=clientAuth\n' > "$WORK/client.ext"
-openssl x509 -req -in "$WORK/client.csr" -CA tests/ca.pem -CAkey tests/ca.key \
-    -CAserial "$WORK/ca.srl" -CAcreateserial \
-    -days 1 -extfile "$WORK/client.ext" -out "$WORK/client.pem" 2>/dev/null
-CLIENT_CERT_HEX="$(openssl x509 -in "$WORK/client.pem" -outform DER | xxd -p | tr -d '\n')"
-CLIENT_KEY_HEX="$(openssl ec -in "$WORK/client.key" -noout -text 2>/dev/null \
-    | sed -n '/priv:/,/pub:/p' | grep -v 'priv:\|pub:' | tr -d ' :\n' | tail -c 64)"
+source tests/interop_certs.sh
 
 # scenario <name> <page checks> <client args...> -- <s_server args...>
 # <page checks>: strings that must all appear in the -www status page,
@@ -37,10 +27,16 @@ scenario() {
     while [ "$1" != "--" ]; do client_args+=("$1"); shift; done
     shift
     PORT=$((PORT + 1))
-    openssl s_server -accept "$PORT" -cert "${CERT:-tests/server.pem}" -key "${KEY:-tests/server.key}" \
+    openssl s_server -accept "$PORT" -cert "${CERT:-$WORK/server.pem}" -key "${KEY:-$WORK/server.key}" \
         -www "$@" > "$WORK/server.log" 2>&1 &
     local server=$!
     sleep 1
+    if ! kill -0 "$server" 2>/dev/null; then
+        echo "FAIL: $name (s_server did not start; port $PORT busy?)"
+        sed 's/^/    server: /' "$WORK/server.log" | head -3
+        FAILURES=$((FAILURES + 1))
+        return
+    fi
     "$WORK/client" "$PORT" "$CA_HEX" ${client_args[@]+"${client_args[@]}"} > "$WORK/page.txt" 2>&1
     local rc=$?
     kill "$server" 2>/dev/null; wait "$server" 2>/dev/null
@@ -66,7 +62,7 @@ scenario "TLS 1.2, P-256 ECDHE (constant-time ECDH)" \
     -- -tls1_2 -groups P-256
 scenario "TLS 1.2 mTLS, P-256 client certificate (constant-time ECDSA signing)" \
     "New, TLSv1.2, Cipher is;;CN=interop-client" "$CLIENT_CERT_HEX" "$CLIENT_KEY_HEX" \
-    -- -tls1_2 -Verify 1 -CAfile tests/ca.pem
+    -- -tls1_2 -Verify 1 -CAfile "$WORK/ca.pem"
 scenario "TLS 1.3, X25519, AES-128-GCM" "New, TLSv1.3, Cipher is TLS_AES_128_GCM_SHA256" \
     -- -tls1_3 -ciphersuites TLS_AES_128_GCM_SHA256
 scenario "TLS 1.3, X25519, AES-256-GCM" "New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384" \
