@@ -1,103 +1,109 @@
 # ============================================================================
-# bench_crypto.mojo — Performance benchmarks for tls_pure crypto primitives
+# bench_crypto.mojo — throughput and latency of the crypto primitives
 # ============================================================================
-#
-# Run: pixi run bench
+#   pixi run bench
+# Times are wall-clock (std.time.perf_counter_ns) on the build machine; compare
+# runs on the same machine only.
 # ============================================================================
 
-from ffi import external_call
-from memory.unsafe_pointer import alloc
-
+from std.time import perf_counter_ns
 from crypto.curve25519 import x25519, x25519_public_key
-from crypto.p256 import p256_ecdh, p256_public_key
+from crypto.p256 import p256_ecdh, p256_public_key, p256_ecdsa_sign
+from crypto.gcm import gcm_encrypt
+from crypto.poly1305 import chacha20_poly1305_encrypt
+from crypto.hash import sha256
 
 
-def _clock_ns() -> Int:
-    """Return monotonic time in nanoseconds via clock_gettime(CLOCK_MONOTONIC)."""
-    var ts = alloc[UInt8](16)
-    for i in range(16):
-        (ts + i)[] = 0
-    _ = external_call["clock_gettime", Int32](Int32(1), ts)
-    var secs: Int64 = 0
-    var nsecs: Int64 = 0
-    for i in range(8):
-        secs |= Int64(Int((ts + i)[]) << (i * 8))
-        nsecs |= Int64(Int((ts + 8 + i)[]) << (i * 8))
-    ts.free()
-    return Int(secs) * 1_000_000_000 + Int(nsecs)
+def _bytes(n: Int, seed: Int) -> List[UInt8]:
+    var out = List[UInt8](capacity=n)
+    for i in range(n):
+        out.append(UInt8((i * 31 + seed * 7 + 1) & 0xFF))
+    return out^
 
 
-def print_result(name: String, iters: Int, elapsed_ns: Int):
-    var ns_per_op = elapsed_ns // iters
+def _per_op(name: String, iters: Int, elapsed_ns: Int):
     print(
-        name
-        + ": "
-        + String(ns_per_op)
-        + " ns/op  ("
-        + String(elapsed_ns // 1_000_000)
-        + " ms / "
-        + String(iters)
-        + " iters)"
+        name + ": " + String(elapsed_ns // iters) + " ns/op  ("
+        + String(elapsed_ns // 1_000_000) + " ms / " + String(iters) + " iters)"
     )
 
 
+def _throughput(name: String, total_bytes: Int, elapsed_ns: Int):
+    var mb_per_s = Float64(total_bytes) / Float64(elapsed_ns) * 1000.0
+    print(name + ": " + String(Float64(Int(mb_per_s * 10)) / 10.0) + " MB/s")
+
+
+def bench_aead() raises:
+    var size = 256 * 1024
+    var rounds = 4
+    var pt = _bytes(size, 1)
+    var aad = _bytes(13, 2)
+    var nonce = _bytes(12, 3)
+
+    var key128 = _bytes(16, 4)
+    var start = perf_counter_ns()
+    for _ in range(rounds):
+        _ = gcm_encrypt(key128, nonce, pt, aad)
+    _throughput("AES-128-GCM encrypt (256 KiB)", size * rounds, Int(perf_counter_ns() - start))
+
+    var key256 = _bytes(32, 5)
+    start = perf_counter_ns()
+    for _ in range(rounds):
+        _ = gcm_encrypt(key256, nonce, pt, aad)
+    _throughput("AES-256-GCM encrypt (256 KiB)", size * rounds, Int(perf_counter_ns() - start))
+
+    start = perf_counter_ns()
+    for _ in range(rounds):
+        _ = chacha20_poly1305_encrypt(key256, nonce, aad, pt)
+    _throughput("ChaCha20-Poly1305 encrypt (256 KiB)", size * rounds, Int(perf_counter_ns() - start))
+
+    # Small records: per-record cost dominates (key setup, GHASH tail)
+    var small = _bytes(64, 6)
+    var n_small = 2000
+    start = perf_counter_ns()
+    for _ in range(n_small):
+        _ = gcm_encrypt(key128, nonce, small, aad)
+    _per_op("AES-128-GCM encrypt 64-byte record", n_small, Int(perf_counter_ns() - start))
+
+
 def bench_x25519() raises:
-    """Benchmark x25519 scalar multiplication (Montgomery ladder)."""
     var iters = 200
-    # Fixed private key (32 bytes, clamped per RFC 7748)
-    var scalar = List[UInt8](capacity=32)
-    for i in range(32):
-        scalar.append(UInt8((i * 7 + 1) & 0xFF))
-    scalar[0] &= 248
-    scalar[31] &= 127
-    scalar[31] |= 64
-    # Base point u=9
+    var scalar = _bytes(32, 7)
     var u = List[UInt8](capacity=32)
     u.append(9)
     for _ in range(31):
         u.append(0)
-
-    var start = _clock_ns()
+    var start = perf_counter_ns()
     for _ in range(iters):
-        _ = x25519(scalar.copy(), u.copy())
-    print_result("x25519 (Montgomery ladder)", iters, _clock_ns() - start)
+        _ = x25519(scalar, u)
+    _per_op("X25519 scalar mult", iters, Int(perf_counter_ns() - start))
 
 
-def bench_p256_keygen() raises:
-    """Benchmark P-256 public key generation (base point scalar mult)."""
-    var iters = 100
-    var priv = List[UInt8](capacity=32)
-    for i in range(32):
-        priv.append(UInt8((i * 17 + 3) & 0xFF))
-    priv[0] = 0x3F  # keep in valid range
-
-    var start = _clock_ns()
+def bench_p256() raises:
+    var iters = 50
+    var priv = _bytes(32, 8)
+    priv[0] = 0x3F  # keep it below n
+    var start = perf_counter_ns()
     for _ in range(iters):
-        _ = p256_public_key(priv.copy())
-    print_result("P-256 public key (base point mult)", iters, _clock_ns() - start)
+        _ = p256_public_key(priv)
+    _per_op("P-256 public key (k*G)", iters, Int(perf_counter_ns() - start))
 
-
-def bench_p256_ecdh() raises:
-    """Benchmark P-256 ECDH shared secret (arbitrary point scalar mult)."""
-    var iters = 100
-    var priv = List[UInt8](capacity=32)
-    for i in range(32):
-        priv.append(UInt8((i * 13 + 5) & 0xFF))
-    priv[0] = 0x3F
-    var pub = p256_public_key(priv.copy())
-
-    var start = _clock_ns()
+    var peer = p256_public_key(_bytes(32, 9))
+    start = perf_counter_ns()
     for _ in range(iters):
-        _ = p256_ecdh(priv.copy(), pub.copy())
-    print_result("P-256 ECDH (arbitrary point mult)", iters, _clock_ns() - start)
+        _ = p256_ecdh(priv, peer)
+    _per_op("P-256 ECDH", iters, Int(perf_counter_ns() - start))
+
+    var h = sha256(_bytes(100, 10))
+    var nonce = _bytes(32, 11)
+    start = perf_counter_ns()
+    for _ in range(iters):
+        _ = p256_ecdsa_sign(priv, h, nonce)
+    _per_op("P-256 ECDSA sign", iters, Int(perf_counter_ns() - start))
 
 
 def main() raises:
-    print("=== tls_pure Crypto Benchmarks ===")
-    print()
+    print("=== tls crypto benchmarks ===")
+    bench_aead()
     bench_x25519()
-    bench_p256_keygen()
-    bench_p256_ecdh()
-    print()
-    print("Note: P-384 benchmark requires exported p384 ECDH function.")
-    print("=== Done ===")
+    bench_p256()

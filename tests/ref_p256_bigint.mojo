@@ -1,15 +1,21 @@
 # ============================================================================
+# tests/ref_p256_bigint.mojo — REFERENCE ONLY: the BigInt P-256 from tls 1.4.5
+# ============================================================================
+# Kept verbatim (public functions renamed ref_*) as a test oracle for the
+# constant-time secret-key operations in crypto/p256.mojo. Not constant time:
+# variable-length BigInt arithmetic and a ladder whose length depends on the
+# scalar. Never use it outside tests.
+# ============================================================================
+
+# ============================================================================
 # p256.mojo — NIST P-256 elliptic curve for TLS 1.3
 # ============================================================================
 # Provides:
 #   p256_public_key(private_key)       → 65-byte uncompressed public key
 #   p256_ecdh(private_key, peer_pub)   → 32-byte shared secret (x-coord)
 #   p256_ecdsa_verify(pub, hash, r, s) → raises on invalid signature
-#   p256_ecdsa_sign(priv, hash, nonce) → (r, s)
 #
-# Secret-key operations (public key, ECDH, signing) use the constant-time
-# arithmetic in crypto/p256_ct.mojo. Verification sees only public data and
-# uses BigInt arithmetic; field elements are BigInt in [0, p-1].
+# Uses BigInt arithmetic; field elements are BigInt in [0, p-1].
 # Points use Jacobian coordinates (X:Y:Z) with Z=1 for affine input.
 # ============================================================================
 
@@ -20,7 +26,6 @@ from crypto.bigint import (
     bigint_bit_len, bigint_get_bit, bigint_cswap_inplace,
 )
 from crypto.hmac import hmac_sha256
-import crypto.p256_ct as ct
 
 
 # ============================================================================
@@ -551,64 +556,56 @@ def _parse_pub(pub: List[UInt8]) raises -> Tuple[BigInt, BigInt]:
 # Public API
 # ============================================================================
 
-def _encode_point(x: ct.Limbs, y: ct.Limbs) -> List[UInt8]:
-    var out = List[UInt8](capacity=65)
-    out.append(0x04)
-    var xb = ct.limbs_to_be(x)
-    var yb = ct.limbs_to_be(y)
-    for i in range(32):
-        out.append(xb[i])
-    for i in range(32):
-        out.append(yb[i])
-    return out^
-
-
-def p256_public_key(private_key: List[UInt8]) raises -> List[UInt8]:
-    """Derive 65-byte uncompressed P-256 public key from 32-byte private scalar.
-
-    Constant time in the private key (crypto/p256_ct.mojo).
-    """
-    if len(private_key) != 32:
-        raise Error("p256: private key must be 32 bytes")
-    var fp = ct.mod_p()
-    if not ct.scalar_in_range(private_key, ct.mod_n()):
-        raise Error("p256: private key out of range")
-    var q = ct.scalar_mult(private_key, ct.base_point(fp), fp)
-    var affine = ct.to_affine(q, fp)
-    return _encode_point(affine[0], affine[1])
-
-
-def p256_ecdh(private_key: List[UInt8], peer_public_key: List[UInt8]) raises -> List[UInt8]:
-    """Compute 32-byte P-256 ECDH shared secret (x-coordinate only).
-
-    The peer key is validated (format, coordinates < p, on the curve) with
-    the BigInt code, since it is public; the scalar multiplication by the
-    private key is constant time (crypto/p256_ct.mojo).
-    """
+def ref_p256_public_key(private_key: List[UInt8]) raises -> List[UInt8]:
+    """Derive 65-byte uncompressed P-256 public key from 32-byte private scalar."""
     if len(private_key) != 32:
         raise Error("p256: private key must be 32 bytes")
     var p = _p256_p()
+    var n = _p256_n()
+    var d = bigint_from_bytes(private_key)
+    if bigint_is_zero(d) or bigint_cmp(d, n) >= 0:
+        raise Error("p256: private key out of range")
+    var gx = _p256_gx()
+    var gy = _p256_gy()
+    var Q  = _scalar_mul_affine(d, gx, gy, p)
+    if Q.inf:
+        raise Error("p256: degenerate public key")
+    var affine = _to_affine(Q, p)
+    var qx = affine[0].copy()
+    var qy = affine[1].copy()
+    var out = List[UInt8](capacity=65)
+    out.append(0x04)
+    var qx_bytes = bigint_to_bytes(qx, 32)
+    var qy_bytes = bigint_to_bytes(qy, 32)
+    for i in range(32):
+        out.append(qx_bytes[i])
+    for i in range(32):
+        out.append(qy_bytes[i])
+    return out^
+
+
+def ref_p256_ecdh(private_key: List[UInt8], peer_public_key: List[UInt8]) raises -> List[UInt8]:
+    """Compute 32-byte P-256 ECDH shared secret (x-coordinate only)."""
+    if len(private_key) != 32:
+        raise Error("p256: private key must be 32 bytes")
+    var p = _p256_p()
+    var n = _p256_n()
+    var d = bigint_from_bytes(private_key)
+    if bigint_is_zero(d) or bigint_cmp(d, n) >= 0:
+        raise Error("p256: private key out of range")
     var parsed = _parse_pub(peer_public_key)
     var qx = parsed[0].copy()
     var qy = parsed[1].copy()
-    if bigint_cmp(qx, p) >= 0 or bigint_cmp(qy, p) >= 0:
-        raise Error("p256: peer public key coordinate out of range")
     if not _point_on_curve(qx.copy(), qy.copy(), p):
         raise Error("p256: peer public key not on curve")
-    var fp = ct.mod_p()
-    if not ct.scalar_in_range(private_key, ct.mod_n()):
-        raise Error("p256: private key out of range")
-    var peer = ct.Point(
-        ct.to_mont(ct.limbs_from_be(peer_public_key, 1), fp),
-        ct.to_mont(ct.limbs_from_be(peer_public_key, 33), fp),
-        ct.mont_one(fp),
-    )
-    var shared = ct.scalar_mult(private_key, peer, fp)
-    var affine = ct.to_affine(shared, fp)
-    return ct.limbs_to_be(affine[0])
+    var S = _scalar_mul_affine(d, qx, qy, p)
+    if S.inf:
+        raise Error("p256: degenerate ECDH result")
+    var affine = _to_affine(S, p)
+    return bigint_to_bytes(affine[0], 32)
 
 
-def p256_ecdsa_verify(
+def ref_p256_ecdsa_verify(
     pub_key:  List[UInt8],   # 65-byte uncompressed P-256 public key
     msg_hash: List[UInt8],   # 32-byte message hash
     sig_r:    List[UInt8],   # 32-byte r component
@@ -660,7 +657,7 @@ def p256_ecdsa_verify(
         raise Error("p256: ECDSA signature invalid")
 
 
-def p256_ecdsa_sign(
+def ref_p256_ecdsa_sign(
     private_key:  List[UInt8],   # 32-byte big-endian scalar in [1, n-1]
     msg_hash:     List[UInt8],   # 32-byte message hash (e.g. SHA-256 digest)
     nonce_bytes:  List[UInt8],   # 32-byte caller-provided entropy
@@ -669,14 +666,15 @@ def p256_ecdsa_sign(
 
     Nonce k is derived deterministically:
       k_raw = HMAC-SHA-256(private_key, msg_hash || nonce_bytes)
-      k     = k_raw mod n   (one conditional subtraction; k_raw < 2^256 < 2n)
+      k     = bigint_from_bytes(k_raw) mod n   (clamped into [1, n-1])
 
     Low-s normalization is applied: if s > n/2 then s = n - s.
     This prevents signature malleability.
 
-    Constant time in the private key and the nonce (crypto/p256_ct.mojo):
-    k*G is a fixed 256-step ladder, k^-1 is Fermat inversion, and all mod-n
-    arithmetic is Montgomery with masked reductions.
+    Safety:
+    - private_key is validated in [1, n-1] before any computation.
+    - k is validated non-zero before use.
+    - r and s are validated non-zero before returning.
     """
     if len(private_key) != 32:
         raise Error("p256_ecdsa_sign: private key must be 32 bytes")
@@ -685,9 +683,12 @@ def p256_ecdsa_sign(
     if len(nonce_bytes) != 32:
         raise Error("p256_ecdsa_sign: nonce_bytes must be 32 bytes")
 
-    var fp = ct.mod_p()
-    var order = ct.mod_n()
-    if not ct.scalar_in_range(private_key, order):
+    var p = _p256_p()
+    var n = _p256_n()
+
+    # Validate private key
+    var d = bigint_from_bytes(private_key)
+    if bigint_is_zero(d) or bigint_cmp(d, n) >= 0:
         raise Error("p256_ecdsa_sign: private key out of range [1, n-1]")
 
     # Derive nonce k: HMAC-SHA-256(private_key, msg_hash || nonce_bytes)
@@ -696,34 +697,39 @@ def p256_ecdsa_sign(
         k_input.append(msg_hash[i])
     for i in range(32):
         k_input.append(nonce_bytes[i])
-    var k = ct.reduce_once(ct.limbs_from_be(hmac_sha256(private_key, k_input), 0), order)
-    if ct.is_zero(k) == 1:
+    var k_raw = hmac_sha256(private_key, k_input)
+    var k_big = bigint_from_bytes(k_raw)
+    var k = bigint_mod(k_big, n)
+    if bigint_is_zero(k):
         raise Error("p256_ecdsa_sign: degenerate nonce k=0; retry with different nonce_bytes")
-    var k_bytes = ct.limbs_to_be(k)
 
-    # R = k * G; r = R.x mod n (R.x < p < 2n)
-    var big_r = ct.to_affine(ct.scalar_mult(k_bytes, ct.base_point(fp), fp), fp)
-    var r = ct.reduce_once(big_r[0], order)
-    if ct.is_zero(r) == 1:
+    # R = k * G; r = R.x mod n
+    var gx = _p256_gx()
+    var gy = _p256_gy()
+    var R_pt = _scalar_mul_affine(k, gx, gy, p)
+    if R_pt.inf:
+        raise Error("p256_ecdsa_sign: degenerate R point; retry with different nonce_bytes")
+    var R_affine = _to_affine(R_pt, p)
+    var r = bigint_mod(R_affine[0], n)
+    if bigint_is_zero(r):
         raise Error("p256_ecdsa_sign: degenerate r=0; retry with different nonce_bytes")
 
-    # s = k^-1 * (e + r*d) mod n, in the Montgomery domain mod n
-    var e = ct.reduce_once(ct.limbs_from_be(msg_hash, 0), order)
-    var d = ct.limbs_from_be(private_key, 0)
-    var rd = ct.mont_mul(ct.to_mont(r, order), ct.to_mont(d, order), order)
-    var sum = ct.add(ct.to_mont(e, order), rd, order)
-    var s_m = ct.mont_mul(ct.mont_inv(ct.to_mont(k, order), order), sum, order)
-    var s = ct.from_mont(s_m, order)
-    if ct.is_zero(s) == 1:
+    # s = k^(-1) * (e + r*d) mod n
+    var e = bigint_mod(bigint_from_bytes(msg_hash), n)
+    var rd = bigint_modmul(r.copy(), d, n)
+    var e_plus_rd = bigint_add(e, rd)
+    if bigint_cmp(e_plus_rd, n) >= 0:
+        e_plus_rd = bigint_sub(e_plus_rd, n)
+    var k_inv = bigint_modinv(k, n)
+    var s = bigint_modmul(k_inv, e_plus_rd, n)
+    if bigint_is_zero(s):
         raise Error("p256_ecdsa_sign: degenerate s=0; retry with different nonce_bytes")
 
-    # Low-s normalization: s > (n-1)/2  =>  s = n - s, chosen by mask
-    var half = order.m.copy()
-    for i in range(8):
-        var next_bit = (order.m[i + 1] & 1) << 31 if i < 7 else UInt64(0)
-        half[i] = (order.m[i] >> 1) | next_bit
-    var high = ct.lt(half, s)
-    var neg = ct.sub(ct.Limbs(fill=0), s, order)  # n - s
-    s = ct.select(UInt64(0) - high, neg, s)
+    # Low-s normalization: if s > n/2, replace s = n - s
+    # n/2 computed as right-shift; compare s against it
+    # Equivalent: if 2*s > n then s = n - s
+    var s2 = bigint_add(s.copy(), s.copy())
+    if bigint_cmp(s2, n) > 0:
+        s = bigint_sub(n, s)
 
-    return (ct.limbs_to_be(r), ct.limbs_to_be(s))
+    return (bigint_to_bytes(r, 32), bigint_to_bytes(s, 32))

@@ -17,7 +17,7 @@ With [mojo-pkg](https://github.com/Mosaad-M/mojo-pkg), add the dependency to
 
 ```toml
 [dependencies]
-tls = { git = "Mosaad-M/tls", version = ">=1.4.5" }
+tls = { git = "Mosaad-M/tls", version = ">=1.4.6" }
 tcp = { git = "Mosaad-M/tcp", version = ">=1.1.0" }   # optional: DNS + connect helper
 ```
 
@@ -179,13 +179,19 @@ there is no option to skip it.
 This library has not had an external audit. An internal review (October 2026) found the
 following, which are **not yet fixed**:
 
-- **Timing side channels:** AES and GHASH use secret-indexed lookup tables, and P-256
-  signing (used only for TLS 1.2 client certificates) uses variable-time arithmetic.
 - **TLS 1.2 extensions:** extended master secret (RFC 7627) and renegotiation_info are
   not sent or checked.
 - **HelloRetryRequest:** a TLS 1.3 server that will not use X25519 fails the handshake.
 - **TLS 1.2 ECDSA:** the signature hash is assumed to match the curve (SHA-256 with
   P-256, SHA-384 with P-384), so a P-384 server signing with SHA-256 fails.
+
+Fixed in 1.4.6:
+- **Timing side channels:** AES is bitsliced (no S-box tables), GHASH uses a table-free
+  carry-less multiply, and P-256 operations on secrets (key generation, ECDH, ECDSA
+  signing) use fixed-width Montgomery arithmetic, complete point formulas and a
+  256-step ladder. All three are also faster than before. Remaining primitives were
+  already constant time: X25519 (Montgomery ladder), ChaCha20-Poly1305 (no tables),
+  tag and Finished comparisons. Signature verification and RSA handle only public data.
 
 Fixed in 1.4.5:
 - **KeyUpdate:** a server rotating its TLS 1.3 traffic keys no longer breaks the
@@ -216,9 +222,9 @@ before the path is anchored.
 
 ```
 crypto/  primitives and X.509
-  aes, gcm, chacha20, poly1305           AEAD ciphers
+  aes, gcm, chacha20, poly1305           AEAD ciphers (constant time)
   hash (SHA-256/384/512), sha1, hmac, hkdf, prf (TLS 1.2 PRF)
-  curve25519, p256, p384, rsa, bigint, ed25519 (not used by TLS)
+  curve25519, p256, p256_ct, p384, rsa, bigint, ed25519 (not used by TLS)
   asn1, pem, base64, cert                X.509 parsing and path validation
   random                                 OS randomness (/dev/urandom)
   record, handshake                      record protection, TLS 1.3 key schedule
@@ -235,8 +241,9 @@ pixi run test               # unit tests (run in CI on Linux and macOS)
 pixi run test-connection    # TLS 1.3 against a local Python server
 pixi run test-connection12  # TLS 1.2 against a local Python server
 pixi run test-socket        # TlsSocket against a local Python server
-pixi run bash tests/keyupdate_interop.sh                # KeyUpdate against openssl s_server
+pixi run test-interop       # handshakes against openssl s_server (also run in CI)
 pixi run bench              # primitive benchmarks
+pixi run ct-check           # dudect-style timing-leak check (manual; noisy)
 mojo run -I . -I <path to tcp> tests/live_sites.mojo   # real sites + badssl.com (network)
 ```
 
