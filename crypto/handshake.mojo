@@ -98,6 +98,18 @@ def tls13_traffic_keys(
     return (key^, iv^)
 
 
+def tls13_next_traffic_secret(secret: List[UInt8], use_sha384: Bool) raises -> List[UInt8]:
+    """Next application traffic secret after a KeyUpdate (RFC 8446 §7.2).
+
+    application_traffic_secret_N+1 =
+        HKDF-Expand-Label(application_traffic_secret_N, "traffic upd", "", Hash.length)
+    """
+    var empty = List[UInt8]()
+    if use_sha384:
+        return hkdf_expand_label_sha384(secret, "traffic upd", empty, 48)
+    return hkdf_expand_label(secret, "traffic upd", empty, 32)
+
+
 def tls13_finished_key(traffic_secret: List[UInt8]) raises -> List[UInt8]:
     """Compute the Finished HMAC key: HKDF-Expand-Label(secret, "finished", "", 32)."""
     var empty = List[UInt8]()

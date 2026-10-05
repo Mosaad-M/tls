@@ -10,6 +10,7 @@
 
 from std.ffi import external_call
 from std.memory import alloc
+from std.sys.info import CompilationTarget
 from crypto.hash import SHA256, SHA384, sha256, sha384
 from crypto.handshake import (
     tls13_early_secret, tls13_handshake_secret, tls13_master_secret,
@@ -65,6 +66,9 @@ struct TlsKeys(Copyable, Movable):
     var resumption_secret:     List[UInt8]
     var session_tickets:       List[SessionTicket]
     var negotiated_protocol:   String   # ALPN protocol selected by server, "" if none
+    var client_app_secret:     List[UInt8]  # current application traffic secrets,
+    var server_app_secret:     List[UInt8]  # kept for KeyUpdate (RFC 8446 §4.6.3)
+    var use_sha384:            Bool         # key schedule hash (TLS_AES_256_GCM_SHA384)
 
     def __init__(out self):
         self.cipher              = 0
@@ -77,6 +81,9 @@ struct TlsKeys(Copyable, Movable):
         self.resumption_secret   = List[UInt8]()
         self.session_tickets     = List[SessionTicket]()
         self.negotiated_protocol = String("")
+        self.client_app_secret   = List[UInt8]()
+        self.server_app_secret   = List[UInt8]()
+        self.use_sha384          = False
 
     def __copyinit__(out self, copy: Self):
         self.cipher              = copy.cipher
@@ -89,6 +96,9 @@ struct TlsKeys(Copyable, Movable):
         self.resumption_secret   = copy.resumption_secret.copy()
         self.session_tickets     = copy.session_tickets.copy()
         self.negotiated_protocol = copy.negotiated_protocol
+        self.client_app_secret   = copy.client_app_secret.copy()
+        self.server_app_secret   = copy.server_app_secret.copy()
+        self.use_sha384          = copy.use_sha384
 
     def __moveinit__(out self, deinit take: Self):
         self.cipher              = take.cipher
@@ -101,33 +111,114 @@ struct TlsKeys(Copyable, Movable):
         self.resumption_secret   = take.resumption_secret^
         self.session_tickets     = take.session_tickets^
         self.negotiated_protocol = take.negotiated_protocol^
+        self.client_app_secret   = take.client_app_secret^
+        self.server_app_secret   = take.server_app_secret^
+        self.use_sha384          = take.use_sha384
 
 
 # ============================================================================
 # TCP I/O helpers (FFI: read / write system calls)
 # ============================================================================
 
-def _tcp_read(fd: Int32, n: Int) raises -> List[UInt8]:
-    """Read exactly n bytes from the socket fd. Raises on error or EOF."""
-    if n == 0:
-        return List[UInt8]()
-    var buf = alloc[UInt8](n)
-    var total = 0
-    while total < n:
-        var got = external_call["read", Int](fd, buf.unsafe_offset(total), n - total)
-        if got <= 0:
-            buf.unsafe_free()
-            raise Error("tls: tcp read failed or connection closed")
-        total += got
-    var out = List[UInt8](capacity=n)
-    for i in range(n):
+comptime _EINTR      : Int32 = 4
+comptime _EPIPE      : Int32 = 32
+comptime _EAGAIN     : Int32 = 35 if CompilationTarget.is_macos() else 11
+comptime _ECONNRESET : Int32 = 54 if CompilationTarget.is_macos() else 104
+comptime _ENOTSOCK   : Int32 = 38 if CompilationTarget.is_macos() else 88
+comptime _MSG_NOSIGNAL : Int32 = 0x4000          # Linux; macOS uses SO_NOSIGPIPE
+comptime _SOL_SOCKET   : Int32 = 0xFFFF if CompilationTarget.is_macos() else 1
+comptime _SO_NOSIGPIPE : Int32 = 0x1022          # macOS only
+comptime _SO_RCVTIMEO  : Int32 = 0x1006 if CompilationTarget.is_macos() else 20
+comptime _SO_SNDTIMEO  : Int32 = 0x1005 if CompilationTarget.is_macos() else 21
+
+
+def _errno() -> Int32:
+    """Current errno (__errno_location on Linux, __error on macOS)."""
+    var ptr: Int
+    comptime if CompilationTarget.is_linux():
+        ptr = external_call["__errno_location", Int]()
+    else:
+        ptr = external_call["__error", Int]()
+    var ebuf = alloc[Int32](1)
+    _ = external_call["memcpy", Int](Int(ebuf), ptr, Int(4))
+    var val = ebuf[]
+    ebuf.unsafe_free()
+    return val
+
+
+def tls_prepare_fd(fd: Int32):
+    """Stop writes to a closed peer from raising SIGPIPE (macOS: SO_NOSIGPIPE;
+    Linux uses MSG_NOSIGNAL on each send). Harmless on non-sockets."""
+    comptime if CompilationTarget.is_macos():
+        var one = alloc[Int32](1)
+        one[] = 1
+        _ = external_call["setsockopt", Int32](
+            fd, _SOL_SOCKET, _SO_NOSIGPIPE, Int(one), Int32(4)
+        )
+        one.unsafe_free()
+
+
+def tls_set_timeout(fd: Int32, seconds: Int) raises:
+    """Set SO_RCVTIMEO and SO_SNDTIMEO (whole seconds; 0 = no timeout)."""
+    if seconds < 0:
+        raise Error("tls: timeout must be >= 0 seconds")
+    var tv = alloc[UInt8](16)  # struct timeval { tv_sec (8), tv_usec (8 incl. padding) }
+    for i in range(16):
+        tv[unsafe_offset=i] = 0
+    tv.unsafe_bitcast[Int]()[unsafe_offset=0] = seconds
+    var rc1 = external_call["setsockopt", Int32](fd, _SOL_SOCKET, _SO_RCVTIMEO, Int(tv), Int32(16))
+    var rc2 = external_call["setsockopt", Int32](fd, _SOL_SOCKET, _SO_SNDTIMEO, Int(tv), Int32(16))
+    tv.unsafe_free()
+    if rc1 != 0 or rc2 != 0:
+        raise Error("tls: setsockopt timeout failed (errno=" + String(_errno()) + ")")
+
+
+def tls_read_some(fd: Int32, max_bytes: Int) raises -> List[UInt8]:
+    """Read up to max_bytes; an empty result means EOF.
+
+    Retries EINTR. A receive timeout (SO_RCVTIMEO) raises "tls: read timed
+    out"; any other failure raises "tls: tcp read failed (errno=N)".
+    """
+    var buf = alloc[UInt8](max_bytes)
+    var got: Int
+    while True:
+        got = external_call["read", Int](fd, buf, max_bytes)
+        if got >= 0:
+            break
+        var err = _errno()
+        if err == _EINTR:
+            continue
+        buf.unsafe_free()
+        if err == _EAGAIN:
+            raise Error("tls: read timed out")
+        raise Error("tls: tcp read failed (errno=" + String(err) + ")")
+    var out = List[UInt8](capacity=got)
+    for i in range(got):
         out.append(buf[unsafe_offset=i])
     buf.unsafe_free()
     return out^
 
 
+def _tcp_read(fd: Int32, n: Int) raises -> List[UInt8]:
+    """Read exactly n bytes during the handshake. Raises on error or EOF."""
+    var out = List[UInt8](capacity=n)
+    while len(out) < n:
+        var chunk = tls_read_some(fd, n - len(out))
+        if len(chunk) == 0:
+            raise Error("tls: connection closed during handshake")
+        for i in range(len(chunk)):
+            out.append(chunk[i])
+    return out^
+
+
 def _tcp_write(fd: Int32, data: List[UInt8]) raises:
-    """Write all bytes to the socket fd."""
+    """Write all bytes to the socket fd.
+
+    Never raises SIGPIPE (MSG_NOSIGNAL on Linux, SO_NOSIGPIPE on macOS via
+    tls_prepare_fd). Retries EINTR. Raises "tls: connection closed by peer
+    (write failed)" on EPIPE/ECONNRESET and "tls: write timed out" when
+    SO_SNDTIMEO expires.
+    """
     var n = len(data)
     if n == 0:
         return
@@ -135,11 +226,33 @@ def _tcp_write(fd: Int32, data: List[UInt8]) raises:
     for i in range(n):
         buf[unsafe_offset=i] = data[i]
     var total = 0
+    var use_send = CompilationTarget.is_linux()
     while total < n:
-        var sent = external_call["write", Int](Int(fd), buf.unsafe_offset(total), n - total)
-        if sent <= 0:
+        var sent: Int
+        if use_send:
+            # Same argument types as the tcp package's send(): one program
+            # cannot declare a C function with two signatures.
+            sent = external_call["send", Int](
+                fd, Int(buf.unsafe_offset(total)), n - total, _MSG_NOSIGNAL
+            )
+        else:
+            sent = external_call["write", Int](Int(fd), buf.unsafe_offset(total), n - total)
+        if sent < 0:
+            var err = _errno()
+            if err == _EINTR:
+                continue
+            if err == _ENOTSOCK and use_send:
+                use_send = False  # a pipe or file (tests): plain write()
+                continue
             buf.unsafe_free()
-            raise Error("tls: tcp write failed")
+            if err == _EAGAIN:
+                raise Error("tls: write timed out")
+            if err == _EPIPE or err == _ECONNRESET:
+                raise Error("tls: connection closed by peer (write failed)")
+            raise Error("tls: tcp write failed (errno=" + String(err) + ")")
+        if sent == 0:
+            buf.unsafe_free()
+            raise Error("tls: tcp write failed (wrote 0 bytes)")
         total += sent
     buf.unsafe_free()
 
@@ -477,6 +590,8 @@ def tls13_after_server_hello(
     var s_ap_key: List[UInt8]
     var s_ap_iv: List[UInt8]
     var res_secret: List[UInt8]
+    var c_ap_secret: List[UInt8]
+    var s_ap_secret: List[UInt8]
 
     if use_sha384:
         var ms = tls13_master_secret_sha384(hs_secret)
@@ -491,6 +606,8 @@ def tls13_after_server_hello(
         c_ap_iv  = c_kp[1].copy()
         s_ap_key = s_kp[0].copy()
         s_ap_iv  = s_kp[1].copy()
+        c_ap_secret = c_ap_ts^
+        s_ap_secret = s_ap_ts^
     else:
         var ms = tls13_master_secret(hs_secret)
         var c_ap_ts = tls13_derive_secret(ms, "c ap traffic", th_for_c_fin)
@@ -504,6 +621,8 @@ def tls13_after_server_hello(
         c_ap_iv  = c_kp[1].copy()
         s_ap_key = s_kp[0].copy()
         s_ap_iv  = s_kp[1].copy()
+        c_ap_secret = c_ap_ts^
+        s_ap_secret = s_ap_ts^
 
     var keys = TlsKeys()
     keys.cipher              = negotiated_cipher
@@ -515,6 +634,9 @@ def tls13_after_server_hello(
     keys.server_seqno        = 0
     keys.resumption_secret   = res_secret^
     keys.negotiated_protocol = alpn_proto^
+    keys.client_app_secret   = c_ap_secret^
+    keys.server_app_secret   = s_ap_secret^
+    keys.use_sha384          = use_sha384
     return keys^
 
 
@@ -719,48 +841,6 @@ def tls_handle_incoming_alert(alert_body: List[UInt8]) raises:
 def tls_tcp_read(fd: Int32, n: Int) raises -> List[UInt8]:
     """Read exactly n bytes from tcp socket fd."""
     return _tcp_read(fd, n)
-
-
-def _tcp_read_part(fd: Int32, n: Int, at_boundary: Bool) raises -> List[UInt8]:
-    """Read exactly n bytes of a post-handshake record.
-
-    EOF before any byte at a record boundary is a clean TCP close; EOF
-    anywhere else cuts a record short.
-    """
-    var out = List[UInt8](capacity=n)
-    if n == 0:
-        return out^
-    var buf = alloc[UInt8](n)
-    var total = 0
-    while total < n:
-        var got = external_call["read", Int](fd, buf.unsafe_offset(total), n - total)
-        if got < 0:
-            buf.unsafe_free()
-            raise Error("tls: tcp read failed")
-        if got == 0:
-            buf.unsafe_free()
-            if at_boundary and total == 0:
-                raise Error("tls: connection closed without close_notify")
-            raise Error("tls: truncated record")
-        total += got
-    for i in range(n):
-        out.append(buf[unsafe_offset=i])
-    buf.unsafe_free()
-    return out^
-
-
-def tls_tcp_read_record(fd: Int32) raises -> Tuple[List[UInt8], List[UInt8]]:
-    """Read one post-handshake record; returns (5-byte header, body).
-
-    Raises "tls: connection closed without close_notify" when TCP closes
-    between records and "tls: truncated record" when it closes inside one.
-    """
-    var header = _tcp_read_part(fd, 5, True)
-    var rlen = (Int(header[3]) << 8) | Int(header[4])
-    if rlen > 16640:  # 2^14 + 256 (RFC 8446 §5.2)
-        raise Error("tls: record too large: " + String(rlen))
-    var body = _tcp_read_part(fd, rlen, False)
-    return (header^, body^)
 
 
 def tls_tcp_write(fd: Int32, data: List[UInt8]) raises:

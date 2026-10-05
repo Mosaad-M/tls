@@ -17,7 +17,7 @@ With [mojo-pkg](https://github.com/Mosaad-M/mojo-pkg), add the dependency to
 
 ```toml
 [dependencies]
-tls = { git = "Mosaad-M/tls", version = ">=1.4.4" }
+tls = { git = "Mosaad-M/tls", version = ">=1.4.5" }
 tcp = { git = "Mosaad-M/tcp", version = ">=1.1.0" }   # optional: DNS + connect helper
 ```
 
@@ -90,6 +90,7 @@ struct TlsSocket(Movable):
     def recv_all(mut self, max_size: Int = 16777216,                       # until close_notify
                  allow_truncation: Bool = False) raises -> List[UInt8]
     def close_notify_received(self) -> Bool            # authenticated end of stream seen
+    def set_timeout(mut self, seconds: Int) raises     # receive/send timeout; 0 = none
     def close(mut self) raises                         # sends close_notify, closes the fd
 
     def negotiated_protocol(self) -> String            # ALPN result (TLS 1.3), or ""
@@ -115,6 +116,19 @@ connection. So:
 - A record cut off part-way (`tls: truncated record`), a plaintext alert after the
   handshake, or an alert that fails to decrypt is always an error.
 
+### Timeouts and errors
+
+Sockets from the `tcp` package already have send and receive timeouts (its
+`timeout_secs`, 30 s by default); for another file descriptor, call `set_timeout`.
+
+- A receive timeout raises `tls: read timed out`. Nothing is lost: a partly received
+  record is kept, so `recv()` can simply be called again.
+- A send timeout raises `tls: write timed out`, and a peer that has gone away raises
+  `tls: connection closed by peer (write failed)`. Either way part of a record may have
+  been sent, so later sends raise `tls: connection broken by an earlier write failure`.
+- Writing to a closed connection never raises SIGPIPE, and system calls interrupted by
+  a signal (EINTR) are retried.
+
 `load_system_ca_bundle` reads `/etc/ssl/certs/ca-certificates.crt` on Linux and
 `/etc/ssl/cert.pem` on macOS (bundles up to 2 MB). Certificates it cannot parse are
 skipped. For your own trust anchors, parse DER certificates with `cert_parse` from
@@ -133,8 +147,9 @@ skipped. For your own trust anchors, parse DER certificates with `cert_parse` fr
 
 Not supported: TLS 1.1 and older, CBC or non-ECDHE cipher suites (never offered),
 HelloRetryRequest (a TLS 1.3 server that does not accept X25519 fails the handshake),
-session resumption (tickets are collected but not used), 0-RTT, KeyUpdate and
-post-handshake authentication.
+session resumption (tickets are collected but not used), 0-RTT and post-handshake
+authentication. TLS 1.3 KeyUpdate is supported in both directions: the client follows
+the server's key changes and answers when the server asks it to update its own keys.
 
 ### Certificate validation
 
@@ -168,7 +183,15 @@ following, which are **not yet fixed**:
   signing (used only for TLS 1.2 client certificates) uses variable-time arithmetic.
 - **TLS 1.2 extensions:** extended master secret (RFC 7627) and renegotiation_info are
   not sent or checked.
-- **Robustness:** no socket timeouts, and SIGPIPE is not suppressed.
+- **HelloRetryRequest:** a TLS 1.3 server that will not use X25519 fails the handshake.
+- **TLS 1.2 ECDSA:** the signature hash is assumed to match the curve (SHA-256 with
+  P-256, SHA-384 with P-384), so a P-384 server signing with SHA-256 fails.
+
+Fixed in 1.4.5:
+- **KeyUpdate:** a server rotating its TLS 1.3 traffic keys no longer breaks the
+  connection; update requests are answered.
+- **Socket I/O:** timeouts are reported as such and are resumable for reads; SIGPIPE is
+  suppressed; EINTR is retried; `set_timeout()` was added.
 
 Fixed in 1.4.4:
 - **Truncation:** only an authenticated `close_notify` ends `recv_all()` (see
@@ -212,6 +235,7 @@ pixi run test               # unit tests (run in CI on Linux and macOS)
 pixi run test-connection    # TLS 1.3 against a local Python server
 pixi run test-connection12  # TLS 1.2 against a local Python server
 pixi run test-socket        # TlsSocket against a local Python server
+pixi run bash tests/keyupdate_interop.sh                # KeyUpdate against openssl s_server
 pixi run bench              # primitive benchmarks
 mojo run -I . -I <path to tcp> tests/live_sites.mojo   # real sites + badssl.com (network)
 ```
