@@ -8,7 +8,7 @@
 #   p256_ecdsa_sign(priv, hash, nonce) → (r, s)
 #
 # Secret-key operations (public key, ECDH, signing) use the constant-time
-# arithmetic in crypto/p256_ct.mojo. Verification sees only public data and
+# arithmetic in crypto/ec_ct.mojo. Verification sees only public data and
 # uses BigInt arithmetic; field elements are BigInt in [0, p-1].
 # Points use Jacobian coordinates (X:Y:Z) with Z=1 for affine input.
 # ============================================================================
@@ -19,8 +19,9 @@ from crypto.bigint import (
     bigint_mul, bigint_mod, bigint_modmul, bigint_modinv,
     bigint_bit_len, bigint_get_bit, bigint_cswap_inplace,
 )
+from std.collections import InlineArray
 from crypto.hmac import hmac_sha256
-import crypto.p256_ct as ct
+import crypto.ec_ct as ct
 
 
 # ============================================================================
@@ -551,31 +552,17 @@ def _parse_pub(pub: List[UInt8]) raises -> Tuple[BigInt, BigInt]:
 # Public API
 # ============================================================================
 
-def _encode_point(x: ct.Limbs, y: ct.Limbs) -> List[UInt8]:
-    var out = List[UInt8](capacity=65)
-    out.append(0x04)
-    var xb = ct.limbs_to_be(x)
-    var yb = ct.limbs_to_be(y)
-    for i in range(32):
-        out.append(xb[i])
-    for i in range(32):
-        out.append(yb[i])
-    return out^
-
-
 def p256_public_key(private_key: List[UInt8]) raises -> List[UInt8]:
     """Derive 65-byte uncompressed P-256 public key from 32-byte private scalar.
 
-    Constant time in the private key (crypto/p256_ct.mojo).
+    Constant time in the private key (crypto/ec_ct.mojo).
     """
     if len(private_key) != 32:
         raise Error("p256: private key must be 32 bytes")
-    var fp = ct.mod_p()
-    if not ct.scalar_in_range(private_key, ct.mod_n()):
+    var c = ct.p256_curve()
+    if not ct.scalar_in_range(private_key, c.order):
         raise Error("p256: private key out of range")
-    var q = ct.scalar_mult(private_key, ct.base_point(fp), fp)
-    var affine = ct.to_affine(q, fp)
-    return _encode_point(affine[0], affine[1])
+    return ct.public_key(private_key, c)
 
 
 def p256_ecdh(private_key: List[UInt8], peer_public_key: List[UInt8]) raises -> List[UInt8]:
@@ -583,7 +570,7 @@ def p256_ecdh(private_key: List[UInt8], peer_public_key: List[UInt8]) raises -> 
 
     The peer key is validated (format, coordinates < p, on the curve) with
     the BigInt code, since it is public; the scalar multiplication by the
-    private key is constant time (crypto/p256_ct.mojo).
+    private key is constant time (crypto/ec_ct.mojo).
     """
     if len(private_key) != 32:
         raise Error("p256: private key must be 32 bytes")
@@ -595,17 +582,10 @@ def p256_ecdh(private_key: List[UInt8], peer_public_key: List[UInt8]) raises -> 
         raise Error("p256: peer public key coordinate out of range")
     if not _point_on_curve(qx.copy(), qy.copy(), p):
         raise Error("p256: peer public key not on curve")
-    var fp = ct.mod_p()
-    if not ct.scalar_in_range(private_key, ct.mod_n()):
+    var c = ct.p256_curve()
+    if not ct.scalar_in_range(private_key, c.order):
         raise Error("p256: private key out of range")
-    var peer = ct.Point(
-        ct.to_mont(ct.limbs_from_be(peer_public_key, 1), fp),
-        ct.to_mont(ct.limbs_from_be(peer_public_key, 33), fp),
-        ct.mont_one(fp),
-    )
-    var shared = ct.scalar_mult(private_key, peer, fp)
-    var affine = ct.to_affine(shared, fp)
-    return ct.limbs_to_be(affine[0])
+    return ct.ecdh_x(private_key, peer_public_key, c)
 
 
 def p256_ecdsa_verify(
@@ -674,7 +654,7 @@ def p256_ecdsa_sign(
     Low-s normalization is applied: if s > n/2 then s = n - s.
     This prevents signature malleability.
 
-    Constant time in the private key and the nonce (crypto/p256_ct.mojo):
+    Constant time in the private key and the nonce (crypto/ec_ct.mojo):
     k*G is a fixed 256-step ladder, k^-1 is Fermat inversion, and all mod-n
     arithmetic is Montgomery with masked reductions.
     """
@@ -685,8 +665,8 @@ def p256_ecdsa_sign(
     if len(nonce_bytes) != 32:
         raise Error("p256_ecdsa_sign: nonce_bytes must be 32 bytes")
 
-    var fp = ct.mod_p()
-    var order = ct.mod_n()
+    var curve = ct.p256_curve()
+    var order = curve.order.copy()
     if not ct.scalar_in_range(private_key, order):
         raise Error("p256_ecdsa_sign: private key out of range [1, n-1]")
 
@@ -696,20 +676,20 @@ def p256_ecdsa_sign(
         k_input.append(msg_hash[i])
     for i in range(32):
         k_input.append(nonce_bytes[i])
-    var k = ct.reduce_once(ct.limbs_from_be(hmac_sha256(private_key, k_input), 0), order)
+    var k = ct.reduce_once(ct.limbs_from_be[8](hmac_sha256(private_key, k_input), 0), order)
     if ct.is_zero(k) == 1:
         raise Error("p256_ecdsa_sign: degenerate nonce k=0; retry with different nonce_bytes")
     var k_bytes = ct.limbs_to_be(k)
 
     # R = k * G; r = R.x mod n (R.x < p < 2n)
-    var big_r = ct.to_affine(ct.scalar_mult(k_bytes, ct.base_point(fp), fp), fp)
+    var big_r = ct.to_affine(ct.scalar_mult(k_bytes, curve.g, curve), curve.field)
     var r = ct.reduce_once(big_r[0], order)
     if ct.is_zero(r) == 1:
         raise Error("p256_ecdsa_sign: degenerate r=0; retry with different nonce_bytes")
 
     # s = k^-1 * (e + r*d) mod n, in the Montgomery domain mod n
-    var e = ct.reduce_once(ct.limbs_from_be(msg_hash, 0), order)
-    var d = ct.limbs_from_be(private_key, 0)
+    var e = ct.reduce_once(ct.limbs_from_be[8](msg_hash, 0), order)
+    var d = ct.limbs_from_be[8](private_key, 0)
     var rd = ct.mont_mul(ct.to_mont(r, order), ct.to_mont(d, order), order)
     var sum = ct.add(ct.to_mont(e, order), rd, order)
     var s_m = ct.mont_mul(ct.mont_inv(ct.to_mont(k, order), order), sum, order)
@@ -723,7 +703,7 @@ def p256_ecdsa_sign(
         var next_bit = (order.m[i + 1] & 1) << 31 if i < 7 else UInt64(0)
         half[i] = (order.m[i] >> 1) | next_bit
     var high = ct.lt(half, s)
-    var neg = ct.sub(ct.Limbs(fill=0), s, order)  # n - s
+    var neg = ct.sub(InlineArray[UInt64, 8](fill=0), s, order)  # n - s
     s = ct.select(UInt64(0) - high, neg, s)
 
     return (ct.limbs_to_be(r), ct.limbs_to_be(s))

@@ -101,14 +101,35 @@ def tls12_master_secret(
     pre_master: List[UInt8],
     client_random: List[UInt8],
     server_random: List[UInt8],
+    use_sha384: Bool = False,
 ) -> List[UInt8]:
     """Compute TLS 1.2 master secret (48 bytes).
 
     master_secret = PRF(pre_master, "master secret",
                         client_random || server_random, 48)
+    PRF is the cipher suite's: P_SHA384 for *_SHA384 suites (RFC 5246 §5).
     """
     var randoms = _concat(client_random, server_random)
+    if use_sha384:
+        return prf_sha384(pre_master, "master secret", randoms, 48)
     return prf_sha256(pre_master, "master secret", randoms, 48)
+
+
+def tls12_extended_master_secret(
+    pre_master: List[UInt8],
+    session_hash: List[UInt8],
+    use_sha384: Bool = False,
+) -> List[UInt8]:
+    """Extended master secret (RFC 7627 §4), 48 bytes.
+
+    master_secret = PRF(pre_master, "extended master secret", session_hash, 48)
+    session_hash is the suite hash of the handshake messages up to and
+    including ClientKeyExchange, which binds the master secret to the
+    whole handshake (prevents triple-handshake attacks).
+    """
+    if use_sha384:
+        return prf_sha384(pre_master, "extended master secret", session_hash, 48)
+    return prf_sha256(pre_master, "extended master secret", session_hash, 48)
 
 
 def tls12_key_block(

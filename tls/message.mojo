@@ -17,6 +17,8 @@
 #   parse_finished(body)              → 32-byte verify_data
 # ============================================================================
 
+from crypto.hash import sha256, sha384
+
 # ── TLS handshake message types ───────────────────────────────────────────────
 comptime HS_CLIENT_HELLO       : UInt8 = 0x01
 comptime HS_SERVER_HELLO       : UInt8 = 0x02
@@ -36,6 +38,11 @@ comptime EXT_KEY_SHARE           : UInt16 = 0x0033
 
 # ── Named groups ──────────────────────────────────────────────────────────────
 comptime GROUP_X25519 : UInt16 = 0x001D
+comptime GROUP_SECP256R1 : UInt16 = 0x0017
+comptime GROUP_SECP384R1 : UInt16 = 0x0018
+comptime EXT_EXTENDED_MASTER_SECRET : UInt16 = 0x0017   # RFC 7627
+comptime EXT_COOKIE                 : UInt16 = 0x002C   # RFC 8446 §4.2.2
+comptime EXT_RENEGOTIATION_INFO     : UInt16 = 0xFF01   # RFC 5746
 
 # ── Cipher suites ─────────────────────────────────────────────────────────────
 comptime CIPHER_TLS_AES_128_GCM_SHA256       : UInt16 = 0x1301
@@ -227,17 +234,21 @@ def parse_alpn_from_ee(ee_body: List[UInt8]) -> String:
 
 
 def build_client_hello(
-    client_random:  List[UInt8],
-    session_id:     List[UInt8],
-    key_share_pub:  List[UInt8],
-    sni:            String,
-    alpn_protocols: List[String] = List[String](),
+    client_random:   List[UInt8],
+    session_id:      List[UInt8],
+    key_share_pub:   List[UInt8],
+    sni:             String,
+    alpn_protocols:  List[String] = List[String](),
+    key_share_group: UInt16 = GROUP_X25519,
+    cookie:          List[UInt8] = List[UInt8](),
 ) -> List[UInt8]:
-    """Build a TLS 1.3 ClientHello handshake message.
+    """Build a ClientHello offering TLS 1.3 and TLS 1.2.
 
-    alpn_protocols: optional list of ALPN protocol names (e.g. ["h2", "http/1.1"]).
-    When non-empty, appends an ALPN extension (RFC 7301) after key_share.
-    Returns raw Handshake bytes (type=0x01 + 3-byte length + body).
+    key_share_pub is the public key for key_share_group: 32 bytes for X25519
+    (the first ClientHello), or 65 / 97 bytes for secp256r1 / secp384r1 (the
+    second ClientHello after a HelloRetryRequest, which also echoes the
+    server's cookie). alpn_protocols, when non-empty, adds an ALPN extension
+    (RFC 7301). Returns raw Handshake bytes (type=0x01 + 3-byte length + body).
     """
     var body = List[UInt8](capacity=256)
 
@@ -292,35 +303,52 @@ def build_client_hello(
     _append_u16be(exts, 0x0304)  # TLS 1.3
     _append_u16be(exts, 0x0303)  # TLS 1.2
 
-    # supported_groups: x25519, P-256 (secp256r1)
-    # P-256 is needed for TLS 1.2 ECDHE with ECDSA certs; P-384 omitted
-    # because TLS 1.2 ECDHE for P-384 is not implemented in connection12.mojo
+    # supported_groups: x25519 (preferred), P-256, P-384. In TLS 1.2 this
+    # list also bounds the curves of ECDSA certificates a server may use
+    # (RFC 8422 §5.1), so P-384 is needed for servers with P-384 certs.
     _append_u16be(exts, EXT_SUPPORTED_GROUPS)
-    _append_u16be(exts, 6)    # ext data length = 2 + 2*2
-    _append_u16be(exts, 4)    # group list length in bytes
-    _append_u16be(exts, GROUP_X25519)  # 0x001D — TLS 1.3 preferred
-    _append_u16be(exts, 0x0017)        # secp256r1 (P-256) — TLS 1.2 ECDHE
+    _append_u16be(exts, 8)    # ext data length = 2 + 3*2
+    _append_u16be(exts, 6)    # group list length in bytes
+    _append_u16be(exts, GROUP_X25519)     # 0x001D
+    _append_u16be(exts, GROUP_SECP256R1)  # 0x0017
+    _append_u16be(exts, GROUP_SECP384R1)  # 0x0018
 
     # signature_algorithms: only schemes this library can verify
     _append_u16be(exts, EXT_SIG_ALGS)
     _append_u16be(exts, 14)  # ext data length = 2 + 6*2
     _append_u16be(exts, 12)  # sig alg list length in bytes (6 algs)
     _append_u16be(exts, 0x0403)  # ecdsa_secp256r1_sha256
-    _append_u16be(exts, 0x0502)  # ecdsa_secp384r1_sha384
+    _append_u16be(exts, 0x0503)  # ecdsa_secp384r1_sha384
     _append_u16be(exts, 0x0401)  # rsa_pkcs1_sha256
     _append_u16be(exts, 0x0804)  # rsa_pss_rsae_sha256
     _append_u16be(exts, 0x0501)  # rsa_pkcs1_sha384
     _append_u16be(exts, 0x0805)  # rsa_pss_rsae_sha384
 
-    # key_share: x25519 public key
-    var ks_entry_len = 2 + 2 + 32  # group + key_len + key
+    # key_share: one entry for key_share_group
+    var ks_entry_len = 2 + 2 + len(key_share_pub)  # group + key_len + key
     var ks_list_len  = ks_entry_len
     _append_u16be(exts, EXT_KEY_SHARE)
     _append_u16be(exts, UInt16(2 + ks_list_len))  # ext data = 2-byte list length + entries
     _append_u16be(exts, UInt16(ks_list_len))
-    _append_u16be(exts, GROUP_X25519)
-    _append_u16be(exts, 32)   # key length
+    _append_u16be(exts, key_share_group)
+    _append_u16be(exts, UInt16(len(key_share_pub)))
     _append_bytes(exts, key_share_pub)
+
+    # cookie (RFC 8446 §4.2.2): echoed from a HelloRetryRequest
+    if len(cookie) > 0:
+        _append_u16be(exts, EXT_COOKIE)
+        _append_u16be(exts, UInt16(2 + len(cookie)))
+        _append_u16be(exts, UInt16(len(cookie)))
+        _append_bytes(exts, cookie)
+
+    # extended_master_secret (RFC 7627), empty: used if TLS 1.2 is chosen
+    _append_u16be(exts, EXT_EXTENDED_MASTER_SECRET)
+    _append_u16be(exts, 0)
+
+    # renegotiation_info (RFC 5746) with an empty renegotiated_connection
+    _append_u16be(exts, EXT_RENEGOTIATION_INFO)
+    _append_u16be(exts, 1)
+    _append_u8(exts, 0)
 
     # ALPN (RFC 7301) — optional, emitted only when protocols are specified
     if len(alpn_protocols) > 0:
@@ -427,8 +455,12 @@ def parse_server_hello(body: List[UInt8]) raises -> ServerHello:
 # parse_server_hello_key_share
 # ============================================================================
 
-def parse_server_hello_key_share(ext_bytes: List[UInt8]) raises -> List[UInt8]:
-    """Find key_share extension and return 32-byte x25519 server public key."""
+def parse_server_hello_key_share(
+    ext_bytes: List[UInt8], expected_group: UInt16 = GROUP_X25519
+) raises -> List[UInt8]:
+    """Return the server's key_share public key, which must be for expected_group
+    (the group of the key share the client sent): 32 bytes for X25519, a
+    65- or 97-byte uncompressed point for secp256r1 / secp384r1."""
     var off = 0
     while off + 4 <= len(ext_bytes):
         var ext_type = _read_u16be(ext_bytes, off)
@@ -443,16 +475,110 @@ def parse_server_hello_key_share(ext_bytes: List[UInt8]) raises -> List[UInt8]:
             if ext_off + 4 > off + ext_len:
                 raise Error("parse_server_hello_key_share: key_share too short")
             var group = _read_u16be(ext_bytes, ext_off)
-            if group != GROUP_X25519:
-                raise Error("parse_server_hello_key_share: unsupported group " + String(Int(group)))
+            if group != expected_group:
+                raise Error(
+                    "parse_server_hello_key_share: server chose group " + String(Int(group))
+                    + ", not the one offered (illegal_parameter)"
+                )
             var key_len = Int(_read_u16be(ext_bytes, ext_off + 2))
             ext_off += 4
-            if key_len != 32:
-                raise Error("parse_server_hello_key_share: expected 32-byte key, got " + String(key_len))
-            return _slice(ext_bytes, ext_off, ext_off + 32)
+            var want = 32 if group == GROUP_X25519 else (65 if group == GROUP_SECP256R1 else 97)
+            if key_len != want or ext_off + key_len > off + ext_len:
+                raise Error("parse_server_hello_key_share: bad key length " + String(key_len))
+            return _slice(ext_bytes, ext_off, ext_off + key_len)
         off += ext_len
 
     raise Error("parse_server_hello_key_share: key_share extension not found")
+
+
+# ============================================================================
+# HelloRetryRequest (RFC 8446 §4.1.4)
+# ============================================================================
+
+def is_hello_retry_request(server_random: List[UInt8]) -> Bool:
+    """A HelloRetryRequest is a ServerHello whose random is SHA-256("HelloRetryRequest")."""
+    var hrr: List[UInt8] = [
+        0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91,
+        0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E, 0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C,
+    ]
+    if len(server_random) != 32:
+        return False
+    for i in range(32):
+        if server_random[i] != hrr[i]:
+            return False
+    return True
+
+
+struct HelloRetryRequest(Copyable, Movable):
+    var cipher_suite:   UInt16
+    var selected_group: UInt16
+    var cookie:         List[UInt8]   # empty if the server sent none
+
+    def __init__(out self):
+        self.cipher_suite = 0
+        self.selected_group = 0
+        self.cookie = List[UInt8]()
+
+
+def parse_hello_retry_request(body: List[UInt8]) raises -> HelloRetryRequest:
+    """Parse and validate a HelloRetryRequest from a client that sent an
+    X25519 key share and offers X25519, secp256r1 and secp384r1.
+
+    Requires supported_versions = TLS 1.3, a TLS 1.3 cipher suite, and a
+    key_share selected_group that is secp256r1 or secp384r1 (offered, and not
+    X25519, the group already sent). Errors carry the alert the RFC prescribes.
+    """
+    var sh = parse_server_hello(body)
+    var hrr = HelloRetryRequest()
+    hrr.cipher_suite = sh.cipher_suite
+    if sh.cipher_suite != CIPHER_TLS_AES_128_GCM_SHA256 and sh.cipher_suite != CIPHER_TLS_AES_256_GCM_SHA384 \
+            and sh.cipher_suite != CIPHER_TLS_CHACHA20_POLY1305_SHA256:
+        raise Error("tls: HelloRetryRequest with a cipher suite not offered (illegal_parameter)")
+    var ext = sh.extensions.copy()
+    var version_ok = False
+    var have_group = False
+    var off = 0
+    while off + 4 <= len(ext):
+        var ext_type = _read_u16be(ext, off)
+        var ext_len = Int(_read_u16be(ext, off + 2))
+        off += 4
+        if off + ext_len > len(ext):
+            raise Error("tls: HelloRetryRequest extension truncated (decode_error)")
+        if ext_type == EXT_SUPPORTED_VERSIONS:
+            version_ok = ext_len == 2 and _read_u16be(ext, off) == 0x0304
+        elif ext_type == EXT_KEY_SHARE:
+            if ext_len != 2:
+                raise Error("tls: bad HelloRetryRequest key_share (decode_error)")
+            hrr.selected_group = _read_u16be(ext, off)
+            have_group = True
+        elif ext_type == EXT_COOKIE:
+            if ext_len < 3:
+                raise Error("tls: bad HelloRetryRequest cookie (decode_error)")
+            var clen = Int(_read_u16be(ext, off))
+            if clen == 0 or clen + 2 != ext_len:
+                raise Error("tls: bad HelloRetryRequest cookie (decode_error)")
+            hrr.cookie = _slice(ext, off + 2, off + 2 + clen)
+        else:
+            raise Error("tls: HelloRetryRequest with unexpected extension " + String(Int(ext_type)) + " (unsupported_extension)")
+        off += ext_len
+    if not version_ok:
+        raise Error("tls: HelloRetryRequest without TLS 1.3 supported_versions (illegal_parameter)")
+    if not have_group and len(hrr.cookie) == 0:
+        raise Error("tls: HelloRetryRequest that would not change the ClientHello (illegal_parameter)")
+    if not have_group or (hrr.selected_group != GROUP_SECP256R1 and hrr.selected_group != GROUP_SECP384R1):
+        raise Error("tls: HelloRetryRequest selected a group we cannot use (illegal_parameter)")
+    return hrr^
+
+
+def hrr_message_hash(client_hello1: List[UInt8], use_sha384: Bool) -> List[UInt8]:
+    """The synthetic message that replaces ClientHello1 in the transcript after
+    a HelloRetryRequest: message_hash(254) || uint24 Hash.length || Hash(CH1)."""
+    var digest = sha384(client_hello1) if use_sha384 else sha256(client_hello1)
+    var out = List[UInt8](capacity=4 + len(digest))
+    _append_u8(out, 254)
+    _append_u24be(out, len(digest))
+    _append_bytes(out, digest)
+    return out^
 
 
 # ============================================================================
@@ -706,17 +832,18 @@ def build_client_hello_with_psk(
 
     # supported_groups
     _append_u16be(exts, EXT_SUPPORTED_GROUPS)
+    _append_u16be(exts, 8)
     _append_u16be(exts, 6)
-    _append_u16be(exts, 4)
     _append_u16be(exts, GROUP_X25519)
-    _append_u16be(exts, 0x0017)
+    _append_u16be(exts, GROUP_SECP256R1)
+    _append_u16be(exts, GROUP_SECP384R1)
 
     # signature_algorithms
     _append_u16be(exts, EXT_SIG_ALGS)
     _append_u16be(exts, 14)
     _append_u16be(exts, 12)
     _append_u16be(exts, 0x0403)
-    _append_u16be(exts, 0x0502)
+    _append_u16be(exts, 0x0503)
     _append_u16be(exts, 0x0401)
     _append_u16be(exts, 0x0804)
     _append_u16be(exts, 0x0501)

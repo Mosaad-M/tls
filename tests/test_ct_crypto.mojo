@@ -15,6 +15,11 @@ from ref_aes_table import RefAES
 from ref_gcm_table import ref_gcm_encrypt
 from crypto.p256 import p256_public_key, p256_ecdh, p256_ecdsa_sign, p256_ecdsa_verify
 from ref_p256_bigint import ref_p256_public_key, ref_p256_ecdh, ref_p256_ecdsa_sign
+from crypto.p384 import (
+    p384_public_key, p384_ecdh,
+    _p384_p, _p384_gx, _p384_gy, _p384_scalar_mul_affine, _p384_to_affine,
+)
+from crypto.bigint import bigint_from_bytes, bigint_to_bytes
 
 
 def run_test[test_fn: def() thin raises -> None](
@@ -224,6 +229,92 @@ def test_p256_rejects_bad_scalars() raises:
             raise Error("out-of-range private key accepted")
 
 
+# ── P-384 ───────────────────────────────────────────────────────────────────
+
+def _ref_p384_public_key(k: List[UInt8]) raises -> List[UInt8]:
+    """k*G with the BigInt ladder that P-384 verification uses."""
+    var p = _p384_p()
+    var aff = _p384_to_affine(_p384_scalar_mul_affine(bigint_from_bytes(k), _p384_gx(), _p384_gy(), p), p)
+    var out = List[UInt8]()
+    out.append(0x04)
+    var xb = bigint_to_bytes(aff[0], 48)
+    var yb = bigint_to_bytes(aff[1], 48)
+    for i in range(48):
+        out.append(xb[i])
+    for i in range(48):
+        out.append(yb[i])
+    return out^
+
+
+def _scalar48(tail: List[UInt8]) -> List[UInt8]:
+    var out = List[UInt8](capacity=48)
+    for _ in range(48 - len(tail)):
+        out.append(0)
+    for i in range(len(tail)):
+        out.append(tail[i])
+    return out^
+
+
+def test_p384_public_key_matches_reference() raises:
+    var scalars = List[List[UInt8]]()
+    scalars.append(_scalar48([1]))
+    scalars.append(_scalar48([2]))
+    scalars.append(_scalar48([0x01, 0x00, 0x01]))
+    # n - 1
+    scalars.append(_from_hex("ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52972"))
+    for _ in range(6):
+        var k = csprng_bytes(48)
+        k[0] &= 0x7F
+        scalars.append(k^)
+    for i in range(len(scalars)):
+        _same(p384_public_key(scalars[i]), _ref_p384_public_key(scalars[i]), "P-384 k*G #" + String(i))
+
+
+def test_p384_nist_cdh_vector() raises:
+    # NIST CAVP ECC CDH primitive test vectors, P-384, COUNT = 0
+    var d = _from_hex("3cc3122a68f0d95027ad38c067916ba0eb8c38894d22e1b15618b6818a661774ad463b205da88cf699ab4d43c9cf98a1")
+    var peer = List[UInt8]()
+    peer.append(0x04)
+    var qx = _from_hex("a7c76b970c3b5fe8b05d2838ae04ab47697b9eaf52e764592efda27fe7513272734466b400091adbf2d68c58e0c50066")
+    var qy = _from_hex("ac68f19f2e1cb879aed43a9969b91a0839c4c38a49749b661efedf243451915ed0905a32b060992b468c64766fc8437a")
+    for i in range(48):
+        peer.append(qx[i])
+    for i in range(48):
+        peer.append(qy[i])
+    _same(p384_ecdh(d, peer),
+          _from_hex("5f9d29dc5e31a163060356213669c8ce132e22f57c9a04f40ba7fcead493b457e5621e766c40a2e3d4d6a04b25e533f1"),
+          "CAVP P-384 Z")
+    var want = List[UInt8]()
+    want.append(0x04)
+    var ux = _from_hex("9803807f2f6d2fd966cdd0290bd410c0190352fbec7ff6247de1302df86f25d34fe4a97bef60cff548355c015dbb3e5f")
+    var uy = _from_hex("ba26ca69ec2f5b5d9dad20cc9da711383a9dbe34ea3fa5a2af75b46502629ad54dd8b7d73a8abb06a3a3be47d650cc99")
+    for i in range(48):
+        want.append(ux[i])
+    for i in range(48):
+        want.append(uy[i])
+    _same(p384_public_key(d), want, "CAVP P-384 Q_IUT")
+
+
+def test_p384_ecdh_agrees() raises:
+    var a = csprng_bytes(48)
+    a[0] &= 0x7F
+    var b = csprng_bytes(48)
+    b[0] &= 0x7F
+    _same(p384_ecdh(a, p384_public_key(b)), p384_ecdh(b, p384_public_key(a)), "P-384 ECDH agreement")
+
+
+def test_p384_rejects_off_curve_peer() raises:
+    var pub = p384_public_key(_scalar48([7]))
+    pub[96] ^= 1
+    var raised = False
+    try:
+        _ = p384_ecdh(_scalar48([3]), pub)
+    except:
+        raised = True
+    if not raised:
+        raise Error("off-curve P-384 peer key accepted")
+
+
 def main() raises:
     var passed = 0
     var failed = 0
@@ -239,6 +330,10 @@ def main() raises:
     run_test[test_p256_nist_cdh_vector]("P-256 NIST CAVP ECC CDH vector", passed, failed)
     run_test[test_p256_sign_matches_reference]("P-256 ECDSA signatures identical to BigInt signer", passed, failed)
     run_test[test_p256_rejects_bad_scalars]("P-256 rejects private keys 0 and n", passed, failed)
+    run_test[test_p384_public_key_matches_reference]("P-384 k*G vs BigInt ladder (edge + random)", passed, failed)
+    run_test[test_p384_nist_cdh_vector]("P-384 NIST CAVP ECC CDH vector", passed, failed)
+    run_test[test_p384_ecdh_agrees]("P-384 ECDH both directions agree", passed, failed)
+    run_test[test_p384_rejects_off_curve_peer]("P-384 ECDH rejects an off-curve peer key", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:

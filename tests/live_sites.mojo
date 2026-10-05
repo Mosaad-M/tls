@@ -24,6 +24,8 @@ def main() raises:
         "www.mozilla.org", "www.bing.com", "conda.modular.com",
         "www.youtube.com", "www.reddit.com", "www.digicert.com", "www.netflix.com",
         "badssl.com",  # TLS 1.2 only, RSA certificate
+        "ecc384.badssl.com",  # TLS 1.2, P-384 ECDSA certificate
+        "ecc256.badssl.com", "rsa4096.badssl.com",  # (sha384.badssl.com: cert expired 2022)
     ]:
         hosts.append(h)
     var failures = 0

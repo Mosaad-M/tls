@@ -20,7 +20,8 @@
 from std.ffi import external_call
 from crypto.hash import SHA256, SHA384, sha256, sha384
 from crypto.prf import (
-    tls12_master_secret, tls12_key_block, tls12_key_block_sha384,
+    tls12_master_secret, tls12_extended_master_secret,
+    tls12_key_block, tls12_key_block_sha384,
     tls12_verify_data, tls12_verify_data_sha384,
 )
 from crypto.record import (
@@ -30,9 +31,8 @@ from crypto.record import (
 )
 from crypto.cert import X509Cert, cert_parse, cert_chain_verify
 from crypto.asn1 import asn1_parse_ecdsa_sig, asn1_parse_ecdsa_sig_48
-from crypto.curve25519 import x25519_public_key, x25519_shared
 from crypto.random import csprng_bytes
-from crypto.p256 import p256_ecdsa_verify, p256_public_key, p256_ecdh, p256_ecdsa_sign
+from crypto.p256 import p256_ecdsa_verify, p256_ecdsa_sign
 from crypto.p384 import p384_ecdsa_verify
 from crypto.rsa import rsa_pkcs1_verify, rsa_pss_verify
 from tls.message import (
@@ -62,7 +62,7 @@ from tls.message12 import (
 from tls.connection import (
     tls_tcp_read, tls_tcp_write,
     tls_handle_incoming_alert,
-    tls_send_plaintext_alert,
+    tls_send_plaintext_alert, tls_ec_keypair, tls_ec_shared,
     ALERT_LEVEL_FATAL, ALERT_CLOSE_NOTIFY,
 )
 
@@ -87,6 +87,7 @@ struct TlsKeys12(Copyable, Movable):
     var client_seqno:     UInt64
     var server_seqno:     UInt64
     var use_sha384:       Bool          # True for *_SHA384 cipher suites
+    var ems:              Bool          # extended master secret (RFC 7627) in use
 
     def __init__(out self):
         self.cipher           = 0
@@ -98,6 +99,7 @@ struct TlsKeys12(Copyable, Movable):
         self.client_seqno     = 0
         self.server_seqno     = 0
         self.use_sha384       = False
+        self.ems              = False
 
     def __copyinit__(out self, copy: Self):
         self.cipher           = copy.cipher
@@ -109,6 +111,7 @@ struct TlsKeys12(Copyable, Movable):
         self.client_seqno     = copy.client_seqno
         self.server_seqno     = copy.server_seqno
         self.use_sha384       = copy.use_sha384
+        self.ems              = copy.ems
 
     def __moveinit__(out self, deinit take: Self):
         self.cipher           = take.cipher
@@ -120,6 +123,7 @@ struct TlsKeys12(Copyable, Movable):
         self.client_seqno     = take.client_seqno
         self.server_seqno     = take.server_seqno
         self.use_sha384       = take.use_sha384
+        self.ems              = take.ems
 
 
 # ============================================================================
@@ -224,14 +228,24 @@ def _verify_ske_signature(
             raise Error("tls12: sig is RSA but cert has no RSA key")
         rsa_pkcs1_verify(cert.rsa_n, cert.rsa_e, msg_hash, sig_bytes)
     elif sig_sig == 3:  # ECDSA
+        # TLS 1.2 schemes name only the hash: the curve is the certificate's.
+        # ECDSA uses the leftmost bits of the hash, as many as the order has.
         if cert.pub_key_alg != "ec":
             raise Error("tls12: sig is ECDSA but cert has no EC key")
-        if sig_hash == 4:  # SHA-256 → P-256
-            var sig_res = asn1_parse_ecdsa_sig(sig_bytes)
-            p256_ecdsa_verify(cert.ec_point, msg_hash, sig_res[0].copy(), sig_res[1].copy())
-        else:  # SHA-384 → P-384
+        if cert.ec_curve == "p384":
+            var e = List[UInt8](capacity=48)
+            for _ in range(48 - min(48, len(msg_hash))):
+                e.append(0)  # shorter hash: same integer, left-padded
+            for i in range(min(48, len(msg_hash))):
+                e.append(msg_hash[i])
             var sig_res = asn1_parse_ecdsa_sig_48(sig_bytes)
-            p384_ecdsa_verify(cert.ec_point, msg_hash, sig_res[0].copy(), sig_res[1].copy())
+            p384_ecdsa_verify(cert.ec_point, e, sig_res[0].copy(), sig_res[1].copy())
+        else:
+            var e = List[UInt8](capacity=32)
+            for i in range(32):
+                e.append(msg_hash[i])  # SHA-256 as is; SHA-384 truncated
+            var sig_res = asn1_parse_ecdsa_sig(sig_bytes)
+            p256_ecdsa_verify(cert.ec_point, e, sig_res[0].copy(), sig_res[1].copy())
     else:
         raise Error("tls12: unsupported sig_sig " + String(Int(sig_sig)))
 
@@ -318,6 +332,7 @@ def _tls12_handshake_impl(
     use_sha384:     Bool,
     client_cert:    List[UInt8],   # DER leaf cert (empty = no mTLS)
     client_key:     List[UInt8],   # 32-byte P-256 private scalar (empty = no mTLS)
+    ems:            Bool,          # server echoed extended_master_secret
 ) raises -> TlsKeys12:
     # Determine cipher parameters
     var key_len = 16
@@ -379,7 +394,8 @@ def _tls12_handshake_impl(
     var sig_sig       = ske_result[3]
     var sig_bytes     = ske_result[4].copy()
 
-    if named_curve != NAMED_CURVE_X25519 and named_curve != NAMED_CURVE_SECP256R1:
+    if named_curve != NAMED_CURVE_X25519 and named_curve != NAMED_CURVE_SECP256R1 \
+            and named_curve != NAMED_CURVE_SECP384R1:
         raise Error("tls12: unsupported ECDHE curve " + String(Int(named_curve)))
 
     # Signed data = client_random || server_random || SKE params
@@ -395,23 +411,49 @@ def _tls12_handshake_impl(
     _verify_ske_signature(cert_chain[0], sig_hash, sig_sig, sig_bytes, signed_data)
 
     # ── Step 5: Generate ephemeral ECDHE key pair (curve-specific) ───────────
-    var ecdhe_private = csprng_bytes(32)
-    var ecdhe_public: List[UInt8]
-    var pre_master: List[UInt8]
-    if named_curve == NAMED_CURVE_X25519:
-        ecdhe_public = x25519_public_key(ecdhe_private)
-        # ── Step 6: Compute pre_master secret (x25519) ──────────────────────
-        pre_master = x25519_shared(ecdhe_private, server_pubkey)
+    var kp = tls_ec_keypair(named_curve)
+    var ecdhe_private = kp[0].copy()
+    var ecdhe_public = kp[1].copy()
+
+    # ── Step 6: Compute pre_master secret ───────────────────────────────────
+    var pre_master = tls_ec_shared(named_curve, ecdhe_private, server_pubkey)
+
+    # ── Step 7: Send client Certificate (if server requested it) ─────────────
+    # RFC 5246 §7.3: Certificate comes BEFORE ClientKeyExchange
+    if has_cert_req:
+        var cli_cert_chain = List[List[UInt8]]()
+        if len(client_cert) > 0:
+            cli_cert_chain.append(client_cert.copy())
+        var cli_cert_msg = build_client_certificate12(cli_cert_chain)
+        # cli_cert_msg already has 4-byte HS header; update transcript directly
+        th.update(cli_cert_msg)
+        th384.update(cli_cert_msg)
+        var cli_cert_record = _make_tls12_record(CTYPE_HANDSHAKE, cli_cert_msg)
+        tls_tcp_write(fd, cli_cert_record)
+
+    # ── Step 8: Send ClientKeyExchange ────────────────────────────────────────
+    var cke_body = build_client_key_exchange(ecdhe_public)
+    var cke_hs   = _wrap_hs_msg12(HS12_CLIENT_KEY_EXCHANGE, cke_body)
+    th.update(cke_hs)
+    th384.update(cke_hs)
+    var cke_record = _make_tls12_record(CTYPE_HANDSHAKE, cke_hs)
+    tls_tcp_write(fd, cke_record)
+
+    # ── Step 9: Derive master secret ─────────────────────────────────────────
+    # Done after ClientKeyExchange: the extended master secret (RFC 7627)
+    # covers the transcript through it. The PRF hash is the suite's.
+    var master: List[UInt8]
+    if ems:
+        var session_hash: List[UInt8]
+        if use_sha384:
+            session_hash = _transcript_hash12_384(th384)
+        else:
+            session_hash = _transcript_hash12(th)
+        master = tls12_extended_master_secret(pre_master, session_hash, use_sha384)
     else:
-        # named_curve == NAMED_CURVE_SECP256R1
-        ecdhe_public = p256_public_key(ecdhe_private)
-        # ── Step 6: Compute pre_master secret (P-256 ECDH) ──────────────────
-        pre_master = p256_ecdh(ecdhe_private, server_pubkey)
+        master = tls12_master_secret(pre_master, client_random, server_random, use_sha384)
 
-    # ── Step 7: Derive master secret ─────────────────────────────────────────
-    var master = tls12_master_secret(pre_master, client_random, server_random)
-
-    # ── Step 8: Derive key block ──────────────────────────────────────────────
+    # ── Step 10: Derive key block ─────────────────────────────────────────────
     # key_block length = 2 * (key_len + 4)
     var kb_len = 2 * (key_len + 4)
     var key_block: List[UInt8]
@@ -434,28 +476,8 @@ def _tls12_handshake_impl(
     for i in range(4):
         server_iv.append(key_block[2 * key_len + 4 + i])
 
-    # ── Step 9a: Send client Certificate (if server requested it) ────────────
-    # RFC 5246 §7.3: Certificate comes BEFORE ClientKeyExchange
-    if has_cert_req:
-        var cli_cert_chain = List[List[UInt8]]()
-        if len(client_cert) > 0:
-            cli_cert_chain.append(client_cert.copy())
-        var cli_cert_msg = build_client_certificate12(cli_cert_chain)
-        # cli_cert_msg already has 4-byte HS header; update transcript directly
-        th.update(cli_cert_msg)
-        th384.update(cli_cert_msg)
-        var cli_cert_record = _make_tls12_record(CTYPE_HANDSHAKE, cli_cert_msg)
-        tls_tcp_write(fd, cli_cert_record)
 
-    # ── Step 9: Send ClientKeyExchange ────────────────────────────────────────
-    var cke_body = build_client_key_exchange(ecdhe_public)
-    var cke_hs   = _wrap_hs_msg12(HS12_CLIENT_KEY_EXCHANGE, cke_body)
-    th.update(cke_hs)
-    th384.update(cke_hs)
-    var cke_record = _make_tls12_record(CTYPE_HANDSHAKE, cke_hs)
-    tls_tcp_write(fd, cke_record)
-
-    # ── Step 9b: Send CertificateVerify (if we sent a certificate) ────────────
+    # ── Step 11: Send CertificateVerify (if we sent a certificate) ────────────
     # RFC 5246 §7.4.8: signs transcript hash through ClientKeyExchange
     if has_cert_req and len(client_cert) > 0 and len(client_key) > 0:
         var cv_hash: List[UInt8]
@@ -475,12 +497,12 @@ def _tls12_handshake_impl(
         var cv_record = _make_tls12_record(CTYPE_HANDSHAKE, cv_msg)
         tls_tcp_write(fd, cv_record)
 
-    # ── Step 10: Send ChangeCipherSpec ────────────────────────────────────────
+    # ── Step 12: Send ChangeCipherSpec ────────────────────────────────────────
     var ccs_body   = build_change_cipher_spec_body()
     var ccs_record = _make_tls12_record(CTYPE_CHANGE_CIPHER_SPEC, ccs_body)
     tls_tcp_write(fd, ccs_record)
 
-    # ── Step 11: Send client Finished (encrypted) ─────────────────────────────
+    # ── Step 13: Send client Finished (encrypted) ─────────────────────────────
     var c_hash: List[UInt8]
     if use_sha384:
         c_hash = _transcript_hash12_384(th384)
@@ -507,7 +529,7 @@ def _tls12_handshake_impl(
     _append_bytes12(fin_total, fin_payload)
     tls_tcp_write(fd, fin_total)
 
-    # ── Step 12: Read server ChangeCipherSpec + Finished ──────────────────────
+    # ── Step 14: Read server ChangeCipherSpec + Finished ──────────────────────
     # Read records until we find the encrypted Finished
     var srv_fin_plain = List[UInt8]()
     var found_fin = False
@@ -556,7 +578,7 @@ def _tls12_handshake_impl(
         if srv_vd[i] != expected_srv_vd[i]:
             raise Error("tls12: server Finished verify_data mismatch at byte " + String(i))
 
-    # ── Step 13: Build and return TlsKeys12 ───────────────────────────────────
+    # ── Step 15: Build and return TlsKeys12 ───────────────────────────────────
     var keys = TlsKeys12()
     keys.cipher           = Int(cipher)
     keys.client_write_key = ck^
@@ -567,6 +589,7 @@ def _tls12_handshake_impl(
     keys.client_seqno     = 1  # seqno 0 was used for client Finished
     keys.server_seqno     = 1  # seqno 0 was used for server Finished
     keys.use_sha384       = use_sha384
+    keys.ems              = ems
     return keys^
 
 
@@ -580,6 +603,7 @@ def tls12_client_handshake(
     transcript_sha256: SHA256,      # hash of ClientHello + ServerHello so far
     transcript_sha384: SHA384,
     use_sha384:     Bool,
+    ems:            Bool = False,   # ServerHello carried extended_master_secret
 ) raises -> TlsKeys12:
     """Perform TLS 1.2 client handshake after ClientHello+ServerHello exchange.
 
@@ -590,7 +614,7 @@ def tls12_client_handshake(
             fd, hostname, trust_anchors,
             client_random, server_random, cipher_suite,
             transcript_sha256, transcript_sha384, use_sha384,
-            List[UInt8](), List[UInt8](),
+            List[UInt8](), List[UInt8](), ems,
         )
     except e:
         tls_send_plaintext_alert(fd, 40)  # handshake_failure
@@ -609,6 +633,7 @@ def tls12_client_handshake_mtls(
     use_sha384:     Bool,
     client_cert:    List[UInt8],   # DER-encoded leaf certificate
     client_key:     List[UInt8],   # 32-byte P-256 private scalar
+    ems:            Bool = False,  # ServerHello carried extended_master_secret
 ) raises -> TlsKeys12:
     """TLS 1.2 mTLS handshake: responds to CertificateRequest with P-256 ECDSA auth.
 
@@ -622,7 +647,7 @@ def tls12_client_handshake_mtls(
             fd, hostname, trust_anchors,
             client_random, server_random, cipher_suite,
             transcript_sha256, transcript_sha384, use_sha384,
-            client_cert, client_key,
+            client_cert, client_key, ems,
         )
     except e:
         tls_send_plaintext_alert(fd, 40)  # handshake_failure

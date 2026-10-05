@@ -30,7 +30,8 @@ from crypto.cert import X509Cert, cert_parse, cert_chain_verify
 from crypto.asn1 import asn1_parse_ecdsa_sig, asn1_parse_ecdsa_sig_48
 from crypto.curve25519 import x25519_public_key, x25519_shared
 from crypto.random import csprng_bytes
-from crypto.p256 import p256_ecdsa_verify
+from crypto.p256 import p256_ecdsa_verify, p256_ecdh, p256_public_key
+from crypto.p384 import p384_ecdh, p384_public_key
 from crypto.p384 import p384_ecdsa_verify
 from crypto.rsa import rsa_pss_verify
 from tls.message import (
@@ -41,6 +42,7 @@ from tls.message import (
     HandshakeMsg,
     HS_SERVER_HELLO, HS_ENCRYPTED_EXTS, HS_CERTIFICATE,
     HS_CERT_VERIFY, HS_FINISHED, HS_NEW_SESSION_TICKET,
+    GROUP_X25519, GROUP_SECP256R1, GROUP_SECP384R1,
 )
 
 
@@ -342,14 +344,15 @@ def _verify_cert_verify_sig(
     CertificateVerify, so it falls through to "unsupported sig_scheme".
     """
     if sig_scheme == 0x0403:  # ecdsa_secp256r1_sha256
-        if cert.pub_key_alg != "ec":
-            raise Error("tls: sig_scheme ECDSA but cert has no EC key")
+        # In TLS 1.3 the scheme names the curve as well as the hash
+        if cert.pub_key_alg != "ec" or cert.ec_curve != "p256":
+            raise Error("tls: sig_scheme ECDSA P-256 but cert has no P-256 key")
         var msg_hash = sha256(cv_input)
         var sig_res = asn1_parse_ecdsa_sig(sig_bytes)
         p256_ecdsa_verify(cert.ec_point, msg_hash, sig_res[0].copy(), sig_res[1].copy())
-    elif sig_scheme == 0x0502:  # ecdsa_secp384r1_sha384
-        if cert.pub_key_alg != "ec":
-            raise Error("tls: sig_scheme ECDSA P-384 but cert has no EC key")
+    elif sig_scheme == 0x0503:  # ecdsa_secp384r1_sha384
+        if cert.pub_key_alg != "ec" or cert.ec_curve != "p384":
+            raise Error("tls: sig_scheme ECDSA P-384 but cert has no P-384 key")
         var msg_hash = sha384(cv_input)
         var sig_res = asn1_parse_ecdsa_sig_48(sig_bytes)
         p384_ecdsa_verify(cert.ec_point, msg_hash, sig_res[0].copy(), sig_res[1].copy())
@@ -442,6 +445,40 @@ def _find_msg(messages: List[HandshakeMsg], msg_type: UInt8) raises -> List[UInt
 # tls13_after_server_hello — complete TLS 1.3 handshake after SH exchange
 # ============================================================================
 
+def tls_ec_keypair(group: UInt16) raises -> Tuple[List[UInt8], List[UInt8]]:
+    """Ephemeral (private, public) key pair for an ECDHE group: X25519,
+    secp256r1 or secp384r1. NIST-curve scalars are drawn until they fall in
+    [1, n-1] (a miss has probability about 2^-32)."""
+    if group == GROUP_X25519:
+        var k = csprng_bytes(32)
+        var pub = x25519_public_key(k)
+        return (k^, pub^)
+    var size = 32 if group == GROUP_SECP256R1 else 48
+    if group != GROUP_SECP256R1 and group != GROUP_SECP384R1:
+        raise Error("tls: unsupported key exchange group " + String(Int(group)))
+    for _ in range(8):
+        var k = csprng_bytes(size)
+        try:
+            var pub = p256_public_key(k) if group == GROUP_SECP256R1 else p384_public_key(k)
+            return (k^, pub^)
+        except:
+            pass
+    raise Error("tls: could not generate a key for group " + String(Int(group)))
+
+
+def tls_ec_shared(group: UInt16, private_key: List[UInt8], peer_public: List[UInt8]) raises -> List[UInt8]:
+    """ECDHE shared secret: X25519 output, or the x-coordinate for NIST curves
+    (RFC 8446 §7.4.2, RFC 8422 §5.10). Peer keys are validated; the private
+    key is handled in constant time."""
+    if group == GROUP_X25519:
+        return x25519_shared(private_key, peer_public)
+    if group == GROUP_SECP256R1:
+        return p256_ecdh(private_key, peer_public)
+    if group == GROUP_SECP384R1:
+        return p384_ecdh(private_key, peer_public)
+    raise Error("tls: unsupported key exchange group " + String(Int(group)))
+
+
 def tls13_after_server_hello(
     fd:                Int32,
     hostname:          String,
@@ -450,13 +487,15 @@ def tls13_after_server_hello(
     server_hello_body: List[UInt8],
     th:                SHA256,         # transcript hasher (updated with CH+SH)
     th384:             SHA384,
+    key_share_group:   UInt16 = GROUP_X25519,  # group of ecdhe_private
 ) raises -> TlsKeys:
     """Complete TLS 1.3 handshake after ClientHello+ServerHello exchange.
 
     Derives HS keys, reads/verifies server messages, sends client Finished,
     derives application traffic keys.
     Args:
-        ecdhe_private: Client ephemeral private key (32 bytes)
+        ecdhe_private: Client ephemeral private key for key_share_group
+                       (X25519, or secp256r1 / secp384r1 after a HelloRetryRequest)
         server_hello_body: ServerHello body (to extract cipher + key_share)
         th, th384: Transcript hashers already updated with CH + SH
     """
@@ -470,8 +509,8 @@ def tls13_after_server_hello(
     var th384_local = th384.copy()
 
     # ── Handshake key derivation ──────────────────────────────────────────────
-    var server_pub_key = parse_server_hello_key_share(server_hello.extensions)
-    var dhe_shared = x25519_shared(ecdhe_private, server_pub_key)
+    var server_pub_key = parse_server_hello_key_share(server_hello.extensions, key_share_group)
+    var dhe_shared = tls_ec_shared(key_share_group, ecdhe_private, server_pub_key)
 
     var hs_secret: List[UInt8]
     var s_hs_ts: List[UInt8]
