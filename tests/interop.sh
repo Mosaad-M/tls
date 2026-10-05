@@ -112,7 +112,9 @@ scenario "TLS 1.2 mTLS over ECDHE-ECDSA-AES256-GCM-SHA384" \
 # hostile <name> <mode> <expect> [upstream s_server args...]
 # expect: "ok:<page check>" (handshake must succeed) or "fail:<error text>"
 # (the client must exit with a clean error: status 1, not an abort).
-# flood/bigmsg must also make the client hang up after < 2 MB.
+# flood/bigmsg must also make the client hang up after < 16 MB (the count
+# includes kernel socket buffers, ~0.6 MB on macOS and ~2.7 MB on Linux;
+# an unbounded client would take all 64 MB the server sends).
 hostile() {
     local name="$1" mode="$2" expect="$3"
     shift 3
@@ -142,7 +144,7 @@ hostile() {
     esac
     if grep -q "^sent " "$WORK/hostile.log"; then
         local sent; sent=$(sed -n 's/^sent \([0-9]*\) bytes/\1/p' "$WORK/hostile.log")
-        [ "$sent" -lt 2000000 ] || { ok=0; detail="client accepted $sent bytes before giving up"; }
+        [ "$sent" -lt 16000000 ] || { ok=0; detail="client accepted $sent bytes before giving up"; }
         detail="$detail (server sent $sent bytes)"
     fi
     if [ $ok -eq 1 ]; then

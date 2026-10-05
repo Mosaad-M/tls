@@ -9,7 +9,9 @@ Usage: hostile_server.py MODE PORT [ARG]
 
   flood     ServerHello, then endless handshake messages (no limit in 1.5.0:
             ~6 GB of client memory in 3 s). Prints "sent N bytes" when the
-            client hangs up; the test requires N to stay small.
+            client hangs up; the test requires N to stay far below the
+            64 MB cap (N includes what the kernel's socket buffers absorb,
+            a few MB on Linux).
   bigmsg    ServerHello, then a Certificate claiming 16 MB, streamed slowly.
   badsh     ServerHello with an unoffered cipher, compression 1 and an
             unsolicited extension.
@@ -60,7 +62,9 @@ def server_hello(cipher=0xC02F, comp=0, exts=b""):
     return hs(2, body)
 
 
-def send_until_closed(c, chunk, limit=1 << 30):
+def send_until_closed(c, chunk, limit=64 << 20):
+    """Send chunk repeatedly until the client hangs up (or 64 MB, so a
+    regressed client fails the test without exhausting the machine)."""
     sent = 0
     try:
         while sent < limit:
