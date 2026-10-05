@@ -41,8 +41,8 @@ from crypto.record import (
 from tls.connection import (
     tls13_after_server_hello, tls_cipher_from_suite, TlsKeys,
     tls_tcp_read, tls_tcp_write, tls_read_some, tls_prepare_fd, tls_set_timeout,
-    tls_handle_incoming_alert, tls_send_plaintext_alert, tls_ec_keypair,
-    ALERT_LEVEL_WARNING, ALERT_CLOSE_NOTIFY,
+    tls_handle_incoming_alert, tls_send_plaintext_alert, tls_ec_keypair, HandshakeReader,
+    ALERT_LEVEL_WARNING, ALERT_LEVEL_FATAL, ALERT_CLOSE_NOTIFY,
 )
 from tls.connection12 import (
     tls12_client_handshake, tls12_client_handshake_mtls, TlsKeys12,
@@ -63,6 +63,7 @@ from tls.message12 import (
 
 comptime _ALERT_UNEXPECTED_MESSAGE : UInt8 = 10
 comptime _HS_KEY_UPDATE : UInt8 = 24
+comptime _MAX_TICKETS = 8
 comptime _RX_CHUNK = 18432  # > one maximal record (5 + 16640)
 comptime _ALERT_ILLEGAL_PARAMETER  : UInt8 = 47
 
@@ -178,6 +179,9 @@ struct TlsSocket(Movable):
     var _close_notify: Bool  # True once an authenticated close_notify arrived
     var _rx:     List[UInt8] # raw bytes received but not yet a whole record
     var _broken: Bool        # a record write failed part-way; no more sends
+    var _failed: String      # first fatal receive error; later calls re-raise it
+    var _hs_rx:  List[UInt8] # post-handshake handshake bytes awaiting reassembly
+    var _key_update_after: UInt64  # client records per key before a KeyUpdate
 
     def __init__(out self, tcp_fd: Int32 = 0):
         self._fd     = tcp_fd
@@ -188,6 +192,10 @@ struct TlsSocket(Movable):
         self._close_notify = False
         self._rx     = List[UInt8]()
         self._broken = False
+        self._failed = String("")
+        self._hs_rx  = List[UInt8]()
+        # RFC 8446 §5.5: AES-GCM keys must change before ~2^24.5 records
+        self._key_update_after = UInt64(1) << 24
         if tcp_fd > 0:
             tls_prepare_fd(tcp_fd)
 
@@ -200,6 +208,9 @@ struct TlsSocket(Movable):
         self._close_notify = take._close_notify
         self._rx     = take._rx^
         self._broken = take._broken
+        self._failed = take._failed^
+        self._hs_rx  = take._hs_rx^
+        self._key_update_after = take._key_update_after
 
     def connect(
         mut self,
@@ -230,7 +241,8 @@ struct TlsSocket(Movable):
         th.update(ch_msg)
         th384.update(ch_msg)
 
-        var sh_msg = self._read_server_hello()
+        var reader = HandshakeReader(self._fd, True)
+        var sh_msg = reader.expect(HS_SERVER_HELLO, "ServerHello")
         var key_share_group = GROUP_X25519
         var hrr_cipher: UInt16 = 0
 
@@ -254,19 +266,25 @@ struct TlsSocket(Movable):
             th.update(hrr_full)
             th384.update(hrr_full)
 
-            # ClientHello2: same random, a key share for the group the server
-            # selected, and the server's cookie
-            var kp = tls_ec_keypair(key_share_group)
-            ecdhe_private = kp[0].copy()
+            # The server cannot send its ServerHello before ClientHello2
+            reader.require_boundary("HelloRetryRequest")
+            # ClientHello2: same random, the server's cookie, and a key share
+            # for the group the server selected; a cookie-only HRR keeps the
+            # X25519 share unchanged (RFC 8446 §4.1.2)
+            var ch2_share = key_share_pub.copy()
+            if key_share_group != GROUP_X25519:
+                var kp = tls_ec_keypair(key_share_group)
+                ecdhe_private = kp[0].copy()
+                ch2_share = kp[1].copy()
             var ch2 = build_client_hello(
-                client_random, List[UInt8](), kp[1], hostname,
+                client_random, List[UInt8](), ch2_share, hostname,
                 alpn_protocols, key_share_group, cookie,
             )
             self._send_handshake_plain(ch2, 0x03)
             th.update(ch2)
             th384.update(ch2)
 
-            sh_msg = self._read_server_hello()
+            sh_msg = reader.expect(HS_SERVER_HELLO, "ServerHello")
             if is_hello_retry_request(parse_server_hello(sh_msg.body).random):
                 tls_send_plaintext_alert(self._fd, _ALERT_UNEXPECTED_MESSAGE)
                 raise Error("tls: second HelloRetryRequest (unexpected_message)")
@@ -291,9 +309,12 @@ struct TlsSocket(Movable):
         if use_tls13:
             # ── TLS 1.3 path ──────────────────────────────────────────────────
             try:
+                # keys change after ServerHello: nothing may follow it
+                reader.require_boundary("ServerHello")
                 self._keys = tls13_after_server_hello(
                     self._fd, hostname, trust_anchors,
                     ecdhe_private, sh_msg.body, th, th384, key_share_group,
+                    alpn_protocols,
                 )
                 self._is12 = False
             except e:
@@ -308,7 +329,7 @@ struct TlsSocket(Movable):
                 self._keys12 = tls12_client_handshake(
                     self._fd, hostname, trust_anchors,
                     client_random, server_random, cipher_suite,
-                    th, th384, use_sha384, ems,
+                    th, th384, use_sha384, ems, reader.buf.copy(),
                 )
                 self._is12 = True
             except e:
@@ -352,30 +373,11 @@ struct TlsSocket(Movable):
         th.update(ch_msg)
         th384.update(ch_msg)
 
-        # Read ServerHello
-        var sh_rec_type: UInt8
-        var sh_rec_body: List[UInt8]
-        while True:
-            var header = tls_tcp_read(self._fd, 5)
-            var rtype = header[0]
-            var rlen = (Int(header[3]) << 8) | Int(header[4])
-            var rbody = tls_tcp_read(self._fd, rlen)
-            if rtype == CTYPE_CHANGE_CIPHER_SPEC:
-                continue
-            if rtype == CTYPE_ALERT:
-                tls_handle_incoming_alert(rbody)
-                raise Error("mTLS: alert before ServerHello")
-            sh_rec_type = rtype
-            sh_rec_body = rbody^
-            break
-
-        if sh_rec_type != CTYPE_HANDSHAKE:
-            raise Error("mTLS: expected Handshake record for ServerHello")
-
-        var sh_parse  = parse_handshake_msg(sh_rec_body, 0)
-        var sh_msg    = sh_parse[0].copy()
-        if sh_msg.msg_type != HS_SERVER_HELLO:
-            raise Error("mTLS: expected ServerHello")
+        # Read ServerHello (records may also carry the next messages)
+        var reader = HandshakeReader(self._fd, False)
+        var sh_msg = reader.expect(HS_SERVER_HELLO, "ServerHello")
+        if is_hello_retry_request(parse_server_hello(sh_msg.body).random):
+            raise Error("mTLS: requires TLS 1.2; server sent a HelloRetryRequest")
 
         var sh_full = _sock_wrap_hs_msg(HS_SERVER_HELLO, sh_msg.body)
         th.update(sh_full)
@@ -397,7 +399,7 @@ struct TlsSocket(Movable):
                 self._fd, hostname, trust_anchors,
                 client_random, server_random, cipher_suite,
                 th, th384, use_sha384,
-                client_cert, client_key, ems,
+                client_cert, client_key, ems, reader.buf.copy(),
             )
             self._is12 = True
         except e:
@@ -415,34 +417,6 @@ struct TlsSocket(Movable):
         record.append(UInt8(n & 0xFF))
         _sock_append_bytes(record, msg)
         tls_tcp_write(self._fd, record)
-
-    def _read_server_hello(self) raises -> HandshakeMsg:
-        """Read the next ServerHello (or HelloRetryRequest), skipping
-        compatibility ChangeCipherSpec records."""
-        var sh_rec_type: UInt8
-        var sh_rec_body: List[UInt8]
-        while True:
-            var header = tls_tcp_read(self._fd, 5)
-            var rtype = header[0]
-            var rlen = (Int(header[3]) << 8) | Int(header[4])
-            var rbody = tls_tcp_read(self._fd, rlen)
-            if rtype == CTYPE_CHANGE_CIPHER_SPEC:
-                continue
-            if rtype == CTYPE_ALERT:
-                tls_handle_incoming_alert(rbody)
-                raise Error("tls: alert before ServerHello")
-            sh_rec_type = rtype
-            sh_rec_body = rbody^
-            break
-        if sh_rec_type != CTYPE_HANDSHAKE:
-            raise Error("tls: expected Handshake record for ServerHello, got "
-                        + String(Int(sh_rec_type)))
-        var sh_parse = parse_handshake_msg(sh_rec_body, 0)
-        var sh_msg = sh_parse[0].copy()
-        if sh_msg.msg_type != HS_SERVER_HELLO:
-            raise Error("tls: expected ServerHello (0x02), got "
-                        + String(Int(sh_msg.msg_type)))
-        return sh_msg^
 
     def _check_downgrade(self, server_random: List[UInt8]) raises:
         """Send illegal_parameter and raise if a TLS 1.2 ServerHello carries
@@ -522,27 +496,34 @@ struct TlsSocket(Movable):
         self._keys.server_seqno = 0
 
         if update_requested:
-            # Reply with KeyUpdate(update_not_requested) under the current
-            # client keys, then switch to the next client keys.
-            var msg: List[UInt8] = [_HS_KEY_UPDATE, 0, 0, 1, 0]
-            var sealed = record_seal(
-                self._keys.cipher,
-                self._keys.client_write_key,
-                self._keys.client_write_iv,
-                self._keys.client_seqno,
-                CTYPE_HANDSHAKE,
-                msg,
-            )
-            self._write_record(sealed)
-            var c_next = tls13_next_traffic_secret(self._keys.client_app_secret, use384)
-            var c_kp = tls13_traffic_keys_sha384(c_next, key_len, 12) if use384 else tls13_traffic_keys(c_next, key_len, 12)
-            self._keys.client_app_secret = c_next^
-            self._keys.client_write_key = c_kp[0].copy()
-            self._keys.client_write_iv = c_kp[1].copy()
-            self._keys.client_seqno = 0
+            self._update_client_keys()
+
+    def _update_client_keys(mut self) raises:
+        """Send KeyUpdate(update_not_requested) under the current client keys,
+        then switch to the next client traffic secret (RFC 8446 §4.6.3)."""
+        var use384 = self._keys.use_sha384
+        var key_len = 16 if self._keys.cipher == CIPHER_AES_128_GCM else 32
+        var msg: List[UInt8] = [_HS_KEY_UPDATE, 0, 0, 1, 0]
+        var sealed = record_seal(
+            self._keys.cipher,
+            self._keys.client_write_key,
+            self._keys.client_write_iv,
+            self._keys.client_seqno,
+            CTYPE_HANDSHAKE,
+            msg,
+        )
+        self._write_record(sealed)
+        var c_next = tls13_next_traffic_secret(self._keys.client_app_secret, use384)
+        var c_kp = tls13_traffic_keys_sha384(c_next, key_len, 12) if use384 else tls13_traffic_keys(c_next, key_len, 12)
+        self._keys.client_app_secret = c_next^
+        self._keys.client_write_key = c_kp[0].copy()
+        self._keys.client_write_iv = c_kp[1].copy()
+        self._keys.client_seqno = 0
 
     def send(mut self, data: List[UInt8]) raises -> Int:
         """Encrypt data as a TLS ApplicationData record and write to socket."""
+        if self._failed.byte_length() > 0:
+            raise Error("tls: connection failed earlier: " + self._failed)
         if len(data) > 16384:
             raise Error("tls: send: plaintext exceeds TLS record limit (16384 bytes)")
         if self._is12:
@@ -567,6 +548,8 @@ struct TlsSocket(Movable):
                 raise Error("tls: client sequence number overflow")
             self._keys12.client_seqno += 1
         else:
+            if self._keys.client_seqno >= self._key_update_after and len(self._keys.client_app_secret) > 0:
+                self._update_client_keys()
             var sealed = record_seal(
                 self._keys.cipher,
                 self._keys.client_write_key,
@@ -601,7 +584,8 @@ struct TlsSocket(Movable):
             var rlen = len(rbody)
 
             if rtype == CTYPE_CHANGE_CIPHER_SPEC:
-                continue
+                # renegotiation is not supported: no CCS after the handshake
+                raise Error("tls: ChangeCipherSpec after the handshake (unexpected_message)")
 
             if rtype == CTYPE_ALERT:
                 if rlen < 8 + 16:
@@ -638,6 +622,8 @@ struct TlsSocket(Movable):
             if self._keys12.server_seqno >= UInt64(4611686018427387904):
                 raise Error("tls: server sequence number overflow")
             self._keys12.server_seqno += 1
+            if len(plain) > 16384:
+                raise Error("tls: record plaintext too long (record_overflow)")
             if len(plain) == 0:
                 continue  # empty records are legal; never report them as EOF
             _sock_append_bytes(self._buf, plain)
@@ -661,7 +647,8 @@ struct TlsSocket(Movable):
             var rtype = header[0]
 
             if rtype == CTYPE_CHANGE_CIPHER_SPEC:
-                continue
+                # only allowed before the peer's Finished (RFC 8446 §5)
+                raise Error("tls: ChangeCipherSpec after the handshake (unexpected_message)")
 
             if rtype == CTYPE_ALERT:
                 # TLS 1.3 alerts after the handshake are always encrypted
@@ -695,39 +682,12 @@ struct TlsSocket(Movable):
                 self._handle_alert(plaintext)
 
             if inner_type == CTYPE_HANDSHAKE:
-                # Post-handshake messages: parse and collect NewSessionTicket
-                var pos = 0
-                while pos < len(plaintext):
-                    if plaintext[pos] == _HS_KEY_UPDATE:
-                        if len(plaintext) - pos < 4:
-                            raise Error("tls: malformed KeyUpdate (decode_error)")
-                        var mlen = (Int(plaintext[pos + 1]) << 16) | (Int(plaintext[pos + 2]) << 8) | Int(plaintext[pos + 3])
-                        if mlen != 1 or len(plaintext) - pos < 5:
-                            raise Error("tls: malformed KeyUpdate (decode_error)")
-                        if len(plaintext) - pos != 5:
-                            # keys change at the record boundary
-                            raise Error("tls: KeyUpdate not at the end of its record (unexpected_message)")
-                        var request = plaintext[pos + 4]
-                        if request > 1:
-                            raise Error("tls: bad KeyUpdate request value (illegal_parameter)")
-                        self._key_update(request == 1)
-                        pos += 5
-                        continue
-                    try:
-                        var hs = parse_handshake_msg(plaintext, pos)
-                        var msg = hs[0].copy()
-                        pos = hs[1]
-                        if msg.msg_type == HS_NEW_SESSION_TICKET:
-                            try:
-                                var ticket = parse_new_session_ticket(msg.body)
-                                ticket.psk = tls13_psk_from_ticket(
-                                    self._keys.resumption_secret, ticket.nonce
-                                )
-                                self._keys.session_tickets.append(ticket^)
-                            except:
-                                pass  # malformed ticket — ignore, do not abort
-                    except:
-                        break  # incomplete message — stop parsing
+                # Post-handshake messages (NewSessionTicket, KeyUpdate),
+                # reassembled across records
+                if len(plaintext) == 0:
+                    raise Error("tls: empty handshake record (unexpected_message)")
+                _sock_append_bytes(self._hs_rx, plaintext)
+                self._process_post_handshake()
                 continue
 
             if inner_type != CTYPE_APPLICATION_DATA:
@@ -741,6 +701,107 @@ struct TlsSocket(Movable):
             _sock_append_bytes(self._buf, plaintext)
             return  # one record successfully read
 
+    def _process_post_handshake(mut self) raises:
+        """Handle every complete message in _hs_rx; keep a partial one."""
+        while len(self._hs_rx) >= 4:
+            var mtype = self._hs_rx[0]
+            var mlen = (Int(self._hs_rx[1]) << 16) | (Int(self._hs_rx[2]) << 8) | Int(self._hs_rx[3])
+            if mlen > 65536:
+                raise Error("tls: post-handshake message too large (record_overflow)")
+            if len(self._hs_rx) < 4 + mlen:
+                return
+            var body = List[UInt8](capacity=mlen)
+            for i in range(mlen):
+                body.append(self._hs_rx[4 + i])
+            var rest = List[UInt8](capacity=len(self._hs_rx) - 4 - mlen)
+            for i in range(4 + mlen, len(self._hs_rx)):
+                rest.append(self._hs_rx[i])
+            self._hs_rx = rest^
+            if mtype == _HS_KEY_UPDATE:
+                if mlen != 1:
+                    raise Error("tls: malformed KeyUpdate (decode_error)")
+                if len(self._hs_rx) != 0:
+                    # keys change at the record boundary
+                    raise Error("tls: KeyUpdate not at the end of its record (unexpected_message)")
+                if body[0] > 1:
+                    raise Error("tls: bad KeyUpdate request value (illegal_parameter)")
+                self._key_update(body[0] == 1)
+            elif mtype == HS_NEW_SESSION_TICKET:
+                try:
+                    var ticket = parse_new_session_ticket(body)
+                    ticket.psk = tls13_psk_from_ticket(self._keys.resumption_secret, ticket.nonce)
+                    self._keys.session_tickets.append(ticket^)
+                    # keep the most recent few (tickets are not used yet)
+                    if len(self._keys.session_tickets) > _MAX_TICKETS:
+                        var kept = List[SessionTicket]()
+                        for i in range(1, len(self._keys.session_tickets)):
+                            kept.append(self._keys.session_tickets[i].copy())
+                        self._keys.session_tickets = kept^
+                except:
+                    pass  # an unusable ticket is ignored, as before
+            else:
+                raise Error(
+                    "tls: unexpected post-handshake message type " + String(Int(mtype))
+                    + " (unexpected_message)"
+                )
+
+    def _send_alert(mut self, code: UInt8):
+        """Best effort: one encrypted fatal alert with the current client keys."""
+        if self._broken or self._fd < 0:
+            return
+        var body: List[UInt8] = [ALERT_LEVEL_FATAL, code]
+        try:
+            if self._is12:
+                if len(self._keys12.client_write_key) == 0:
+                    return
+                var payload = record_seal_12(
+                    UInt8(self._keys12.cipher), self._keys12.client_write_key,
+                    self._keys12.client_write_iv, self._keys12.client_seqno, CTYPE_ALERT, body,
+                )
+                var record = List[UInt8](capacity=5 + len(payload))
+                record.append(CTYPE_ALERT)
+                record.append(0x03)
+                record.append(0x03)
+                record.append(UInt8((len(payload) >> 8) & 0xFF))
+                record.append(UInt8(len(payload) & 0xFF))
+                _sock_append_bytes(record, payload)
+                self._write_record(record)
+            else:
+                if len(self._keys.client_write_key) == 0:
+                    return
+                self._write_record(record_seal(
+                    self._keys.cipher, self._keys.client_write_key,
+                    self._keys.client_write_iv, self._keys.client_seqno, CTYPE_ALERT, body,
+                ))
+        except:
+            pass
+
+    def _fill_checked(mut self) raises:
+        """_fill_buf, but a fatal error is remembered: the connection is dead
+        after it (RFC 8446 §6.2) and later calls raise it again. Read
+        timeouts are not fatal. Locally detected protocol errors also send
+        the matching fatal alert."""
+        if self._failed.byte_length() > 0:
+            raise Error("tls: connection failed earlier: " + self._failed)
+        try:
+            self._fill_buf()
+        except e:
+            var msg = String(e)
+            if _sock_contains(msg, "read timed out"):
+                raise Error(msg)
+            self._failed = msg
+            if _sock_contains(msg, "(unexpected_message)"):
+                self._send_alert(10)
+            elif _sock_contains(msg, "authentication failed") or _sock_contains(msg, "(bad_record_mac)"):
+                self._send_alert(20)
+            elif _sock_contains(msg, "(record_overflow)"):
+                self._send_alert(22)
+            elif _sock_contains(msg, "(illegal_parameter)"):
+                self._send_alert(47)
+            elif _sock_contains(msg, "(decode_error)"):
+                self._send_alert(50)
+            raise Error(msg)
+
     def recv(mut self, max_bytes: Int) raises -> List[UInt8]:
         """Read up to max_bytes of decrypted application data.
 
@@ -748,7 +809,7 @@ struct TlsSocket(Movable):
         If buffer is empty, reads the next TLS record to refill it.
         """
         if len(self._buf) == 0:
-            self._fill_buf()
+            self._fill_checked()
         var give = len(self._buf)
         if give > max_bytes:
             give = max_bytes
@@ -805,7 +866,7 @@ struct TlsSocket(Movable):
         self._buf = List[UInt8]()
         while True:
             try:
-                self._fill_buf()
+                self._fill_checked()
             except e:
                 if self._close_notify:
                     break
@@ -835,7 +896,9 @@ struct TlsSocket(Movable):
         After a failed write the close_notify is skipped: it would follow a
         partly sent record.
         """
-        if self._broken:
+        if self._fd < 0:
+            return  # already closed: never touch a possibly reused fd number
+        if self._broken or self._failed.byte_length() > 0:
             pass
         elif self._is12:
             if len(self._keys12.client_write_key) > 0:
@@ -879,6 +942,7 @@ struct TlsSocket(Movable):
                 except:
                     pass
         _ = external_call["close", Int32](self._fd)
+        self._fd = -1
 
     def session_tickets(self) -> List[SessionTicket]:
         """Return copies of NewSessionTicket records received from the server.

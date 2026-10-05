@@ -304,6 +304,118 @@ def test_send_to_closed_peer_raises() raises:
         raise Error("send after a failed write: '" + again + "'")
 
 
+# ── Review fixes (1.6.0): post-handshake strictness and lifecycle ──────────
+
+def _nst() -> List[UInt8]:
+    # NewSessionTicket: lifetime 60, age_add, nonce 09, ticket abcd, no exts
+    return [4, 0, 0, 18, 0, 0, 0, 60, 1, 2, 3, 4, 1, 9, 0, 4, 0xA, 0xB, 0xC, 0xD, 0, 0]
+
+
+def test_ccs_after_handshake_is_fatal_and_sticky() raises:
+    var p = Pair()
+    var s = _sock(p.mine)
+    var old = Keys(_server_secret())
+    var ccs: List[UInt8] = [0x14, 0x03, 0x03, 0x00, 0x01, 0x01]
+    _write(p.peer, ccs)
+    _write(p.peer, record_seal(CIPHER_AES_128_GCM, old.key, old.iv, 0, CTYPE_APPLICATION_DATA, _bytes("x")))
+    _expect_error(s, "unexpected_message")
+    # tls 1.5.0 skipped the CCS; and after any fatal error the next recv
+    # must not quietly return the following record
+    _expect_error(s, "failed earlier")
+    p.close()
+
+
+def test_forged_record_is_sticky() raises:
+    var p = Pair()
+    var s = _sock(p.mine)
+    var old = Keys(_server_secret())
+    var bad = record_seal(CIPHER_AES_128_GCM, old.key, old.iv, 0, CTYPE_APPLICATION_DATA, _bytes("forged"))
+    bad[len(bad) - 1] ^= 1
+    _write(p.peer, bad)
+    _write(p.peer, record_seal(CIPHER_AES_128_GCM, old.key, old.iv, 0, CTYPE_APPLICATION_DATA, _bytes("real")))
+    _expect_error(s, "authentication failed")
+    _expect_error(s, "failed earlier")
+    # the client sent a bad_record_mac alert under its keys
+    var c = Keys(_client_secret())
+    var alert = record_open(CIPHER_AES_128_GCM, c.key, c.iv, 0, _read_record(p.peer))
+    if alert[0] != CTYPE_ALERT or alert[1][1] != 20:
+        raise Error("no bad_record_mac alert sent")
+    p.close()
+
+
+def test_ticket_split_across_records() raises:
+    # 1.5.0 dropped the partial message and then mis-parsed the rest
+    var p = Pair()
+    var s = _sock(p.mine)
+    var old = Keys(_server_secret())
+    var t = _nst()
+    var a = List[UInt8]()
+    var b = List[UInt8]()
+    for i in range(len(t)):
+        if i < 7:
+            a.append(t[i])
+        else:
+            b.append(t[i])
+    _write(p.peer, record_seal(CIPHER_AES_128_GCM, old.key, old.iv, 0, CTYPE_HANDSHAKE, a))
+    _write(p.peer, record_seal(CIPHER_AES_128_GCM, old.key, old.iv, 1, CTYPE_HANDSHAKE, b))
+    _write(p.peer, record_seal(CIPHER_AES_128_GCM, old.key, old.iv, 2, CTYPE_APPLICATION_DATA, _bytes("ok")))
+    _ = s.recv(10)
+    if len(s.session_tickets()) != 1:
+        raise Error("split ticket not reassembled: " + String(len(s.session_tickets())))
+    p.close()
+
+
+def test_ticket_count_capped() raises:
+    var p = Pair()
+    var s = _sock(p.mine)
+    var old = Keys(_server_secret())
+    for i in range(12):
+        _write(p.peer, record_seal(CIPHER_AES_128_GCM, old.key, old.iv, UInt64(i), CTYPE_HANDSHAKE, _nst()))
+    _write(p.peer, record_seal(CIPHER_AES_128_GCM, old.key, old.iv, 12, CTYPE_APPLICATION_DATA, _bytes("ok")))
+    _ = s.recv(10)
+    if len(s.session_tickets()) != 8:
+        raise Error("expected the last 8 tickets, have " + String(len(s.session_tickets())))
+    p.close()
+
+
+def test_unknown_post_handshake_message() raises:
+    var p = Pair()
+    var s = _sock(p.mine)
+    var old = Keys(_server_secret())
+    var cr: List[UInt8] = [13, 0, 0, 1, 0]  # CertificateRequest (not negotiated)
+    _write(p.peer, record_seal(CIPHER_AES_128_GCM, old.key, old.iv, 0, CTYPE_HANDSHAKE, cr))
+    _expect_error(s, "unexpected_message")
+    p.close()
+
+
+def test_close_twice() raises:
+    var p = Pair()
+    var s = _sock(p.mine)
+    s.close()
+    s.close()  # 1.5.0 closed the (possibly reused) fd number again
+    _ = external_call["close", Int32](p.peer)
+
+
+def test_client_key_update_before_limit() raises:
+    var p = Pair()
+    var s = _sock(p.mine)
+    s._key_update_after = 2  # the real limit is 2^24 records
+    _ = s.send(_bytes("one"))
+    _ = s.send(_bytes("two"))
+    _ = s.send(_bytes("three"))
+    var c_old = Keys(_client_secret())
+    var c_new = Keys(tls13_next_traffic_secret(_client_secret(), False))
+    _ = record_open(CIPHER_AES_128_GCM, c_old.key, c_old.iv, 0, _read_record(p.peer))
+    _ = record_open(CIPHER_AES_128_GCM, c_old.key, c_old.iv, 1, _read_record(p.peer))
+    var ku = record_open(CIPHER_AES_128_GCM, c_old.key, c_old.iv, 2, _read_record(p.peer))
+    if ku[0] != CTYPE_HANDSHAKE or ku[1][0] != 24 or ku[1][4] != 0:
+        raise Error("no KeyUpdate(update_not_requested) before the limit")
+    var third = record_open(CIPHER_AES_128_GCM, c_new.key, c_new.iv, 0, _read_record(p.peer))
+    if String(unsafe_from_utf8=third[1].copy()) != "three":
+        raise Error("record after the client KeyUpdate not under the new keys")
+    p.close()
+
+
 def main() raises:
     var passed = 0
     var failed = 0
@@ -319,6 +431,13 @@ def main() raises:
     run_test[test_read_timeout_is_resumable]("read timeout mid-record is resumable", passed, failed)
     run_test[test_timeout_message_not_eof]("timeout is not reported as EOF", passed, failed)
     run_test[test_send_to_closed_peer_raises]("send to a closed peer raises (no SIGPIPE)", passed, failed)
+    run_test[test_ccs_after_handshake_is_fatal_and_sticky]("CCS after handshake: fatal and sticky", passed, failed)
+    run_test[test_forged_record_is_sticky]("forged record: sticky failure + bad_record_mac alert", passed, failed)
+    run_test[test_ticket_split_across_records]("NewSessionTicket split across records", passed, failed)
+    run_test[test_ticket_count_capped]("session tickets capped at 8", passed, failed)
+    run_test[test_unknown_post_handshake_message]("unknown post-handshake message rejected", passed, failed)
+    run_test[test_close_twice]("close() twice is harmless", passed, failed)
+    run_test[test_client_key_update_before_limit]("client KeyUpdate before the record limit", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

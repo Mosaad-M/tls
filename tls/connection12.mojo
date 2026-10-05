@@ -59,10 +59,11 @@ from tls.message12 import (
     NAMED_CURVE_SECP384R1,
     HS_CERTIFICATE_REQUEST,
 )
+from crypto.hmac import hmac_equal
 from tls.connection import (
     tls_tcp_read, tls_tcp_write,
     tls_handle_incoming_alert,
-    tls_send_plaintext_alert, tls_ec_keypair, tls_ec_shared,
+    tls_send_plaintext_alert, tls_ec_keypair, tls_ec_shared, HandshakeReader,
     ALERT_LEVEL_FATAL, ALERT_CLOSE_NOTIFY,
 )
 
@@ -197,6 +198,16 @@ def _parse_cert_chain_12(body: List[UInt8]) raises -> List[List[UInt8]]:
     return certs^
 
 
+def _read_record12(fd: Int32) raises -> Tuple[UInt8, List[UInt8]]:
+    """One record (type, body); at most 2^14 + 2048 bytes (RFC 5246 §6.2.3)."""
+    var header = tls_tcp_read(fd, 5)
+    var rlen = (Int(header[3]) << 8) | Int(header[4])
+    if rlen > 16384 + 2048:
+        raise Error("tls12: record too large (record_overflow)")
+    var body = tls_tcp_read(fd, rlen)
+    return (header[0], body^)
+
+
 def _verify_ske_signature(
     cert:           X509Cert,
     sig_hash:       UInt8,      # 4=SHA-256, 5=SHA-384
@@ -250,72 +261,6 @@ def _verify_ske_signature(
         raise Error("tls12: unsupported sig_sig " + String(Int(sig_sig)))
 
 
-def _read_server_hs12_until_done(fd: Int32) raises -> List[HandshakeMsg]:
-    """Read TLS 1.2 server handshake messages until ServerHelloDone.
-
-    Accumulates data across multiple TLS records, handling the common case
-    where Certificate + ServerKeyExchange + ServerHelloDone arrive in one record.
-    Returns list of HandshakeMsg in arrival order.
-    """
-    var all_msgs = List[HandshakeMsg]()
-    var raw_buf = List[UInt8]()
-    var got_shd = False
-
-    while not got_shd:
-        # Read one TLS record
-        var header = tls_tcp_read(fd, 5)
-        var rtype = header[0]
-        var rlen = (Int(header[3]) << 8) | Int(header[4])
-        var rbody = tls_tcp_read(fd, rlen)
-
-        if rtype == CTYPE_CHANGE_CIPHER_SPEC:
-            continue
-        if rtype == CTYPE_ALERT:
-            tls_handle_incoming_alert(rbody)
-            raise Error("tls12: alert before ServerHelloDone (unreachable)")
-        if rtype != CTYPE_HANDSHAKE:
-            continue
-
-        _append_bytes12(raw_buf, rbody)
-
-        # Parse all complete messages from the buffer
-        var parse_off = 0
-        while True:
-            if parse_off + 4 > len(raw_buf):
-                break  # need more data for header
-            var mtype = raw_buf[parse_off]
-            var mlen = (Int(raw_buf[parse_off + 1]) << 16) | (Int(raw_buf[parse_off + 2]) << 8) | Int(raw_buf[parse_off + 3])
-            if parse_off + 4 + mlen > len(raw_buf):
-                break  # incomplete message body — read more
-            var msg = HandshakeMsg()
-            msg.msg_type = mtype
-            var body = List[UInt8](capacity=mlen)
-            for i in range(mlen):
-                body.append(raw_buf[parse_off + 4 + i])
-            msg.body = body^
-            if mtype == HS12_SERVER_HELLO_DONE:
-                got_shd = True
-            all_msgs.append(msg^)
-            parse_off += 4 + mlen
-
-        # Trim processed bytes from buffer
-        var remaining = len(raw_buf) - parse_off
-        var new_buf = List[UInt8](capacity=remaining)
-        for i in range(parse_off, len(raw_buf)):
-            new_buf.append(raw_buf[i])
-        raw_buf = new_buf^
-
-    return all_msgs^
-
-
-def _find_msg12(messages: List[HandshakeMsg], msg_type: UInt8) raises -> List[UInt8]:
-    """Find first message of the given type. Raises if not found."""
-    for i in range(len(messages)):
-        if messages[i].msg_type == msg_type:
-            return messages[i].body.copy()
-    raise Error("tls12: handshake message type " + String(Int(msg_type)) + " not found")
-
-
 # ============================================================================
 # tls12_client_handshake
 # ============================================================================
@@ -333,10 +278,14 @@ def _tls12_handshake_impl(
     client_cert:    List[UInt8],   # DER leaf cert (empty = no mTLS)
     client_key:     List[UInt8],   # 32-byte P-256 private scalar (empty = no mTLS)
     ems:            Bool,          # server echoed extended_master_secret
+    pending:        List[UInt8],   # handshake bytes that followed ServerHello in its record
 ) raises -> TlsKeys12:
-    # Determine cipher parameters
+    # Determine cipher parameters (only the four offered suites)
     var key_len = 16
     var cipher = CIPHER_AES_128_GCM
+    var ecdsa_suite = cipher_suite == 0xC02B or cipher_suite == 0xC02C
+    if cipher_suite != 0xC02B and cipher_suite != 0xC02C and cipher_suite != 0xC02F and cipher_suite != 0xC030:
+        raise Error("tls12: cipher suite was not offered (illegal_parameter)")
     if cipher_suite == TLS12_ECDHE_RSA_AES256_GCM_SHA384 or cipher_suite == TLS12_ECDHE_ECDSA_AES256_GCM_SHA384:
         key_len = 32
         cipher = CIPHER_AES_256_GCM
@@ -345,23 +294,27 @@ def _tls12_handshake_impl(
     var th    = transcript_sha256.copy()
     var th384 = transcript_sha384.copy()
 
-    # ── Step 1: Read all server handshake messages until ServerHelloDone ──────
-    var srv_msgs = _read_server_hs12_until_done(fd)
-
-    var cert_body = _find_msg12(srv_msgs, HS_CERTIFICATE)
-    var ske_body  = _find_msg12(srv_msgs, HS12_SERVER_KEY_EXCHANGE)
-    var shd_body  = _find_msg12(srv_msgs, HS12_SERVER_HELLO_DONE)
-
-    # Check for optional CertificateRequest
+    # ── Step 1: Server flight, in order (RFC 5246 §7.3): Certificate,
+    #    ServerKeyExchange, [CertificateRequest], ServerHelloDone ────────────
+    var reader = HandshakeReader(fd, False, pending)
+    var cert_body = reader.expect(HS_CERTIFICATE, "Certificate").body.copy()
+    var ske_body  = reader.expect(HS12_SERVER_KEY_EXCHANGE, "ServerKeyExchange").body.copy()
     var cert_req_body = List[UInt8]()
     var has_cert_req = False
-    for i in range(len(srv_msgs)):
-        if srv_msgs[i].msg_type == HS_CERTIFICATE_REQUEST:
-            cert_req_body = srv_msgs[i].body.copy()
-            has_cert_req = True
-            break
+    var nxt = reader.next_message()
+    if nxt.msg_type == HS_CERTIFICATE_REQUEST:
+        cert_req_body = nxt.body.copy()
+        has_cert_req = True
+        nxt = reader.expect(HS12_SERVER_HELLO_DONE, "ServerHelloDone")
+    elif nxt.msg_type != HS12_SERVER_HELLO_DONE:
+        raise Error(
+            "tls12: expected ServerHelloDone, got handshake message type "
+            + String(Int(nxt.msg_type)) + " (unexpected_message)"
+        )
+    var shd_body = nxt.body.copy()
+    reader.require_boundary("ServerHelloDone")
 
-    # Update transcript in RFC 5246 §7.3 message order
+    # Update transcript in RFC 5246 §7.3 message order (= wire order)
     th.update(_wrap_hs_msg12(HS_CERTIFICATE, cert_body))
     th384.update(_wrap_hs_msg12(HS_CERTIFICATE, cert_body))
     th.update(_wrap_hs_msg12(HS12_SERVER_KEY_EXCHANGE, ske_body))
@@ -408,6 +361,9 @@ def _tls12_handshake_impl(
     signed_data.append(UInt8(len(server_pubkey)))
     _append_bytes12(signed_data, server_pubkey)
 
+    # ECDHE_ECDSA suites are signed with ECDSA, ECDHE_RSA with RSA (RFC 8422 §2)
+    if ecdsa_suite != (sig_sig == 3):
+        raise Error("tls12: ServerKeyExchange signature type does not match the cipher suite (illegal_parameter)")
     _verify_ske_signature(cert_chain[0], sig_hash, sig_sig, sig_bytes, signed_data)
 
     # ── Step 5: Generate ephemeral ECDHE key pair (curve-specific) ───────────
@@ -419,10 +375,24 @@ def _tls12_handshake_impl(
     var pre_master = tls_ec_shared(named_curve, ecdhe_private, server_pubkey)
 
     # ── Step 7: Send client Certificate (if server requested it) ─────────────
-    # RFC 5246 §7.3: Certificate comes BEFORE ClientKeyExchange
+    # RFC 5246 §7.3: Certificate comes BEFORE ClientKeyExchange. Our only
+    # client credential is a P-256 key signing with SHA-256, so send it only
+    # if the request allows ecdsa_sign certificates and (sha256, ecdsa);
+    # otherwise decline with an empty Certificate (RFC 5246 §7.4.6).
+    var send_client_cert = False
     if has_cert_req:
+        var cr = parse_certificate_request12(cert_req_body)
+        var type_ok = False
+        for i in range(len(cr.certificate_types)):
+            if cr.certificate_types[i] == 64:  # ecdsa_sign
+                type_ok = True
+        var alg_ok = False
+        for i in range(len(cr.supported_signature_algs)):
+            if cr.supported_signature_algs[i] == 0x0403:
+                alg_ok = True
+        send_client_cert = type_ok and alg_ok and len(client_cert) > 0 and len(client_key) > 0
         var cli_cert_chain = List[List[UInt8]]()
-        if len(client_cert) > 0:
+        if send_client_cert:
             cli_cert_chain.append(client_cert.copy())
         var cli_cert_msg = build_client_certificate12(cli_cert_chain)
         # cli_cert_msg already has 4-byte HS header; update transcript directly
@@ -478,13 +448,11 @@ def _tls12_handshake_impl(
 
 
     # ── Step 11: Send CertificateVerify (if we sent a certificate) ────────────
-    # RFC 5246 §7.4.8: signs transcript hash through ClientKeyExchange
-    if has_cert_req and len(client_cert) > 0 and len(client_key) > 0:
-        var cv_hash: List[UInt8]
-        if use_sha384:
-            cv_hash = _transcript_hash12_384(th384)
-        else:
-            cv_hash = _transcript_hash12(th)
+    # RFC 5246 §7.4.8: signs the transcript through ClientKeyExchange, hashed
+    # with the hash the message announces: (sha256, ecdsa), whatever the
+    # suite's PRF hash (1.5.0 used SHA-384 for *_SHA384 suites and failed)
+    if send_client_cert:
+        var cv_hash = _transcript_hash12(th)
         var nonce = csprng_bytes(32)
         var sig_rs = p256_ecdsa_sign(client_key, cv_hash, nonce)
         var r = sig_rs[0].copy()
@@ -530,31 +498,21 @@ def _tls12_handshake_impl(
     tls_tcp_write(fd, fin_total)
 
     # ── Step 14: Read server ChangeCipherSpec + Finished ──────────────────────
-    # Read records until we find the encrypted Finished
-    var srv_fin_plain = List[UInt8]()
-    var found_fin = False
-
-    while not found_fin:
-        var rec_header = tls_tcp_read(fd, 5)
-        var srv_rtype  = rec_header[0]
-        var srv_rlen   = (Int(rec_header[3]) << 8) | Int(rec_header[4])
-        var srv_rbody  = tls_tcp_read(fd, srv_rlen)
-
-        if srv_rtype == CTYPE_CHANGE_CIPHER_SPEC:
-            continue  # skip server's CCS
-
-        if srv_rtype == CTYPE_ALERT:
-            tls_handle_incoming_alert(srv_rbody)
-            raise Error("tls12: alert from server (unreachable)")
-
-        if srv_rtype != CTYPE_HANDSHAKE:
-            continue  # skip unexpected record types
-
-        # Decrypt the server's Finished record
-        srv_fin_plain = record_open_12(
-            cipher, server_key, server_iv, UInt64(0), CTYPE_HANDSHAKE, srv_rbody
-        )
-        found_fin = True
+    # The server must send ChangeCipherSpec (exactly [1]) and then its
+    # encrypted Finished, each in its own record; nothing else is allowed.
+    var ccs = _read_record12(fd)
+    if ccs[0] == CTYPE_ALERT:
+        tls_handle_incoming_alert(ccs[1])
+    if ccs[0] != CTYPE_CHANGE_CIPHER_SPEC or len(ccs[1]) != 1 or ccs[1][0] != 1:
+        raise Error("tls12: expected the server's ChangeCipherSpec (unexpected_message)")
+    var fin_rec = _read_record12(fd)
+    if fin_rec[0] == CTYPE_ALERT:
+        tls_handle_incoming_alert(fin_rec[1])
+    if fin_rec[0] != CTYPE_HANDSHAKE:
+        raise Error("tls12: expected the server's Finished (unexpected_message)")
+    var srv_fin_plain = record_open_12(
+        cipher, server_key, server_iv, UInt64(0), CTYPE_HANDSHAKE, fin_rec[1]
+    )
 
     var srv_vd = parse_finished_body(srv_fin_plain)
 
@@ -572,11 +530,8 @@ def _tls12_handshake_impl(
     else:
         expected_srv_vd = tls12_verify_data(master, "server finished", s_hash)
 
-    if len(srv_vd) != len(expected_srv_vd):
-        raise Error("tls12: server Finished verify_data length mismatch")
-    for i in range(len(srv_vd)):
-        if srv_vd[i] != expected_srv_vd[i]:
-            raise Error("tls12: server Finished verify_data mismatch at byte " + String(i))
+    if not hmac_equal(srv_vd, expected_srv_vd):  # constant time
+        raise Error("tls12: server Finished verify_data mismatch (decrypt_error)")
 
     # ── Step 15: Build and return TlsKeys12 ───────────────────────────────────
     var keys = TlsKeys12()
@@ -604,6 +559,7 @@ def tls12_client_handshake(
     transcript_sha384: SHA384,
     use_sha384:     Bool,
     ems:            Bool = False,   # ServerHello carried extended_master_secret
+    pending:        List[UInt8] = List[UInt8](),  # bytes after ServerHello in its record
 ) raises -> TlsKeys12:
     """Perform TLS 1.2 client handshake after ClientHello+ServerHello exchange.
 
@@ -614,7 +570,7 @@ def tls12_client_handshake(
             fd, hostname, trust_anchors,
             client_random, server_random, cipher_suite,
             transcript_sha256, transcript_sha384, use_sha384,
-            List[UInt8](), List[UInt8](), ems,
+            List[UInt8](), List[UInt8](), ems, pending,
         )
     except e:
         tls_send_plaintext_alert(fd, 40)  # handshake_failure
@@ -634,6 +590,7 @@ def tls12_client_handshake_mtls(
     client_cert:    List[UInt8],   # DER-encoded leaf certificate
     client_key:     List[UInt8],   # 32-byte P-256 private scalar
     ems:            Bool = False,  # ServerHello carried extended_master_secret
+    pending:        List[UInt8] = List[UInt8](),  # bytes after ServerHello in its record
 ) raises -> TlsKeys12:
     """TLS 1.2 mTLS handshake: responds to CertificateRequest with P-256 ECDSA auth.
 
@@ -647,7 +604,7 @@ def tls12_client_handshake_mtls(
             fd, hostname, trust_anchors,
             client_random, server_random, cipher_suite,
             transcript_sha256, transcript_sha384, use_sha384,
-            client_cert, client_key, ems,
+            client_cert, client_key, ems, pending,
         )
     except e:
         tls_send_plaintext_alert(fd, 40)  # handshake_failure

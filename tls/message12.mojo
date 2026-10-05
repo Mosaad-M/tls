@@ -93,33 +93,61 @@ def parse_server_hello_tls12_exts(body: List[UInt8]) raises -> Bool:
 
 
 def parse_server_hello_version(body: List[UInt8]) raises -> Tuple[UInt16, List[UInt8], List[UInt8], Bool]:
-    """Parse ServerHello body, determine TLS version.
+    """Parse a ServerHello body and determine the version; validates it.
 
     Returns (cipher, server_random[32], session_id, use_tls13).
-    TLS 1.3 is detected by presence of supported_versions extension with 0x0304.
-    TLS 1.2 ServerHello lacks this extension.
+    TLS 1.3: supported_versions must be exactly 0x0304 (any other value is
+    illegal_parameter, never a silent fall back to TLS 1.2); the cipher must
+    be one of the offered TLS 1.3 suites; only supported_versions and
+    key_share may appear. TLS 1.2 (no supported_versions): the cipher must be
+    one of the offered TLS 1.2 suites; only an empty server_name,
+    extended_master_secret, renegotiation_info, ec_point_formats and ALPN may
+    appear (RFC 8446 §4.2: unsolicited extensions are fatal).
     """
-    var sh = parse_server_hello(body)
-
-    # Check supported_versions extension for TLS 1.3 indicator
+    var sh = parse_server_hello(body)   # strict framing, no duplicates
     var use_tls13 = False
     var ext_bytes = sh.extensions.copy()
     var off = 0
-    while off + 4 <= len(ext_bytes):
+    while off < len(ext_bytes):
         var ext_type = _read_u16be(ext_bytes, off)
         var ext_len  = Int(_read_u16be(ext_bytes, off + 2))
         off += 4
-        if off + ext_len > len(ext_bytes):
-            break
         if ext_type == EXT_SUPPORTED_VERSIONS:
-            # In ServerHello, supported_versions contains exactly 2 bytes (the chosen version)
-            if ext_len >= 2:
-                var chosen = _read_u16be(ext_bytes, off)
-                if chosen == 0x0304:
-                    use_tls13 = True
+            if ext_len != 2 or _read_u16be(ext_bytes, off) != 0x0304:
+                raise Error("tls: ServerHello supported_versions is not TLS 1.3 (illegal_parameter)")
+            use_tls13 = True
         off += ext_len
 
     var cipher = sh.cipher_suite
+    off = 0
+    while off < len(ext_bytes):
+        var ext_type = _read_u16be(ext_bytes, off)
+        var ext_len  = Int(_read_u16be(ext_bytes, off + 2))
+        off += 4 + ext_len
+        var allowed: Bool
+        if use_tls13:
+            allowed = ext_type == EXT_SUPPORTED_VERSIONS or ext_type == 0x0033  # key_share
+        else:
+            allowed = ext_type == 0x0017 or ext_type == 0xFF01 or ext_type == 0x000B or ext_type == 0x0010
+            if ext_type == 0x0000:  # server_name: an empty acknowledgement of our SNI (RFC 6066 §3)
+                if ext_len != 0:
+                    raise Error("tls: non-empty server_name in ServerHello (decode_error)")
+                allowed = True
+        if not allowed:
+            raise Error(
+                "tls: unsolicited extension " + String(Int(ext_type))
+                + " in ServerHello (unsupported_extension)"
+            )
+    if use_tls13:
+        # legacy_session_id_echo must echo our (empty) legacy_session_id; in
+        # TLS 1.2 the field is a new session ID the server chooses instead
+        if len(sh.session_id) != 0:
+            raise Error("tls: ServerHello session_id does not echo ours (illegal_parameter)")
+        if cipher != 0x1301 and cipher != 0x1302 and cipher != 0x1303:
+            raise Error("tls: ServerHello chose a cipher suite not offered (illegal_parameter)")
+    elif cipher != 0xC02B and cipher != 0xC02C and cipher != 0xC02F and cipher != 0xC030:
+        raise Error("tls: ServerHello chose a cipher suite not offered (illegal_parameter)")
+
     var rand   = sh.random.copy()
     var sid    = sh.session_id.copy()
     return (cipher, rand^, sid^, use_tls13)
@@ -174,8 +202,8 @@ def parse_server_key_exchange(body: List[UInt8]) raises -> Tuple[UInt16, List[UI
         raise Error("parse_ske: truncated at sig_len")
     var sig_len = Int(_read_u16be(body, off))
     off += 2
-    if off + sig_len > len(body):
-        raise Error("parse_ske: sig bytes truncated")
+    if off + sig_len != len(body):
+        raise Error("parse_ske: signature length mismatch (decode_error)")
     var sig_bytes = _slice(body, off, off + sig_len)
 
     return (named_curve, pubkey^, sig_hash, sig_sig, sig_bytes^)
@@ -248,8 +276,8 @@ def parse_finished_body(body: List[UInt8]) raises -> List[UInt8]:
     var vd_len = _read_u24be(body, 1)
     if vd_len != 12:
         raise Error("parse_finished_body: expected 12-byte verify_data, got " + String(vd_len))
-    if 4 + vd_len > len(body):
-        raise Error("parse_finished_body: body truncated")
+    if 4 + vd_len != len(body):
+        raise Error("parse_finished_body: wrong length (decode_error)")
     return _slice(body, 4, 4 + vd_len)
 
 

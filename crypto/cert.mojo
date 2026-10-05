@@ -16,7 +16,7 @@ from std.ffi import external_call
 from crypto.asn1 import (
     DerElem, der_parse, der_raw_bytes, der_children, der_bit_str, der_oid_eq,
     asn1_parse_rsa_spki, asn1_parse_ec_spki, asn1_parse_ecdsa_sig, asn1_parse_ecdsa_sig_48,
-    TAG_BIT_STRING, TAG_OID, TAG_SEQUENCE, TAG_SET, TAG_CTX0, TAG_CTX3,
+    TAG_BIT_STRING, TAG_OID, TAG_SEQUENCE, TAG_SET, TAG_CTX0, TAG_CTX1, TAG_CTX3,
     TAG_OCTET_STRING, TAG_DNS_NAME,
     TAG_UTF8_STRING, TAG_PRINTABLE_STRING, TAG_IA5_STRING,
     OID_RSA_ENCRYPTION, OID_EC_PUBLIC_KEY, OID_P256, OID_P384,
@@ -66,6 +66,15 @@ struct X509Cert(Copyable, Movable):
     var eku_server_auth: Bool       # id-kp-serverAuth present
     var eku_any:     Bool           # anyExtendedKeyUsage present
     var ext_error:   String         # non-empty: unsupported critical or malformed extension
+    var has_san:     Bool           # subjectAltName extension present
+    var san_dns:     List[String]   # SAN dNSName entries
+    var san_ip:      List[List[UInt8]]  # SAN iPAddress entries (4 or 16 bytes)
+    var has_nc:      Bool           # nameConstraints present (critical or not)
+    var nc_unsupported: Bool        # constrains a name form other than DNS/IP
+    var nc_perm_dns: List[String]   # permitted dNSName subtrees
+    var nc_excl_dns: List[String]   # excluded dNSName subtrees
+    var nc_perm_ip:  List[List[UInt8]]  # permitted iPAddress subtrees (address || mask)
+    var nc_excl_ip:  List[List[UInt8]]  # excluded iPAddress subtrees
 
     def __init__(out self):
         self.tbs_raw     = List[UInt8]()
@@ -91,6 +100,15 @@ struct X509Cert(Copyable, Movable):
         self.eku_server_auth = False
         self.eku_any     = False
         self.ext_error   = String("")
+        self.has_san     = False
+        self.san_dns     = List[String]()
+        self.san_ip      = List[List[UInt8]]()
+        self.has_nc      = False
+        self.nc_unsupported = False
+        self.nc_perm_dns = List[String]()
+        self.nc_excl_dns = List[String]()
+        self.nc_perm_ip  = List[List[UInt8]]()
+        self.nc_excl_ip  = List[List[UInt8]]()
 
     def __copyinit__(out self, copy: Self):
         self.tbs_raw     = copy.tbs_raw.copy()
@@ -116,6 +134,15 @@ struct X509Cert(Copyable, Movable):
         self.eku_server_auth = copy.eku_server_auth
         self.eku_any     = copy.eku_any
         self.ext_error   = copy.ext_error
+        self.has_san     = copy.has_san
+        self.san_dns     = copy.san_dns.copy()
+        self.san_ip      = copy.san_ip.copy()
+        self.has_nc      = copy.has_nc
+        self.nc_unsupported = copy.nc_unsupported
+        self.nc_perm_dns = copy.nc_perm_dns.copy()
+        self.nc_excl_dns = copy.nc_excl_dns.copy()
+        self.nc_perm_ip  = copy.nc_perm_ip.copy()
+        self.nc_excl_ip  = copy.nc_excl_ip.copy()
 
     def __moveinit__(out self, deinit take: Self):
         self.tbs_raw     = take.tbs_raw^
@@ -141,6 +168,15 @@ struct X509Cert(Copyable, Movable):
         self.eku_server_auth = take.eku_server_auth
         self.eku_any     = take.eku_any
         self.ext_error   = take.ext_error^
+        self.has_san     = take.has_san
+        self.san_dns     = take.san_dns^
+        self.san_ip      = take.san_ip^
+        self.has_nc      = take.has_nc
+        self.nc_unsupported = take.nc_unsupported
+        self.nc_perm_dns = take.nc_perm_dns^
+        self.nc_excl_dns = take.nc_excl_dns^
+        self.nc_perm_ip  = take.nc_perm_ip^
+        self.nc_excl_ip  = take.nc_excl_ip^
 
 
 # ============================================================================
@@ -167,14 +203,16 @@ def cert_parse(der: List[UInt8]) raises -> X509Cert:
     var cert_outer = der_parse(der, 0)
     if cert_outer[0] != TAG_SEQUENCE:
         raise Error("cert: outer not SEQUENCE")
+    if cert_outer[2] != len(der):
+        raise Error("cert: trailing bytes after the certificate")
     var outer_content = cert_outer[1].copy()
 
     # TBSCertificate full TLV — needed for signature hash computation
     var tbs_raw = der_raw_bytes(outer_content, 0)
 
     var cert_children = der_children(outer_content)
-    if len(cert_children) < 3:
-        raise Error("cert: Certificate needs 3 children")
+    if len(cert_children) != 3:
+        raise Error("cert: Certificate must have exactly 3 children")
 
     # ── signatureAlgorithm (child 1) ─────────────────────────────────────────
     var alg_elem = cert_children[1].copy()
@@ -237,6 +275,13 @@ def cert_parse(der: List[UInt8]) raises -> X509Cert:
     if len(tbs_ch) <= spki_idx:
         raise Error("cert: TBSCertificate too short to contain SPKI")
 
+    # RFC 5280 §4.1.1.2: the signature field inside the TBS must equal the
+    # outer signatureAlgorithm (otherwise the signed algorithm is ambiguous)
+    var tbs_sig_off = _child_offset(tbs_elem.content, spki_idx - 4)
+    var outer_alg_off = _child_offset(outer_content, 1)
+    if not _bytes_exact_eq(der_raw_bytes(tbs_elem.content, tbs_sig_off), der_raw_bytes(outer_content, outer_alg_off)):
+        raise Error("cert: TBS signature and outer signatureAlgorithm differ")
+
     # Peek at SPKI AlgorithmIdentifier to determine key type
     # tbs_ch[spki_idx] is DerElem (SEQUENCE); access its content by field reference
     var spki_inner_ch = der_children(tbs_ch[spki_idx].content)
@@ -264,14 +309,16 @@ def cert_parse(der: List[UInt8]) raises -> X509Cert:
         rsa_e = key_res[1].copy()
     elif der_oid_eq(spki_alg_ch[0].content, OID_EC_PUBLIC_KEY):
         pub_key_alg = String("ec")
-        # Detect curve from AlgorithmIdentifier parameter OID
-        if len(spki_alg_ch) >= 2 and spki_alg_ch[1].tag == TAG_OID:
-            if der_oid_eq(spki_alg_ch[1].content, OID_P384):
-                ec_curve = String("p384")
-            else:
-                ec_curve = String("p256")
-        else:
+        # Curve from the AlgorithmIdentifier parameter: only P-256 and P-384
+        # are supported; anything else (or no named curve) is rejected
+        if len(spki_alg_ch) == 2 and spki_alg_ch[1].tag == TAG_OID \
+                and der_oid_eq(spki_alg_ch[1].content, OID_P384):
+            ec_curve = String("p384")
+        elif len(spki_alg_ch) == 2 and spki_alg_ch[1].tag == TAG_OID \
+                and der_oid_eq(spki_alg_ch[1].content, OID_P256):
             ec_curve = String("p256")
+        else:
+            raise Error("cert: unsupported EC curve")
         ec_point = asn1_parse_ec_spki(spki_raw)
     else:
         raise Error("cert: unsupported public key algorithm OID")
@@ -310,6 +357,10 @@ def _hex(b: List[UInt8]) -> String:
         out += digits[byte=Int(b[i] >> 4)]
         out += digits[byte=Int(b[i] & 0x0F)]
     return out^
+
+
+comptime _TAG_IP_ADDRESS : UInt8 = 0x87  # [7] iPAddress in GeneralName
+comptime OID_NAME_CONSTRAINTS = "551d1e"  # 2.5.29.30
 
 
 def _parse_validity(mut cert: X509Cert, validity: DerElem):
@@ -370,9 +421,67 @@ def _parse_extensions(mut cert: X509Cert, ext_ctx: DerElem) raises:
         elif der_oid_eq(oid, OID_EXT_KEY_USAGE):
             _parse_ext_key_usage(cert, value)
         elif der_oid_eq(oid, OID_SUBJECT_ALT_NAME):
-            pass  # read by cert_san_names
+            _parse_san(cert, value)
+        elif der_oid_eq(oid, OID_NAME_CONSTRAINTS):
+            _parse_name_constraints(cert, value)
         elif critical and cert.ext_error.byte_length() == 0:
             cert.ext_error = "unsupported critical extension " + _hex(oid)
+
+
+def _parse_san(mut cert: X509Cert, value: List[UInt8]) raises:
+    """SubjectAltName ::= GeneralNames; keeps dNSName and iPAddress entries."""
+    var top = der_parse(value, 0)
+    if top[0] != TAG_SEQUENCE or top[2] != len(value):
+        raise Error("subjectAltName not a SEQUENCE")
+    cert.has_san = True
+    var names = der_children(top[1])
+    for i in range(len(names)):
+        if names[i].tag == TAG_DNS_NAME:
+            cert.san_dns.append(_bytes_to_string(names[i].content))
+        elif names[i].tag == _TAG_IP_ADDRESS:
+            if len(names[i].content) != 4 and len(names[i].content) != 16:
+                raise Error("bad iPAddress in subjectAltName")
+            cert.san_ip.append(names[i].content.copy())
+
+
+def _parse_name_constraints(mut cert: X509Cert, value: List[UInt8]) raises:
+    """NameConstraints ::= SEQUENCE { permittedSubtrees [0], excludedSubtrees [1] }
+    of GeneralSubtree ::= SEQUENCE { base GeneralName, minimum [0] DEFAULT 0,
+    maximum [1] OPTIONAL }. dNSName and iPAddress bases are kept; any other
+    form, or minimum/maximum (which RFC 5280 forbids), marks the
+    constraints as unsupported so the path is rejected (fail closed)."""
+    var top = der_parse(value, 0)
+    if top[0] != TAG_SEQUENCE or top[2] != len(value):
+        raise Error("nameConstraints not a SEQUENCE")
+    cert.has_nc = True
+    var parts = der_children(top[1])
+    for i in range(len(parts)):
+        var permitted = parts[i].tag == TAG_CTX0
+        if not permitted and parts[i].tag != TAG_CTX1:
+            raise Error("bad nameConstraints field")
+        var subtrees = der_children(parts[i].content)
+        for j in range(len(subtrees)):
+            if subtrees[j].tag != TAG_SEQUENCE:
+                raise Error("GeneralSubtree not a SEQUENCE")
+            var st = der_children(subtrees[j].content)
+            if len(st) != 1:
+                cert.nc_unsupported = True
+                continue
+            var base = st[0].copy()
+            if base.tag == TAG_DNS_NAME:
+                if permitted:
+                    cert.nc_perm_dns.append(_bytes_to_string(base.content))
+                else:
+                    cert.nc_excl_dns.append(_bytes_to_string(base.content))
+            elif base.tag == _TAG_IP_ADDRESS:
+                if len(base.content) != 8 and len(base.content) != 32:
+                    raise Error("bad iPAddress name constraint")
+                if permitted:
+                    cert.nc_perm_ip.append(base.content.copy())
+                else:
+                    cert.nc_excl_ip.append(base.content.copy())
+            else:
+                cert.nc_unsupported = True
 
 
 def _parse_basic_constraints(mut cert: X509Cert, value: List[UInt8]) raises:
@@ -542,79 +651,39 @@ def _string_lower_bytes(s: String) -> List[UInt8]:
 # Falls back to Subject CN if no SAN extension present.
 # ============================================================================
 
+def _subject_cn(cert: X509Cert) -> String:
+    """The subject's (last) commonName, or "" if none."""
+    var cn = String("")
+    try:
+        var top = der_parse(cert.subject_raw, 0)
+        var rdns = der_children(top[1])
+        for i in range(len(rdns)):
+            if rdns[i].tag != TAG_SET:
+                continue
+            var atvs = der_children(rdns[i].content)
+            for j in range(len(atvs)):
+                if atvs[j].tag != TAG_SEQUENCE:
+                    continue
+                var atv = der_children(atvs[j].content)
+                if len(atv) >= 2 and atv[0].tag == TAG_OID and der_oid_eq(atv[0].content, OID_COMMON_NAME):
+                    if atv[1].tag == TAG_UTF8_STRING or atv[1].tag == TAG_PRINTABLE_STRING or atv[1].tag == TAG_IA5_STRING:
+                        cn = _bytes_to_string(atv[1].content)
+    except:
+        pass
+    return cn
+
+
 def cert_san_names(cert: X509Cert) raises -> List[String]:
-    """Parse SubjectAltName dNSName entries. Falls back to Subject CN."""
-    var tbs_ch = _tbs_children(cert.tbs_raw)
-
-    # Determine index of subject and extensions based on version presence
-    var has_version = len(tbs_ch) > 0 and tbs_ch[0].tag == TAG_CTX0
-    var subject_idx = 5 if has_version else 4
-    var ext_ctx_idx = 7 if has_version else 6
-
-    # Try to find extensions ([3] EXPLICIT)
-    var found_san = False
-    var san_names = List[String]()
-
-    if len(tbs_ch) > ext_ctx_idx and tbs_ch[ext_ctx_idx].tag == TAG_CTX3:
-        var ext_ctx = tbs_ch[ext_ctx_idx].copy()
-        # [3] EXPLICIT { SEQUENCE OF Extension }
-        var ext_seq_ch = der_children(ext_ctx.content)
-        if len(ext_seq_ch) > 0 and ext_seq_ch[0].tag == TAG_SEQUENCE:
-            var extensions = der_children(ext_seq_ch[0].content)
-            for i in range(len(extensions)):
-                var ext = extensions[i].copy()
-                if ext.tag != TAG_SEQUENCE:
-                    continue
-                var ext_ch = der_children(ext.content)
-                if len(ext_ch) < 2 or ext_ch[0].tag != TAG_OID:
-                    continue
-                if not der_oid_eq(ext_ch[0].content, OID_SUBJECT_ALT_NAME):
-                    continue
-                # Found SAN extension; value is in last child (OCTET STRING)
-                var val_elem = ext_ch[len(ext_ch) - 1].copy()
-                if val_elem.tag != TAG_OCTET_STRING:
-                    continue
-                # The OCTET STRING contains DER: SEQUENCE OF GeneralName
-                var san_seq = der_parse(val_elem.content, 0)
-                var general_names = der_children(san_seq[1])
-                for j in range(len(general_names)):
-                    var gn = general_names[j].copy()
-                    if gn.tag == TAG_DNS_NAME:
-                        san_names.append(_bytes_to_string(gn.content))
-                found_san = True
-                break
-
-    if found_san:
-        return san_names^
-
-    # Fallback: extract Subject CN
-    if len(tbs_ch) <= subject_idx:
-        raise Error("cert_san_names: TBSCertificate too short to have subject")
-
-    var subject_elem = tbs_ch[subject_idx].copy()
-    # Subject is SEQUENCE OF { SET OF { SEQUENCE { OID, value } } }
-    var rdns = der_children(subject_elem.content)
-    for i in range(len(rdns)):
-        var rdn = rdns[i].copy()
-        if rdn.tag != TAG_SET:
-            continue
-        var atv_list = der_children(rdn.content)
-        for j in range(len(atv_list)):
-            var atv = atv_list[j].copy()
-            if atv.tag != TAG_SEQUENCE:
-                continue
-            var atv_ch = der_children(atv.content)
-            if len(atv_ch) < 2 or atv_ch[0].tag != TAG_OID:
-                continue
-            if der_oid_eq(atv_ch[0].content, OID_COMMON_NAME):
-                var cn_elem = atv_ch[1].copy()
-                # CN value can be UTF8String, PrintableString, IA5String, etc.
-                if cn_elem.tag == TAG_UTF8_STRING or cn_elem.tag == TAG_PRINTABLE_STRING or cn_elem.tag == TAG_IA5_STRING:
-                    var cn_result = List[String]()
-                    cn_result.append(_bytes_to_string(cn_elem.content))
-                    return cn_result^
-
-    raise Error("cert_san_names: no SAN extension and no CN found")
+    """DNS names the certificate is valid for: the SAN dNSName entries, or the
+    subject CN when there is no subjectAltName extension (RFC 6125)."""
+    if cert.has_san:
+        return cert.san_dns.copy()
+    var cn = _subject_cn(cert)
+    if cn.byte_length() == 0:
+        raise Error("cert_san_names: no SAN extension and no CN found")
+    var out = List[String]()
+    out.append(cn)
+    return out^
 
 
 # ============================================================================
@@ -670,8 +739,113 @@ def hostname_matches_name(name: String, hostname: String) -> Bool:
     return True
 
 
+def parse_ip_literal(host: String) -> List[UInt8]:
+    """4 bytes for a dotted IPv4 literal, 16 for an IPv6 literal, else empty."""
+    var b = host.as_bytes()
+    var n = len(b)
+    var out = List[UInt8]()
+    if n == 0:
+        return out^
+    var has_colon = False
+    for i in range(n):
+        if b[i] == 58:
+            has_colon = True
+    if not has_colon:
+        # IPv4: exactly four decimal parts 0..255, no leading zeros
+        var part = 0
+        var digits = 0
+        var lead_zero = False
+        for i in range(n + 1):
+            if i == n or b[i] == 46:
+                if digits == 0 or len(out) == 4 or (lead_zero and digits > 1):
+                    return List[UInt8]()
+                out.append(UInt8(part))
+                part = 0
+                digits = 0
+                lead_zero = False
+            elif b[i] >= 48 and b[i] <= 57:
+                if digits == 0 and b[i] == 48:
+                    lead_zero = True
+                part = part * 10 + Int(b[i] - 48)
+                digits += 1
+                if part > 255:
+                    return List[UInt8]()
+            else:
+                return List[UInt8]()
+        if len(out) != 4:
+            return List[UInt8]()
+        return out^
+    # IPv6: up to 8 groups of 1-4 hex digits, at most one "::"
+    var head = List[UInt16]()
+    var tail = List[UInt16]()
+    var after_gap = False
+    var i = 0
+    if n >= 2 and b[0] == 58 and b[1] == 58:
+        after_gap = True
+        i = 2
+    elif b[0] == 58:
+        return List[UInt8]()
+    while i < n:
+        var v = 0
+        var digits = 0
+        while i < n and b[i] != 58:
+            var c = b[i]
+            var d: Int
+            if c >= 48 and c <= 57:
+                d = Int(c - 48)
+            elif c >= 97 and c <= 102:
+                d = Int(c - 87)
+            elif c >= 65 and c <= 70:
+                d = Int(c - 55)
+            else:
+                return List[UInt8]()
+            v = v * 16 + d
+            digits += 1
+            if digits > 4:
+                return List[UInt8]()
+            i += 1
+        if digits == 0:
+            return List[UInt8]()
+        if after_gap:
+            tail.append(UInt16(v))
+        else:
+            head.append(UInt16(v))
+        if i < n:  # at a ':'
+            i += 1
+            if i < n and b[i] == 58:
+                if after_gap:
+                    return List[UInt8]()
+                after_gap = True
+                i += 1
+            elif i == n:
+                return List[UInt8]()
+    var total = len(head) + len(tail)
+    if (after_gap and total > 7) or (not after_gap and total != 8):
+        return List[UInt8]()
+    var groups = head.copy()
+    for _ in range(8 - total):
+        groups.append(0)
+    for k in range(len(tail)):
+        groups.append(tail[k])
+    for k in range(8):
+        out.append(UInt8(groups[k] >> 8))
+        out.append(UInt8(groups[k] & 0xFF))
+    return out^
+
+
 def cert_hostname_match(cert: X509Cert, hostname: String) raises:
-    """Verify hostname matches cert SAN/CN. Raises if no match found."""
+    """Verify the certificate is valid for hostname. Raises if not.
+
+    IP literals match iPAddress SAN entries only, never a dNSName or the
+    CN (RFC 6125 §6.2.1). Other names match dNSName entries, or the CN
+    when there is no subjectAltName extension.
+    """
+    var ip = parse_ip_literal(hostname)
+    if len(ip) > 0:
+        for i in range(len(cert.san_ip)):
+            if _bytes_exact_eq(cert.san_ip[i], ip):
+                return
+        raise Error("cert_hostname_match: hostname '" + hostname + "' does not match certificate")
     var names = cert_san_names(cert)
     for i in range(len(names)):
         if hostname_matches_name(names[i], hostname):
@@ -724,6 +898,10 @@ def _parse_asn1_time(content: List[UInt8], is_generalized: Bool) raises -> Int64
     dim[0] = 31; dim[1] = 28; dim[2] = 31; dim[3] = 30
     dim[4] = 31; dim[5] = 30; dim[6] = 31; dim[7] = 31
     dim[8] = 30; dim[9] = 31; dim[10] = 30; dim[11] = 31
+    var leap = (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0)
+    var max_day = dim[month - 1] + (1 if (month == 2 and leap) else 0)
+    if day > max_day:
+        raise Error("time has a day past the end of its month")
 
     # Count days from 1970-01-01 to start of year
     var days = 0
@@ -795,6 +973,106 @@ def _same_public_key(a: X509Cert, b: X509Cert) -> Bool:
 comptime _MAX_CHAIN = 10
 comptime _KU_DIGITAL_SIGNATURE: UInt16 = 1 << 0
 comptime _KU_KEY_CERT_SIGN: UInt16 = 1 << 5
+
+
+comptime _MIN_RSA_BITS = 2048
+
+
+def rsa_modulus_bits(n: List[UInt8]) -> Int:
+    """Bit length of a big-endian RSA modulus."""
+    var i = 0
+    while i < len(n) and n[i] == 0:
+        i += 1
+    if i == len(n):
+        return 0
+    var bits = 8 * (len(n) - i - 1)
+    var top = n[i]
+    while top != 0:
+        bits += 1
+        top >>= 1
+    return bits
+
+
+def _dns_within(name: List[UInt8], base: List[UInt8]) -> Bool:
+    """RFC 5280 §4.2.1.10: name is base or below it ("example.com" covers
+    example.com and *.example.com; ".example.com" covers only subdomains)."""
+    var nb = len(base)
+    var nn = len(name)
+    if nb == 0:
+        return True
+    if base[0] == 46:  # leading dot: subdomains only
+        if nn <= nb:
+            return False
+        for k in range(nb):
+            if name[nn - nb + k] != base[k]:
+                return False
+        return True
+    if nn == nb:
+        for k in range(nb):
+            if name[k] != base[k]:
+                return False
+        return True
+    if nn < nb + 1 or name[nn - nb - 1] != 46:
+        return False
+    for k in range(nb):
+        if name[nn - nb + k] != base[k]:
+            return False
+    return True
+
+
+def _ip_within(ip: List[UInt8], subtree: List[UInt8]) -> Bool:
+    """subtree is address || mask (8 bytes IPv4, 32 bytes IPv6)."""
+    var n = len(subtree) // 2
+    if len(ip) != n:
+        return False
+    for k in range(n):
+        if (ip[k] & subtree[n + k]) != (subtree[k] & subtree[n + k]):
+            return False
+    return True
+
+
+def _check_name_constraints(ca: X509Cert, cert: X509Cert, is_leaf: Bool, at: String) raises:
+    """Apply ca's DNS and IP name constraints to cert's names. The leaf's
+    CN counts as a DNS name when it has no subjectAltName (it is what
+    hostname matching would use)."""
+    var dns = List[List[UInt8]]()
+    for k in range(len(cert.san_dns)):
+        dns.append(_string_lower_bytes(cert.san_dns[k]))
+    if is_leaf and not cert.has_san:
+        var cn = _subject_cn(cert)
+        if cn.byte_length() > 0:
+            dns.append(_string_lower_bytes(cn))
+    for k in range(len(dns)):
+        ref name = dns[k]
+        # a wildcard "*.S" stands for every name below S
+        var wild = len(name) > 2 and name[0] == 42 and name[1] == 46
+        var stem = List[UInt8]()
+        for q in range(2 if wild else 0, len(name)):
+            stem.append(name[q])
+        for e in range(len(ca.nc_excl_dns)):
+            var base = _string_lower_bytes(ca.nc_excl_dns[e])
+            if _dns_within(name, base) or (wild and _dns_within(base, stem)):
+                raise Error(at + ": name constraint excludes " + _bytes_to_string(name))
+        if len(ca.nc_perm_dns) > 0:
+            var ok = False
+            for p in range(len(ca.nc_perm_dns)):
+                if _dns_within(name, _string_lower_bytes(ca.nc_perm_dns[p])):
+                    ok = True
+                    break
+            if not ok:
+                raise Error(at + ": name constraint does not permit " + _bytes_to_string(name))
+    for k in range(len(cert.san_ip)):
+        for e in range(len(ca.nc_excl_ip)):
+            if _ip_within(cert.san_ip[k], ca.nc_excl_ip[e]):
+                raise Error(at + ": name constraint excludes an IP address")
+        if len(ca.nc_perm_ip) > 0:
+            var ok = False
+            for p in range(len(ca.nc_perm_ip)):
+                if _ip_within(cert.san_ip[k], ca.nc_perm_ip[p]):
+                    ok = True
+                    break
+            if not ok:
+                raise Error(at + ": name constraint does not permit an IP address")
 
 
 def cert_chain_verify(
@@ -875,6 +1153,10 @@ def cert_chain_verify(
         ref c = chain[i]
         var at = "cert_chain_verify: certificate at depth " + String(i)
         _check_validity(c, i, now)
+        if c.pub_key_alg == "rsa":
+            var bits = rsa_modulus_bits(c.rsa_n)
+            if bits < _MIN_RSA_BITS:
+                raise Error(at + ": RSA key of " + String(bits) + " bits is too small (minimum 2048)")
         if c.ext_error.byte_length() > 0:
             raise Error(at + " has an " + c.ext_error)
         if i < top and not _bytes_exact_eq(c.issuer_raw, chain[i + 1].subject_raw):
@@ -890,6 +1172,15 @@ def cert_chain_verify(
             raise Error(at + " is not a CA (basicConstraints cA) but issued the certificate below it")
         if c.has_key_usage and (c.key_usage & _KU_KEY_CERT_SIGN) == 0:
             raise Error(at + ": keyUsage does not allow keyCertSign")
+        # An intermediate's extendedKeyUsage limits what it may issue for
+        # (as OpenSSL, Go and browsers enforce)
+        if c.has_eku and not (c.eku_server_auth or c.eku_any):
+            raise Error(at + ": extendedKeyUsage of the issuing CA does not allow serverAuth")
+        if c.has_nc:
+            if c.nc_unsupported:
+                raise Error(at + ": unsupported name constraint form (only DNS and IP are enforced)")
+            for j in range(i):
+                _check_name_constraints(c, chain[j], j == 0, at)
         if c.path_len >= 0 and cas_below > c.path_len:
             raise Error(at + ": path length constraint exceeded")
         if not _bytes_exact_eq(c.issuer_raw, c.subject_raw):

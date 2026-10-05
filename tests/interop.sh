@@ -98,6 +98,72 @@ scenario "TLS 1.2 without extended master secret (server -no_ems)" \
     "New, TLSv1.2, Cipher is;;Extended master secret: no" \
     -- -tls1_2 -no_ems
 
+# ── Security review fixes (1.6.0) ───────────────────────────────────────────
+scenario "TLS 1.3 handshake messages fragmented across records" \
+    "New, TLSv1.3, Cipher is" \
+    -- -tls1_3 -max_send_frag 512 -cert_chain "$WORK/ca.pem"
+scenario "TLS 1.3 CertificateRequest answered with an empty Certificate" \
+    "New, TLSv1.3, Cipher is;;no client certificate available" \
+    -- -tls1_3 -verify 1
+scenario "TLS 1.2 mTLS over ECDHE-ECDSA-AES256-GCM-SHA384" \
+    "New, TLSv1.2, Cipher is ECDHE-ECDSA-AES256-GCM-SHA384;;CN=interop-client" "$CLIENT_CERT_HEX" "$CLIENT_KEY_HEX" \
+    -- -tls1_2 -cipher ECDHE-ECDSA-AES256-GCM-SHA384 -Verify 1 -CAfile "$WORK/ca.pem"
+
+# hostile <name> <mode> <expect> [upstream s_server args...]
+# expect: "ok:<page check>" (handshake must succeed) or "fail:<error text>"
+# (the client must exit with a clean error: status 1, not an abort).
+# flood/bigmsg must also make the client hang up after < 16 MB (the count
+# includes kernel socket buffers, ~0.6 MB on macOS and ~2.7 MB on Linux;
+# an unbounded client would take all 64 MB the server sends).
+hostile() {
+    local name="$1" mode="$2" expect="$3"
+    shift 3
+    PORT=$((PORT + 1))
+    local hport=$PORT arg="" upstream=""
+    if [ $# -gt 0 ]; then
+        PORT=$((PORT + 1))
+        openssl s_server -accept "$PORT" -cert "$WORK/server.pem" -key "$WORK/server.key" \
+            -www "$@" > "$WORK/server.log" 2>&1 &
+        upstream=$!
+        arg=$PORT
+        sleep 1
+    fi
+    [ "$mode" = "crashcert" ] && arg="tests/crash_cert.hex"
+    python3 tests/hostile_server.py "$mode" "$hport" $arg > "$WORK/hostile.log" 2>&1 &
+    local hs=$!
+    sleep 1
+    "$WORK/client" "$hport" "$CA_HEX" > "$WORK/page.txt" 2>&1
+    local rc=$?
+    sleep 0.5
+    kill "$hs" 2>/dev/null; wait "$hs" 2>/dev/null
+    [ -n "$upstream" ] && { kill "$upstream" 2>/dev/null; wait "$upstream" 2>/dev/null; }
+    local ok=1 detail=""
+    case "$expect" in
+        ok:*) [ $rc -eq 0 ] && grep -qF -- "${expect#ok:}" "$WORK/page.txt" || { ok=0; detail="expected success"; } ;;
+        fail:*) [ $rc -eq 1 ] && grep -qF -- "${expect#fail:}" "$WORK/page.txt" || { ok=0; detail="expected a clean error containing '${expect#fail:}' (exit $rc)"; } ;;
+    esac
+    if grep -q "^sent " "$WORK/hostile.log"; then
+        local sent; sent=$(sed -n 's/^sent \([0-9]*\) bytes/\1/p' "$WORK/hostile.log")
+        [ "$sent" -lt 16000000 ] || { ok=0; detail="client accepted $sent bytes before giving up"; }
+        detail="$detail (server sent $sent bytes)"
+    fi
+    if [ $ok -eq 1 ]; then
+        echo "PASS: hostile: $name $detail"
+    else
+        echo "FAIL: hostile: $name: $detail"
+        tail -3 "$WORK/page.txt" | sed 's/^/    client: /'
+        FAILURES=$((FAILURES + 1))
+    fi
+}
+
+hostile "endless handshake messages after ServerHello" flood "fail:unexpected_message"
+hostile "16 MB Certificate message" bigmsg "fail:handshake message too large"
+hostile "bad ServerHello (cipher, compression, extension)" badsh "fail:illegal_parameter"
+hostile "malformed certificate (empty EC point; aborted 1.5.0)" crashcert "fail:asn1:"
+hostile "unknown handshake message injected" inject "fail:unexpected_message" -tls1_2
+hostile "server CCS dropped, junk application data" dropccs "fail:ChangeCipherSpec" -tls1_2
+hostile "ServerHello coalesced with the next message (legal)" coalesce "ok:New, TLSv1.2, Cipher is" -tls1_2
+
 echo
 if [ "$FAILURES" -gt 0 ]; then
     echo "$FAILURES scenario(s) failed"

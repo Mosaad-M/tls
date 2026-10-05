@@ -25,6 +25,7 @@ comptime HS_SERVER_HELLO       : UInt8 = 0x02
 comptime HS_NEW_SESSION_TICKET : UInt8 = 0x04
 comptime HS_ENCRYPTED_EXTS     : UInt8 = 0x08
 comptime HS_CERTIFICATE        : UInt8 = 0x0B
+comptime HS_CERT_REQUEST       : UInt8 = 0x0D
 comptime HS_CERT_VERIFY        : UInt8 = 0x0F
 comptime HS_FINISHED           : UInt8 = 0x14
 
@@ -192,45 +193,103 @@ def _build_alpn_ext(protocols: List[String]) -> List[UInt8]:
 
 
 def parse_alpn_from_ee(ee_body: List[UInt8]) -> String:
-    """Parse the ALPN extension from an EncryptedExtensions body.
-
-    Wire format of ee_body:
-        extensions_total_length  2 bytes
-        [ext_type(2) + ext_len(2) + ext_data(ext_len)]*
-
-    Returns the first (and only) protocol name the server selected,
-    or "" if the ALPN extension is absent or the body is malformed.
-    """
-    var n = len(ee_body)
-    if n < 2:
+    """The ALPN protocol in an EncryptedExtensions body, or "" (lenient;
+    kept for compatibility, the handshake uses validate_encrypted_extensions)."""
+    try:
+        var offered = List[String]()
+        return validate_encrypted_extensions(ee_body, offered, True)
+    except:
         return String("")
+
+
+def validate_encrypted_extensions(
+    ee_body: List[UInt8], offered_alpn: List[String], any_alpn: Bool = False
+) raises -> String:
+    """Validate an EncryptedExtensions body and return the ALPN protocol
+    the server selected ("" if none).
+
+    RFC 8446 §4.2 / §4.3.1: the block must be well-formed with no duplicate
+    extensions; only extensions the client offered and that may appear in
+    EncryptedExtensions are allowed (server_name, supported_groups, ALPN).
+    ALPN must name exactly one protocol from offered_alpn.
+    """
+    if len(ee_body) < 2:
+        raise Error("tls: EncryptedExtensions too short (decode_error)")
     var total = (Int(ee_body[0]) << 8) | Int(ee_body[1])
+    if 2 + total != len(ee_body):
+        raise Error("tls: EncryptedExtensions length mismatch (decode_error)")
+    var alpn = String("")
+    var seen = List[UInt16]()
     var off = 2
-    var end = off + total
-    if end > n:
-        end = n
-    while off + 4 <= end:
-        var ext_type = (UInt16(ee_body[off]) << 8) | UInt16(ee_body[off + 1])
-        var ext_len  = (Int(ee_body[off + 2]) << 8) | Int(ee_body[off + 3])
+    while off < len(ee_body):
+        if off + 4 > len(ee_body):
+            raise Error("tls: EncryptedExtensions truncated (decode_error)")
+        var ext_type = _read_u16be(ee_body, off)
+        var ext_len = Int(_read_u16be(ee_body, off + 2))
         off += 4
-        if off + ext_len > end:
-            break
-        if ext_type == EXT_ALPN:
-            # ext_data: 2-byte ProtocolList length, then 1-byte name_len + name
+        if off + ext_len > len(ee_body):
+            raise Error("tls: EncryptedExtensions extension overruns (decode_error)")
+        for k in range(len(seen)):
+            if seen[k] == ext_type:
+                raise Error("tls: duplicate extension in EncryptedExtensions (illegal_parameter)")
+        seen.append(ext_type)
+        if ext_type == EXT_SERVER_NAME:
+            if ext_len != 0:
+                raise Error("tls: non-empty server_name in EncryptedExtensions (decode_error)")
+        elif ext_type == EXT_SUPPORTED_GROUPS:
+            pass  # the server's group preference: informational
+        elif ext_type == EXT_ALPN:
+            if len(offered_alpn) == 0 and not any_alpn:
+                raise Error("tls: ALPN in EncryptedExtensions but none offered (unsupported_extension)")
+            # ProtocolNameList with exactly one non-empty name
             if ext_len < 4:
-                return String("")
-            # pl_len = protocol list byte count
-            var pl_off = off + 2  # skip ProtocolList length field
-            var name_len = Int(ee_body[pl_off])
-            pl_off += 1
-            if pl_off + name_len > off + ext_len:
-                return String("")
-            var name_bytes = List[UInt8](capacity=name_len + 1)
-            for k in range(name_len):
-                name_bytes.append(ee_body[pl_off + k])
-            return String(unsafe_from_utf8=name_bytes^)
+                raise Error("tls: bad ALPN extension (decode_error)")
+            var list_len = (Int(ee_body[off]) << 8) | Int(ee_body[off + 1])
+            var name_len = Int(ee_body[off + 2])
+            if list_len != ext_len - 2 or name_len == 0 or name_len != list_len - 1:
+                raise Error("tls: ALPN must select exactly one protocol (illegal_parameter)")
+            var name = _slice(ee_body, off + 3, off + 3 + name_len)
+            var matched = any_alpn
+            for k in range(len(offered_alpn)):
+                var cand = offered_alpn[k].as_bytes()
+                if len(cand) == name_len:
+                    var same = True
+                    for q in range(name_len):
+                        if cand[q] != name[q]:
+                            same = False
+                            break
+                    if same:
+                        matched = True
+                        alpn = offered_alpn[k]
+                        break
+            if not matched:
+                raise Error("tls: server selected an ALPN protocol that was not offered (illegal_parameter)")
+            if any_alpn and alpn.byte_length() == 0:
+                for q in range(name_len):
+                    if name[q] < 0x20 or name[q] > 0x7E:
+                        raise Error("tls: non-printable ALPN protocol name")
+                alpn = String(unsafe_from_utf8=name^)
+        else:
+            raise Error(
+                "tls: extension " + String(Int(ext_type))
+                + " not allowed in EncryptedExtensions (unsupported_extension)"
+            )
         off += ext_len
-    return String("")
+    return alpn
+
+
+def _is_ip_literal(host: String) -> Bool:
+    """IPv4 dotted digits, or anything containing ':' (IPv6)."""
+    var b = host.as_bytes()
+    if len(b) == 0:
+        return False
+    var only_digits_dots = True
+    for i in range(len(b)):
+        if b[i] == 58:
+            return True
+        if b[i] != 46 and (b[i] < 48 or b[i] > 57):
+            only_digits_dots = False
+    return only_digits_dots
 
 
 def build_client_hello(
@@ -280,21 +339,22 @@ def build_client_hello(
 
     var exts = List[UInt8](capacity=128)
 
-    # server_name (SNI)
-    var sni_bytes_span = sni.as_bytes()
-    var sni_bytes = List[UInt8](capacity=len(sni_bytes_span))
-    for i in range(len(sni_bytes_span)):
-        sni_bytes.append(sni_bytes_span[i])
-    var sni_name_len = len(sni_bytes)
-    # ServerNameList = type(1) + len(2) + name
-    var sni_list_len = 1 + 2 + sni_name_len
-    var sni_ext_data_len = 2 + sni_list_len
-    _append_u16be(exts, EXT_SERVER_NAME)
-    _append_u16be(exts, UInt16(sni_ext_data_len))
-    _append_u16be(exts, UInt16(sni_list_len))     # ServerNameList length
-    _append_u8(exts, 0)                            # name_type = host_name
-    _append_u16be(exts, UInt16(sni_name_len))
-    _append_bytes(exts, sni_bytes)
+    # server_name (SNI): DNS names only, never IP literals (RFC 6066 §3)
+    if not _is_ip_literal(sni):
+        var sni_bytes_span = sni.as_bytes()
+        var sni_bytes = List[UInt8](capacity=len(sni_bytes_span))
+        for i in range(len(sni_bytes_span)):
+            sni_bytes.append(sni_bytes_span[i])
+        var sni_name_len = len(sni_bytes)
+        # ServerNameList = type(1) + len(2) + name
+        var sni_list_len = 1 + 2 + sni_name_len
+        var sni_ext_data_len = 2 + sni_list_len
+        _append_u16be(exts, EXT_SERVER_NAME)
+        _append_u16be(exts, UInt16(sni_ext_data_len))
+        _append_u16be(exts, UInt16(sni_list_len))     # ServerNameList length
+        _append_u8(exts, 0)                            # name_type = host_name
+        _append_u16be(exts, UInt16(sni_name_len))
+        _append_bytes(exts, sni_bytes)
 
     # supported_versions: TLS 1.3 (0x0304) + TLS 1.2 (0x0303)
     _append_u16be(exts, EXT_SUPPORTED_VERSIONS)
@@ -408,7 +468,9 @@ def parse_server_hello(body: List[UInt8]) raises -> ServerHello:
     var off = 0
     if off + 2 > len(body):
         raise Error("parse_server_hello: too short for legacy_version")
-    off += 2  # skip legacy_version
+    if _read_u16be(body, 0) != 0x0303:
+        raise Error("parse_server_hello: legacy_version must be 0x0303 (protocol_version)")
+    off += 2
 
     # random (32 bytes)
     if off + 32 > len(body):
@@ -425,6 +487,8 @@ def parse_server_hello(body: List[UInt8]) raises -> ServerHello:
         raise Error("parse_server_hello: session_id truncated")
     var sid = _slice(body, off, off + sid_len)
     off += sid_len
+    if sid_len > 32:
+        raise Error("parse_server_hello: session_id longer than 32 bytes (decode_error)")
 
     # cipher_suite
     if off + 2 > len(body):
@@ -432,16 +496,36 @@ def parse_server_hello(body: List[UInt8]) raises -> ServerHello:
     var cs = _read_u16be(body, off)
     off += 2
 
-    # compression method (skip)
+    # compression method: must be null
+    if off >= len(body) or body[off] != 0:
+        raise Error("parse_server_hello: compression method must be null (illegal_parameter)")
     off += 1
 
-    # extensions
+    # extensions: absent (TLS 1.2 only), or a block that ends the message
     var ext_bytes = List[UInt8]()
-    if off + 2 <= len(body):
+    if off != len(body):
+        if off + 2 > len(body):
+            raise Error("parse_server_hello: truncated extensions length (decode_error)")
         var ext_len = Int(_read_u16be(body, off))
         off += 2
-        if off + ext_len <= len(body):
-            ext_bytes = _slice(body, off, off + ext_len)
+        if off + ext_len != len(body):
+            raise Error("parse_server_hello: extensions length mismatch (decode_error)")
+        ext_bytes = _slice(body, off, off + ext_len)
+        # well-formed list, no duplicates
+        var e = 0
+        var seen = List[UInt16]()
+        while e < len(ext_bytes):
+            if e + 4 > len(ext_bytes):
+                raise Error("parse_server_hello: extension truncated (decode_error)")
+            var t = _read_u16be(ext_bytes, e)
+            var l = Int(_read_u16be(ext_bytes, e + 2))
+            if e + 4 + l > len(ext_bytes):
+                raise Error("parse_server_hello: extension overruns (decode_error)")
+            for k in range(len(seen)):
+                if seen[k] == t:
+                    raise Error("parse_server_hello: duplicate extension (illegal_parameter)")
+            seen.append(t)
+            e += 4 + l
 
     var sh = ServerHello()
     sh.random       = rand^
@@ -529,6 +613,9 @@ def parse_hello_retry_request(body: List[UInt8]) raises -> HelloRetryRequest:
     X25519, the group already sent). Errors carry the alert the RFC prescribes.
     """
     var sh = parse_server_hello(body)
+    if len(sh.session_id) != 0:
+        # TLS 1.3 legacy_session_id_echo: we send an empty legacy_session_id
+        raise Error("tls: HelloRetryRequest session_id does not echo ours (illegal_parameter)")
     var hrr = HelloRetryRequest()
     hrr.cipher_suite = sh.cipher_suite
     if sh.cipher_suite != CIPHER_TLS_AES_128_GCM_SHA256 and sh.cipher_suite != CIPHER_TLS_AES_256_GCM_SHA384 \
@@ -565,8 +652,10 @@ def parse_hello_retry_request(body: List[UInt8]) raises -> HelloRetryRequest:
         raise Error("tls: HelloRetryRequest without TLS 1.3 supported_versions (illegal_parameter)")
     if not have_group and len(hrr.cookie) == 0:
         raise Error("tls: HelloRetryRequest that would not change the ClientHello (illegal_parameter)")
-    if not have_group or (hrr.selected_group != GROUP_SECP256R1 and hrr.selected_group != GROUP_SECP384R1):
+    if have_group and hrr.selected_group != GROUP_SECP256R1 and hrr.selected_group != GROUP_SECP384R1:
         raise Error("tls: HelloRetryRequest selected a group we cannot use (illegal_parameter)")
+    if not have_group:
+        hrr.selected_group = GROUP_X25519  # cookie-only: keep the X25519 share
     return hrr^
 
 
@@ -586,39 +675,85 @@ def hrr_message_hash(client_hello1: List[UInt8], use_sha384: Bool) -> List[UInt8
 # ============================================================================
 
 def parse_certificate_chain(body: List[UInt8]) raises -> List[List[UInt8]]:
-    """Parse TLS 1.3 Certificate message body → list of DER cert bytes."""
-    var off = 0
+    """Parse a TLS 1.3 server Certificate body → DER certificates.
 
-    # certificate_request_context (1-byte length + bytes)
-    if off >= len(body):
-        raise Error("parse_certificate_chain: body empty")
-    var ctx_len = Int(body[off])
-    off += 1 + ctx_len
-
-    # CertificateList: 3-byte length
-    if off + 3 > len(body):
-        raise Error("parse_certificate_chain: no cert_list length")
-    var list_len = _read_u24be(body, off)
-    off += 3
-
-    var list_end = off + list_len
+    Strict (RFC 8446 §4.4.2): certificate_request_context must be empty,
+    every length must be exact, there must be at least one certificate,
+    and nothing may follow the list.
+    """
+    if len(body) < 4:
+        raise Error("tls: Certificate message too short (decode_error)")
+    if body[0] != 0:
+        raise Error("tls: non-empty certificate_request_context from server (illegal_parameter)")
+    var list_len = _read_u24be(body, 1)
+    if 4 + list_len != len(body):
+        raise Error("tls: Certificate list length mismatch (decode_error)")
+    var off = 4
     var certs = List[List[UInt8]]()
-
-    while off + 3 <= list_end:
+    while off < len(body):
+        if off + 3 > len(body):
+            raise Error("tls: CertificateEntry truncated (decode_error)")
         var cert_len = _read_u24be(body, off)
         off += 3
-        if off + cert_len > list_end:
-            raise Error("parse_certificate_chain: cert data truncated")
-        var cert_der = _slice(body, off, off + cert_len)
-        certs.append(cert_der^)
+        if cert_len == 0 or off + cert_len > len(body):
+            raise Error("tls: bad certificate length (decode_error)")
+        certs.append(_slice(body, off, off + cert_len))
         off += cert_len
-
-        # Skip CertificateEntry extensions (2-byte length + bytes)
-        if off + 2 <= list_end:
-            var ext_len = Int(_read_u16be(body, off))
-            off += 2 + ext_len
-
+        if off + 2 > len(body):
+            raise Error("tls: CertificateEntry extensions missing (decode_error)")
+        var ext_len = Int(_read_u16be(body, off))
+        off += 2
+        if off + ext_len > len(body):
+            raise Error("tls: CertificateEntry extensions overrun (decode_error)")
+        off += ext_len
+    if len(certs) == 0:
+        raise Error("tls: empty server Certificate (decode_error)")
     return certs^
+
+
+def parse_certificate_request13(body: List[UInt8]) raises -> List[UInt8]:
+    """Parse a TLS 1.3 CertificateRequest; return certificate_request_context.
+    The extensions block must be exact and include signature_algorithms."""
+    if len(body) < 1:
+        raise Error("tls: CertificateRequest too short (decode_error)")
+    var ctx_len = Int(body[0])
+    if 1 + ctx_len + 2 > len(body):
+        raise Error("tls: CertificateRequest truncated (decode_error)")
+    var ctx = _slice(body, 1, 1 + ctx_len)
+    var off = 1 + ctx_len
+    var total = Int(_read_u16be(body, off))
+    off += 2
+    if off + total != len(body):
+        raise Error("tls: CertificateRequest length mismatch (decode_error)")
+    var has_sig_algs = False
+    while off < len(body):
+        if off + 4 > len(body):
+            raise Error("tls: CertificateRequest extension truncated (decode_error)")
+        var ext_type = _read_u16be(body, off)
+        var ext_len = Int(_read_u16be(body, off + 2))
+        off += 4
+        if off + ext_len > len(body):
+            raise Error("tls: CertificateRequest extension overruns (decode_error)")
+        if ext_type == EXT_SIG_ALGS:
+            has_sig_algs = True
+        off += ext_len
+    if not has_sig_algs:
+        raise Error("tls: CertificateRequest without signature_algorithms (missing_extension)")
+    return ctx^
+
+
+def build_empty_certificate13(request_context: List[UInt8]) -> List[UInt8]:
+    """Client Certificate message with no certificates (RFC 8446 §4.4.2):
+    the client declines a CertificateRequest."""
+    var body = List[UInt8]()
+    _append_u8(body, UInt8(len(request_context)))
+    _append_bytes(body, request_context)
+    _append_u24be(body, 0)
+    var out = List[UInt8]()
+    _append_u8(out, HS_CERTIFICATE)
+    _append_u24be(out, len(body))
+    _append_bytes(out, body)
+    return out^
 
 
 # ============================================================================
@@ -626,13 +761,13 @@ def parse_certificate_chain(body: List[UInt8]) raises -> List[List[UInt8]]:
 # ============================================================================
 
 def parse_cert_verify(body: List[UInt8]) raises -> Tuple[UInt16, List[UInt8]]:
-    """Parse CertificateVerify body → (sig_scheme, sig_bytes)."""
+    """Parse CertificateVerify body → (sig_scheme, sig_bytes); lengths exact."""
     if len(body) < 4:
         raise Error("parse_cert_verify: too short")
     var scheme = _read_u16be(body, 0)
     var sig_len = Int(_read_u16be(body, 2))
-    if 4 + sig_len > len(body):
-        raise Error("parse_cert_verify: signature truncated")
+    if 4 + sig_len != len(body):
+        raise Error("parse_cert_verify: signature length mismatch (decode_error)")
     var sig = _slice(body, 4, 4 + sig_len)
     return (scheme, sig^)
 
