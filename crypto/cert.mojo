@@ -621,47 +621,61 @@ def cert_san_names(cert: X509Cert) raises -> List[String]:
 # cert_hostname_match — RFC 6125 hostname matching
 # ============================================================================
 
+def _is_ipv4_literal(host: List[UInt8]) -> Bool:
+    """True when host is only digits and dots (an IPv4 address literal)."""
+    if len(host) == 0:
+        return False
+    for i in range(len(host)):
+        var c = host[i]
+        if c != 46 and (c < 48 or c > 57):
+            return False
+    return True
+
+
+def hostname_matches_name(name: String, hostname: String) -> Bool:
+    """RFC 6125 match of one certificate name against hostname.
+
+    Case-insensitive. "*.example.com" matches exactly one extra leftmost
+    label ("a.example.com", not "example.com" or "a.b.example.com"). The
+    wildcard needs at least two labels after it, so "*.com" matches
+    nothing, and a wildcard never matches an IPv4 literal.
+    """
+    var name_lower = _string_lower_bytes(name)
+    var host_lower = _string_lower_bytes(hostname)
+
+    if not (len(name_lower) > 2 and name_lower[0] == 42 and name_lower[1] == 46):
+        return _bytes_lower_eq(name_lower, host_lower)
+
+    # name is "*.suffix"; the suffix (after "*.") needs an inner dot
+    var suffix_dots = 0
+    for j in range(2, len(name_lower)):
+        if name_lower[j] == 46:
+            suffix_dots += 1
+    if suffix_dots == 0 or name_lower[len(name_lower) - 1] == 46:
+        return False
+    if _is_ipv4_literal(host_lower):
+        return False
+
+    # host = label + ".suffix", where label is non-empty and has no dot
+    var dot_suffix_len = len(name_lower) - 1
+    if len(host_lower) <= dot_suffix_len:
+        return False
+    var tail = len(host_lower) - dot_suffix_len
+    for j in range(dot_suffix_len):
+        if host_lower[tail + j] != name_lower[1 + j]:
+            return False
+    for j in range(tail):
+        if host_lower[j] == 46:
+            return False
+    return True
+
+
 def cert_hostname_match(cert: X509Cert, hostname: String) raises:
     """Verify hostname matches cert SAN/CN. Raises if no match found."""
     var names = cert_san_names(cert)
-    var host_lower = _string_lower_bytes(hostname)
-
     for i in range(len(names)):
-        var name = names[i]
-        var name_lower = _string_lower_bytes(name)
-
-        # Wildcard match: "*.example.com" matches "foo.example.com" but NOT
-        # "foo.bar.example.com" or "example.com"
-        if len(name_lower) > 2 and name_lower[0] == 42 and name_lower[1] == 46:
-            # name is "*.suffix" — wildcard
-            var suffix = List[UInt8](capacity=len(name_lower) - 1)
-            for j in range(1, len(name_lower)):
-                suffix.append(name_lower[j])
-            # host must end with suffix AND have exactly one label before it
-            if len(host_lower) > len(suffix):
-                # Check that host ends with suffix
-                var host_tail_start = len(host_lower) - len(suffix)
-                var tail_matches = True
-                for j in range(len(suffix)):
-                    if host_lower[host_tail_start + j] != suffix[j]:
-                        tail_matches = False
-                        break
-                if tail_matches:
-                    # The part before the suffix must be one label (no dots)
-                    var prefix = List[UInt8](capacity=host_tail_start)
-                    for j in range(host_tail_start):
-                        prefix.append(host_lower[j])
-                    var has_dot = False
-                    for j in range(len(prefix)):
-                        if prefix[j] == 46:  # '.'
-                            has_dot = True
-                            break
-                    if not has_dot and len(prefix) > 0:
-                        return  # match!
-        else:
-            # Exact match (case-insensitive)
-            if _bytes_lower_eq(name_lower, host_lower):
-                return  # match!
+        if hostname_matches_name(names[i], hostname):
+            return
 
     raise Error("cert_hostname_match: hostname '" + hostname + "' does not match certificate")
 

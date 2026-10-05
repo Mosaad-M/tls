@@ -14,7 +14,11 @@
 #           Returns ALPN protocol selected by the server, or "" if not negotiated.
 #       def send(mut self, data: List[UInt8]) raises -> Int
 #       def recv(mut self, max_bytes: Int) raises -> List[UInt8]
-#       def recv_all(mut self, max_size: Int = 16*1024*1024) raises -> List[UInt8]
+#       def recv_all(mut self, max_size: Int = 16*1024*1024,
+#                    allow_truncation: Bool = False) raises -> List[UInt8]
+#           Reads until an authenticated close_notify; a bare TCP close
+#           raises "tls: truncated: ..." unless allow_truncation is True.
+#       def close_notify_received(self) -> Bool
 #       def close(mut self) raises
 # ============================================================================
 
@@ -34,8 +38,8 @@ from crypto.record import (
 )
 from tls.connection import (
     tls13_after_server_hello, tls_cipher_from_suite, TlsKeys,
-    tls_tcp_read, tls_tcp_write,
-    tls_handle_incoming_alert,
+    tls_tcp_read, tls_tcp_write, tls_tcp_read_record,
+    tls_handle_incoming_alert, tls_send_plaintext_alert,
     ALERT_LEVEL_WARNING, ALERT_CLOSE_NOTIFY,
 )
 from tls.connection12 import (
@@ -47,8 +51,10 @@ from tls.message import (
     HS_SERVER_HELLO, HS_NEW_SESSION_TICKET,
 )
 from crypto.handshake import tls13_psk_from_ticket
-from tls.message12 import parse_server_hello_version
+from tls.message12 import parse_server_hello_version, check_downgrade_sentinel
 
+comptime _ALERT_UNEXPECTED_MESSAGE : UInt8 = 10
+comptime _ALERT_ILLEGAL_PARAMETER  : UInt8 = 47
 
 # ── Internal helpers ────────────────────────────────────────────────────────────
 
@@ -159,6 +165,7 @@ struct TlsSocket(Movable):
     var _keys12: TlsKeys12  # TLS 1.2 keying material (used when _is12=True)
     var _buf:    List[UInt8] # buffered decrypted application bytes
     var _is12:   Bool        # True if TLS 1.2 was negotiated
+    var _close_notify: Bool  # True once an authenticated close_notify arrived
 
     def __init__(out self, tcp_fd: Int32 = 0):
         self._fd     = tcp_fd
@@ -166,6 +173,7 @@ struct TlsSocket(Movable):
         self._keys12 = TlsKeys12()
         self._buf    = List[UInt8]()
         self._is12   = False
+        self._close_notify = False
 
     def __moveinit__(out self, deinit take: Self):
         self._fd     = take._fd
@@ -173,6 +181,7 @@ struct TlsSocket(Movable):
         self._keys12 = take._keys12^
         self._buf    = take._buf^
         self._is12   = take._is12
+        self._close_notify = take._close_notify
 
     def connect(
         mut self,
@@ -265,6 +274,7 @@ struct TlsSocket(Movable):
                 raise Error(String(e))
         else:
             # ── TLS 1.2 path ──────────────────────────────────────────────────
+            self._check_downgrade(server_random)
             var use_sha384 = (cipher_suite == 0xC030 or cipher_suite == 0xC02C)
             try:
                 self._keys12 = tls12_client_handshake(
@@ -349,6 +359,7 @@ struct TlsSocket(Movable):
 
         if use_tls13:
             raise Error("mTLS: requires TLS 1.2; server negotiated TLS 1.3")
+        self._check_downgrade(server_random)
 
         var use_sha384 = (cipher_suite == 0xC030 or cipher_suite == 0xC02C)
         try:
@@ -362,6 +373,15 @@ struct TlsSocket(Movable):
         except e:
             self._is12 = False
             raise Error(String(e))
+
+    def _check_downgrade(self, server_random: List[UInt8]) raises:
+        """Send illegal_parameter and raise if a TLS 1.2 ServerHello carries
+        the TLS 1.3 downgrade sentinel."""
+        try:
+            check_downgrade_sentinel(server_random)
+        except e:
+            tls_send_plaintext_alert(self._fd, _ALERT_ILLEGAL_PARAMETER)
+            raise e^
 
     def send(mut self, data: List[UInt8]) raises -> Int:
         """Encrypt data as a TLS ApplicationData record and write to socket."""
@@ -403,48 +423,52 @@ struct TlsSocket(Movable):
             self._keys.client_seqno += 1
         return len(data)
 
+    def _handle_alert(mut self, alert_body: List[UInt8]) raises:
+        """Handle a decrypted alert. Always raises; close_notify sets the flag."""
+        if len(alert_body) == 2 and alert_body[1] == ALERT_CLOSE_NOTIFY:
+            self._close_notify = True
+        tls_handle_incoming_alert(alert_body)
+        raise Error("tls: alert (unreachable)")
+
     def _fill_buf_12(mut self) raises:
-        """Read and decrypt one TLS 1.2 record, appending plaintext to _buf."""
+        """Read and decrypt one TLS 1.2 record, appending plaintext to _buf.
+
+        After the handshake every alert must be encrypted: a plaintext or
+        undecryptable alert is an attack, never a shutdown.
+        """
         while True:
-            var header = tls_tcp_read(self._fd, 5)
-            var rtype = header[0]
-            var rlen = (Int(header[3]) << 8) | Int(header[4])
-            if rlen < 8 + 16:  # must have at least explicit_nonce + tag
-                # Could be a short alert — read and handle
-                var rbody = tls_tcp_read(self._fd, rlen)
-                if rtype == CTYPE_CHANGE_CIPHER_SPEC:
-                    continue
-                if rtype == CTYPE_ALERT and rlen >= 2:
-                    tls_handle_incoming_alert(rbody)
-                raise Error("tls12_socket: record too short: " + String(rlen))
-            if rlen > 16640:
-                raise Error("tls12_socket: record too large: " + String(rlen))
-            var rbody = tls_tcp_read(self._fd, rlen)
+            var rec = tls_tcp_read_record(self._fd)
+            var rtype = rec[0][0]
+            var rbody = rec[1].copy()
+            var rlen = len(rbody)
 
             if rtype == CTYPE_CHANGE_CIPHER_SPEC:
                 continue
 
             if rtype == CTYPE_ALERT:
-                # Post-handshake alerts are encrypted
+                if rlen < 8 + 16:
+                    raise Error("tls: unexpected plaintext alert after handshake (unexpected_message)")
+                var alert_plain: List[UInt8]
                 try:
-                    var plain = record_open_12(
+                    alert_plain = record_open_12(
                         UInt8(self._keys12.cipher),
                         self._keys12.server_write_key,
                         self._keys12.server_write_iv,
                         self._keys12.server_seqno,
                         rtype, rbody,
                     )
-                    self._keys12.server_seqno += 1
-                    tls_handle_incoming_alert(plain)
-                except e:
-                    if _sock_contains(String(e), "close_notify"):
-                        raise Error(String(e))
-                    # Decryption failed — try as plaintext
-                    tls_handle_incoming_alert(rbody)
-                raise Error("tls12_socket: alert (unreachable)")
+                except:
+                    raise Error("tls: bad_record_mac (alert failed to decrypt)")
+                self._keys12.server_seqno += 1
+                self._handle_alert(alert_plain)
 
             if rtype != CTYPE_APPLICATION_DATA:
-                continue  # skip unexpected record types
+                raise Error(
+                    "tls: unexpected record type " + String(Int(rtype))
+                    + " after handshake (unexpected_message)"
+                )
+            if rlen < 8 + 16:  # must have at least explicit_nonce + tag
+                raise Error("tls12_socket: record too short: " + String(rlen))
 
             var plain = record_open_12(
                 UInt8(self._keys12.cipher),
@@ -456,45 +480,43 @@ struct TlsSocket(Movable):
             if self._keys12.server_seqno >= UInt64(4611686018427387904):
                 raise Error("tls: server sequence number overflow")
             self._keys12.server_seqno += 1
+            if len(plain) == 0:
+                continue  # empty records are legal; never report them as EOF
             _sock_append_bytes(self._buf, plain)
             return  # one record successfully decrypted
 
     def _fill_buf(mut self) raises:
         """Read and decrypt one TLS ApplicationData record, appending plaintext to _buf.
 
-        Raises "tls: close_notify" on clean shutdown.
-        Skips ChangeCipherSpec and non-ApplicationData records silently.
+        Raises "tls: close_notify" on an authenticated shutdown, and
+        "tls: connection closed without close_notify" when TCP closes
+        without one. Collects NewSessionTicket messages along the way.
         """
         if self._is12:
             self._fill_buf_12()
             return
 
         while True:
-            # Read 5-byte TLS record header
-            var header = tls_tcp_read(self._fd, 5)
+            var rec = tls_tcp_read_record(self._fd)
+            var header = rec[0].copy()
+            var rbody = rec[1].copy()
             var rtype = header[0]
-            var rlen = (Int(header[3]) << 8) | Int(header[4])
-            if rlen > 16640:
-                raise Error("tls_socket: recv record too large: " + String(rlen))
-            var rbody = tls_tcp_read(self._fd, rlen)
 
             if rtype == CTYPE_CHANGE_CIPHER_SPEC:
                 continue
 
             if rtype == CTYPE_ALERT:
-                tls_handle_incoming_alert(rbody)
-                raise Error("tls_socket: alert (unreachable)")
+                # TLS 1.3 alerts after the handshake are always encrypted
+                raise Error("tls: unexpected plaintext alert after handshake (unexpected_message)")
 
             if rtype != CTYPE_APPLICATION_DATA:
-                continue  # skip unexpected record types
+                raise Error(
+                    "tls: unexpected record type " + String(Int(rtype))
+                    + " after handshake (unexpected_message)"
+                )
 
             # Reconstruct full record for record_open
-            var full_record = List[UInt8](capacity=5 + rlen)
-            full_record.append(rtype)
-            full_record.append(header[1])
-            full_record.append(header[2])
-            full_record.append(header[3])
-            full_record.append(header[4])
+            var full_record = header^
             _sock_append_bytes(full_record, rbody)
 
             var decrypted = record_open(
@@ -512,8 +534,7 @@ struct TlsSocket(Movable):
             var plaintext  = decrypted[1].copy()
 
             if inner_type == CTYPE_ALERT:
-                tls_handle_incoming_alert(plaintext)
-                raise Error("tls_socket: alert (unreachable)")
+                self._handle_alert(plaintext)
 
             if inner_type == CTYPE_HANDSHAKE:
                 # Post-handshake messages: parse and collect NewSessionTicket
@@ -537,8 +558,13 @@ struct TlsSocket(Movable):
                 continue
 
             if inner_type != CTYPE_APPLICATION_DATA:
-                continue  # other post-handshake types
+                raise Error(
+                    "tls: unexpected inner content type " + String(Int(inner_type))
+                    + " (unexpected_message)"
+                )
 
+            if len(plaintext) == 0:
+                continue  # empty records are legal; never report them as EOF
             _sock_append_bytes(self._buf, plaintext)
             return  # one record successfully read
 
@@ -588,36 +614,47 @@ struct TlsSocket(Movable):
                 result.append(chunk[i])
         return result^
 
-    def recv_all(mut self, max_size: Int = 16777216) raises -> List[UInt8]:
-        """Read all ApplicationData until server closes connection (close_notify or TCP close).
+    def recv_all(
+        mut self, max_size: Int = 16777216, allow_truncation: Bool = False
+    ) raises -> List[UInt8]:
+        """Read all ApplicationData until the server's close_notify.
 
-        Loops recv(), accumulates bytes. Stops when:
-          - close_notify alert is received (clean shutdown) → return data
-          - TCP connection closed → return data accumulated so far
-          - max_size exceeded → raises
-
-        Re-raises unexpected errors (non-close alerts, etc.).
+        Returns the data once an authenticated close_notify arrives. If TCP
+        closes without one, an attacker may have cut the stream short, so
+        this raises "tls: truncated: ..." unless allow_truncation is True
+        (for protocols that carry their own lengths, or servers known to
+        skip close_notify). A record cut mid-way always raises, as does
+        exceeding max_size.
         """
         var result = List[UInt8]()
         # Drain any already-buffered bytes first
         _sock_append_bytes(result, self._buf)
         self._buf = List[UInt8]()
-        # Read records until connection closes
         while True:
             try:
                 self._fill_buf()
-                _sock_append_bytes(result, self._buf)
-                self._buf = List[UInt8]()
-                if len(result) > max_size:
-                    raise Error("tls: recv_all exceeded max_size")
             except e:
+                if self._close_notify:
+                    break
                 var err_str = String(e)
-                if _sock_contains(err_str, "close_notify"):
-                    break
-                if _sock_contains(err_str, "connection closed"):
-                    break
+                if _sock_contains(err_str, "connection closed without close_notify"):
+                    if allow_truncation:
+                        break
+                    raise Error(
+                        "tls: truncated: connection closed without close_notify"
+                        + " (pass allow_truncation=True to accept)"
+                    )
                 raise Error(err_str)
+            _sock_append_bytes(result, self._buf)
+            self._buf = List[UInt8]()
+            if len(result) > max_size:
+                raise Error("tls: recv_all exceeded max_size")
         return result^
+
+    def close_notify_received(self) -> Bool:
+        """True once the server sent an authenticated close_notify: everything
+        it sent has arrived. False after a bare TCP close."""
+        return self._close_notify
 
     def close(mut self) raises:
         """Send close_notify alert and close the TCP socket."""

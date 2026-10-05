@@ -9,7 +9,7 @@
 # CN-only cert: no SAN extension, Subject CN = "cn-only.example.com"
 # ============================================================================
 
-from crypto.cert import cert_parse, cert_san_names, cert_hostname_match
+from crypto.cert import cert_parse, cert_san_names, cert_hostname_match, hostname_matches_name
 
 
 def run_test[test_fn: def() thin raises -> None](
@@ -116,6 +116,26 @@ def test_cn_only_fallback() raises:
     cert_hostname_match(cert, "cn-only.example.com")  # should not raise
 
 
+def _expect_match(name: String, host: String, want: Bool) raises:
+    if hostname_matches_name(name, host) != want:
+        raise Error(
+            "'" + name + "' vs '" + host + "': expected " + ("match" if want else "no match")
+        )
+
+
+def test_wildcard_rules() raises:
+    _expect_match("*.example.com", "a.example.com", True)
+    _expect_match("*.EXAMPLE.com", "A.example.COM", True)
+    _expect_match("*.example.com", "example.com", False)
+    _expect_match("*.example.com", "a.b.example.com", False)
+    # A wildcard needs at least two labels after it (no *.com, *.)
+    _expect_match("*.com", "example.com", False)
+    _expect_match("*.", "example.", False)
+    # Wildcards never match IP address literals
+    _expect_match("*.0.0.1", "127.0.0.1", False)
+    _expect_match("127.0.0.1", "127.0.0.1", True)
+
+
 def main() raises:
     var passed = 0
     var failed = 0
@@ -130,6 +150,7 @@ def main() raises:
     run_test[test_no_match_two_subdomains]("hostname_match: 2-subdomain raises", passed, failed)
     run_test[test_no_match_evil]("hostname_match: evil.com raises", passed, failed)
     run_test[test_cn_only_fallback]("CN-only fallback", passed, failed)
+    run_test[test_wildcard_rules]("wildcard rules (*.com, IP literals)", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

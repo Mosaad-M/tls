@@ -55,6 +55,10 @@ def run_server(
                                 b"\r\n"
                                 b"OK"
                             )
+                            # Send close_notify; SSLSocket.close() alone
+                            # does not, and the client's recv_all() treats
+                            # a bare TCP close as truncation.
+                            tls.unwrap()
                     except Exception:
                         pass
             except Exception:

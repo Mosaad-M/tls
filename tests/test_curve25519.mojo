@@ -2,7 +2,7 @@
 # test_curve25519.mojo — X25519 RFC 7748 known-answer tests
 # ============================================================================
 
-from crypto.curve25519 import x25519, x25519_public_key
+from crypto.curve25519 import x25519, x25519_public_key, x25519_shared
 
 
 def _hex_nibble(b: UInt8) raises -> UInt8:
@@ -166,6 +166,60 @@ def test_x25519_reject_low_order() raises:
     )
 
 
+def _expect_shared_rejected(u_hex: String, label: String) raises:
+    var scalar = hex_to_bytes(
+        "77076d0a7318a57d3c16c17251b26645"
+        "c820949606b2ee7a76f50d2e49f8d4c9"
+    )
+    var raised = False
+    try:
+        _ = x25519_shared(scalar, hex_to_bytes(u_hex))
+    except:
+        raised = True
+    if not raised:
+        raise Error("x25519_shared accepted low-order point " + label)
+
+
+def test_x25519_shared_rejects_low_order() raises:
+    # RFC 8446 §7.4.2: an all-zero shared secret must abort the handshake.
+    _expect_shared_rejected(
+        "0000000000000000000000000000000000000000000000000000000000000000", "u=0"
+    )
+    _expect_shared_rejected(
+        "0100000000000000000000000000000000000000000000000000000000000000", "u=1"
+    )
+    # Point of order 8 (from the libsodium/cr.yp.to blacklist)
+    _expect_shared_rejected(
+        "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800", "order 8"
+    )
+
+
+def test_x25519_shared_rejects_short_key() raises:
+    var raised = False
+    try:
+        _ = x25519_shared(hex_to_bytes("77076d0a7318a57d3c16c17251b26645c820949606b2ee7a76f50d2e49f8d4c9"), hex_to_bytes("de9edb7d"))
+    except:
+        raised = True
+    if not raised:
+        raise Error("x25519_shared accepted a 4-byte public key")
+
+
+def test_x25519_shared_matches_x25519() raises:
+    var alice = hex_to_bytes(
+        "77076d0a7318a57d3c16c17251b26645"
+        "df4c2f87ebc0992ab177fba51db92c2a"
+    )
+    var bob_pub = hex_to_bytes(
+        "de9edb7d7b7dc1b4d35b61c2ece43537"
+        "3f8343c85b78674dadfc7e146f882b4f"
+    )
+    assert_hex_eq(
+        x25519_shared(alice, bob_pub),
+        "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742",
+        "shared",
+    )
+
+
 def main() raises:
     var passed = 0
     var failed = 0
@@ -176,6 +230,9 @@ def main() raises:
     run_test[test_x25519_rfc7748_shared_secret]("RFC 7748 shared secret", passed, failed)
     run_test[test_x25519_iterated_1000]("RFC 7748 iterated ×1000", passed, failed)
     run_test[test_x25519_reject_low_order]("Low-order point → all-zero", passed, failed)
+    run_test[test_x25519_shared_rejects_low_order]("x25519_shared rejects low-order points", passed, failed)
+    run_test[test_x25519_shared_rejects_short_key]("x25519_shared rejects a short public key", passed, failed)
+    run_test[test_x25519_shared_matches_x25519]("x25519_shared RFC 7748 shared secret", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:

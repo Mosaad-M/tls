@@ -4,6 +4,7 @@
 
 from tls.message import build_client_hello, CIPHER_TLS_AES_128_GCM_SHA256
 from tls.message12 import (
+    check_downgrade_sentinel,
     parse_server_hello_version,
     parse_server_key_exchange,
     parse_server_hello_done,
@@ -247,6 +248,40 @@ def test_finished_body_roundtrip() raises:
             raise Error("verify_data mismatch at byte " + String(i))
 
 
+def test_ch_sig_algs_all_verifiable() raises:
+    # rsa_pkcs1_sha512 (0x0601) cannot be verified, so it must not be
+    # offered: a TLS 1.2 server that picked it failed the handshake.
+    var ch = build_client_hello(make_bytes(0x01, 32), List[UInt8](), make_bytes(0x02, 32), "example.com")
+    if contains_u16(ch, 0x0601):
+        raise Error("ClientHello offers rsa_pkcs1_sha512")
+    if not contains_u16(ch, 0x0805):
+        raise Error("ClientHello does not offer rsa_pss_rsae_sha384")
+
+
+def _random_with_tail(last: UInt8) -> List[UInt8]:
+    var r = make_bytes(0xAB, 24)
+    var tail: List[UInt8] = [0x44, 0x4F, 0x57, 0x4E, 0x47, 0x52, 0x44]
+    for i in range(len(tail)):
+        r.append(tail[i])
+    r.append(last)
+    return r^
+
+
+def test_downgrade_sentinel() raises:
+    # RFC 8446 §4.1.3: a client that offered TLS 1.3 must abort when a
+    # TLS 1.2 ServerHello.random ends in "DOWNGRD" 01 (or 00 for <= 1.1).
+    for last in [UInt8(0x01), UInt8(0x00)]:
+        var raised = False
+        try:
+            check_downgrade_sentinel(_random_with_tail(last))
+        except:
+            raised = True
+        if not raised:
+            raise Error("sentinel ending in " + String(Int(last)) + " accepted")
+    check_downgrade_sentinel(make_bytes(0xAB, 32))
+    check_downgrade_sentinel(_random_with_tail(0x02))
+
+
 def main() raises:
     var passed = 0
     var failed = 0
@@ -262,6 +297,8 @@ def main() raises:
     run_test[test_parse_server_key_exchange_truncated]("parse_server_key_exchange: truncated body raises", passed, failed)
     run_test[test_build_client_key_exchange]("build_client_key_exchange: length prefix + key", passed, failed)
     run_test[test_finished_body_roundtrip]("build/parse_finished_body roundtrip", passed, failed)
+    run_test[test_ch_sig_algs_all_verifiable]("build_client_hello: only verifiable sig algs", passed, failed)
+    run_test[test_downgrade_sentinel]("check_downgrade_sentinel: DOWNGRD 01/00 rejected", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

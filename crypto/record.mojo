@@ -160,11 +160,15 @@ def record_open(
     else:  # CIPHER_CHACHA20_POLY1305
         inner = chacha20_poly1305_decrypt(key, nonce, aad, ciphertext, tag)
 
-    # Inner = actual_plaintext || content_type
-    if len(inner) < 1:
-        raise Error("record_open: inner plaintext missing content type")
-    var content_type = inner[len(inner) - 1]
-    var pt_len = len(inner) - 1
+    # Inner = actual_plaintext || content_type || zeros (RFC 8446 §5.4): the
+    # content type is the last non-zero byte.
+    var ct_pos = len(inner) - 1
+    while ct_pos >= 0 and inner[ct_pos] == 0:
+        ct_pos -= 1
+    if ct_pos < 0:
+        raise Error("record_open: no content type in inner plaintext (unexpected_message)")
+    var content_type = inner[ct_pos]
+    var pt_len = ct_pos
     var pt = List[UInt8](capacity=pt_len)
     for i in range(pt_len):
         pt.append(inner[i])

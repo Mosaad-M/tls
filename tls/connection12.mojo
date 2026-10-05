@@ -30,11 +30,11 @@ from crypto.record import (
 )
 from crypto.cert import X509Cert, cert_parse, cert_chain_verify
 from crypto.asn1 import asn1_parse_ecdsa_sig, asn1_parse_ecdsa_sig_48
-from crypto.curve25519 import x25519_public_key, x25519
+from crypto.curve25519 import x25519_public_key, x25519_shared
 from crypto.random import csprng_bytes
 from crypto.p256 import p256_ecdsa_verify, p256_public_key, p256_ecdh, p256_ecdsa_sign
 from crypto.p384 import p384_ecdsa_verify
-from crypto.rsa import rsa_pkcs1_verify
+from crypto.rsa import rsa_pkcs1_verify, rsa_pss_verify
 from tls.message import (
     parse_handshake_msg, HandshakeMsg,
     HS_CERTIFICATE, HS_FINISHED,
@@ -201,6 +201,16 @@ def _verify_ske_signature(
     signed_data:    List[UInt8],
 ) raises:
     """Verify ServerKeyExchange signature."""
+    # RSA-PSS schemes are 0x0804 / 0x0805: "hash" byte 8, "sig" byte 4 / 5
+    if sig_hash == 8 and (sig_sig == 4 or sig_sig == 5):
+        if cert.pub_key_alg != "rsa":
+            raise Error("tls12: sig is RSA-PSS but cert has no RSA key")
+        if sig_sig == 4:
+            rsa_pss_verify(cert.rsa_n, cert.rsa_e, sha256(signed_data), sig_bytes, 32)
+        else:
+            rsa_pss_verify(cert.rsa_n, cert.rsa_e, sha384(signed_data), sig_bytes, 48)
+        return
+
     var msg_hash: List[UInt8]
     if sig_hash == 4:
         msg_hash = sha256(signed_data)
@@ -391,7 +401,7 @@ def _tls12_handshake_impl(
     if named_curve == NAMED_CURVE_X25519:
         ecdhe_public = x25519_public_key(ecdhe_private)
         # ── Step 6: Compute pre_master secret (x25519) ──────────────────────
-        pre_master = x25519(ecdhe_private, server_pubkey)
+        pre_master = x25519_shared(ecdhe_private, server_pubkey)
     else:
         # named_curve == NAMED_CURVE_SECP256R1
         ecdhe_public = p256_public_key(ecdhe_private)
