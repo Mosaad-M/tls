@@ -17,7 +17,7 @@ With [mojo-pkg](https://github.com/Mosaad-M/mojo-pkg), add the dependency to
 
 ```toml
 [dependencies]
-tls = { git = "Mosaad-M/tls", version = ">=1.5.0" }
+tls = { git = "Mosaad-M/tls", version = ">=1.6.0" }
 tcp = { git = "Mosaad-M/tcp", version = ">=1.1.0" }   # optional: DNS + connect helper
 ```
 
@@ -175,11 +175,43 @@ there is no option to skip it.
 
 ## Security status
 
-This library has not had an external audit. Every item from an internal review
-(October 2026) is fixed as of 1.5.0; the fixes are listed below by release. Known
-limitations, by design for now: no certificate revocation checking (OCSP/CRL), no
-name-constraints support (such chains are rejected), no session resumption or 0-RTT,
-and no SHA-512 signatures.
+This library has not had an external audit. Two internal reviews (October 2026) have
+been done; every finding is fixed as of 1.6.0, listed below by release. Known
+limitations, by design for now: no certificate revocation checking (OCSP/CRL), name
+constraints are enforced for DNS and IP names only (chains constraining other name
+forms are rejected), no session resumption or 0-RTT, no client certificates in TLS
+1.3, and no SHA-512 signatures.
+
+Fixed in 1.6.0 (second review, three independent reviewers):
+- **Crash:** a certificate with an empty EC public key aborted the process; it could be
+  sent by any server, or an attacker on the path, before authentication.
+- **Memory exhaustion before authentication:** handshake messages were buffered without
+  limit (several GB in seconds). Messages are now capped at 64 KiB and a handshake at
+  256 KiB.
+- **Strict handshake state machines:** messages are reassembled across records and
+  processed in the order RFC 8446 / RFC 5246 require; unexpected, duplicate or
+  misplaced messages and ChangeCipherSpec records are fatal. This also fixes servers
+  that fragment handshake messages (e.g. facebook.com, instagram.com, and TLS 1.3
+  servers with large certificate chains), TLS 1.3 servers that send a
+  CertificateRequest, and records that carry ServerHello together with the next
+  message.
+- **Certificate validation:** nameConstraints are enforced (DNS and IP; they were
+  ignored unless marked critical); an intermediate's extendedKeyUsage must allow
+  serverAuth; RSA keys must be at least 2048 bits; IP addresses match only iPAddress
+  SANs; certificates with unsupported curves, non-minimal DER, trailing data,
+  mismatched signature algorithms or impossible dates are rejected.
+- **Protocol validation:** ServerHello (version, session ID echo, compression,
+  cipher suite, unsolicited extensions), HelloRetryRequest (cookie-only now accepted),
+  EncryptedExtensions and ALPN, Certificate and Finished messages, record and alert
+  sizes; the ServerKeyExchange signature type must match the cipher suite.
+- **Signatures:** RSA signatures must be below the modulus, RSA-PSS padding is checked
+  strictly, ECDSA signatures must be minimal DER, ECDSA public keys must be in range.
+- **Connection lifecycle:** after a fatal error the connection stays failed (and a
+  fatal alert is sent); `close()` can be called twice; post-handshake messages are
+  reassembled; at most 8 session tickets are kept; the client updates its keys
+  before the AES-GCM record limit; no SNI is sent for IP addresses.
+- **TLS 1.2 client certificates** over `*_SHA384` cipher suites signed the wrong hash
+  and always failed.
 
 Fixed in 1.5.0:
 - **HelloRetryRequest:** a TLS 1.3 server that does not accept X25519 can ask for P-256

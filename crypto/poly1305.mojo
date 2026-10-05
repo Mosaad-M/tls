@@ -281,6 +281,9 @@ def chacha20_poly1305_encrypt(
         raise Error("ChaCha20-Poly1305 key must be 32 bytes")
     if len(nonce) != 12:
         raise Error("ChaCha20-Poly1305 nonce must be 12 bytes")
+    # RFC 8439: a 32-bit block counter starting at 1 covers 2^38 - 64 bytes
+    if len(plaintext) > 274877906880:
+        raise Error("ChaCha20-Poly1305: message too long for one nonce")
 
     # Derive Poly1305 one-time key (counter=0)
     var otk = chacha20_block(key, 0, nonce)
@@ -314,6 +317,9 @@ def chacha20_poly1305_decrypt(
         raise Error("ChaCha20-Poly1305 key must be 32 bytes")
     if len(nonce) != 12:
         raise Error("ChaCha20-Poly1305 nonce must be 12 bytes")
+    # RFC 8439: a 32-bit block counter starting at 1 covers 2^38 - 64 bytes
+    if len(ciphertext) > 274877906880:
+        raise Error("ChaCha20-Poly1305: message too long for one nonce")
     if len(tag) != 16:
         raise Error("ChaCha20-Poly1305 tag must be 16 bytes")
 

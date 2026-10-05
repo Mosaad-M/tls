@@ -160,6 +160,9 @@ def record_open(
     else:  # CIPHER_CHACHA20_POLY1305
         inner = chacha20_poly1305_decrypt(key, nonce, aad, ciphertext, tag)
 
+    # TLSInnerPlaintext may not exceed 2^14 + 1 bytes (RFC 8446 §5.4)
+    if len(inner) > 16385:
+        raise Error("record_open: inner plaintext too long (record_overflow)")
     # Inner = actual_plaintext || content_type || zeros (RFC 8446 §5.4): the
     # content type is the last non-zero byte.
     var ct_pos = len(inner) - 1

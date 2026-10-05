@@ -114,6 +114,9 @@ def der_parse(data: List[UInt8], offset: Int) raises -> Tuple[UInt8, List[UInt8]
                 raise Error("asn1: truncated length bytes")
             length = (length << 8) | Int(data[pos])
             pos += 1
+        # DER: the shortest form only (X.690 §10.1)
+        if length < 0x80 or data[pos - n] == 0:
+            raise Error("asn1: non-minimal length encoding")
 
     if pos + length > len(data):
         raise Error("asn1: element extends past data end")
@@ -198,36 +201,6 @@ def der_oid_eq(content: List[UInt8], oid_hex: String) raises -> Bool:
     return True
 
 
-def _pad32(b: List[UInt8]) -> List[UInt8]:
-    """Zero-pad or right-trim byte slice to exactly 32 bytes."""
-    var out = List[UInt8](capacity=32)
-    var n = len(b)
-    if n >= 32:
-        for i in range(n - 32, n):
-            out.append(b[i])
-    else:
-        for _ in range(32 - n):
-            out.append(0)
-        for i in range(n):
-            out.append(b[i])
-    return out^
-
-
-def _pad48(b: List[UInt8]) -> List[UInt8]:
-    """Zero-pad or right-trim byte slice to exactly 48 bytes."""
-    var out = List[UInt8](capacity=48)
-    var n = len(b)
-    if n >= 48:
-        for i in range(n - 48, n):
-            out.append(b[i])
-    else:
-        for _ in range(48 - n):
-            out.append(0)
-        for i in range(n):
-            out.append(b[i])
-    return out^
-
-
 # ============================================================================
 # High-level: parse RSA SubjectPublicKeyInfo → (n_bytes, e_bytes)
 # Structure: SEQUENCE { SEQUENCE { OID(rsaEncryption), NULL }, BIT STRING {
@@ -304,6 +277,8 @@ def asn1_parse_ec_spki(der: List[UInt8]) raises -> List[UInt8]:
     if bit.tag != TAG_BIT_STRING:
         raise Error("asn1: EC SPKI: second child not BIT STRING")
     var point = der_bit_str(bit.content)
+    if len(point) == 0:
+        raise Error("asn1: EC SPKI: empty public point")
     if point[0] != 0x04:
         raise Error("asn1: EC SPKI: expected uncompressed point (04 prefix)")
     if len(point) != 65 and len(point) != 97:
@@ -317,36 +292,48 @@ def asn1_parse_ec_spki(der: List[UInt8]) raises -> List[UInt8]:
 # Both r and s are returned zero-padded to 32 bytes.
 # ============================================================================
 
-def asn1_parse_ecdsa_sig(der: List[UInt8]) raises -> Tuple[List[UInt8], List[UInt8]]:
-    """Parse DER ECDSA signature. Returns (r, s) each 32 bytes."""
+def _ecdsa_int(content: List[UInt8], size: Int) raises -> List[UInt8]:
+    """A strict DER INTEGER for an ECDSA r or s: positive, minimally encoded
+    and at most `size` bytes; returned left-padded to `size` bytes."""
+    var n = len(content)
+    if n == 0:
+        raise Error("asn1: ECDSA sig: empty INTEGER")
+    if content[0] & 0x80 != 0:
+        raise Error("asn1: ECDSA sig: negative INTEGER")
+    if n >= 2 and content[0] == 0 and content[1] < 0x80:
+        raise Error("asn1: ECDSA sig: non-minimal INTEGER")
+    var start = 1 if (n >= 2 and content[0] == 0) else 0
+    if n - start > size:
+        raise Error("asn1: ECDSA sig: INTEGER longer than the curve order")
+    var out = List[UInt8](capacity=size)
+    for _ in range(size - (n - start)):
+        out.append(0)
+    for i in range(start, n):
+        out.append(content[i])
+    return out^
+
+
+def _ecdsa_sig(der: List[UInt8], size: Int) raises -> Tuple[List[UInt8], List[UInt8]]:
+    """Ecdsa-Sig-Value ::= SEQUENCE { r INTEGER, s INTEGER }, strictly: one
+    encoding per signature (no trailing data, no extra elements)."""
     var outer = der_parse(der, 0)
-    if outer[0] != TAG_SEQUENCE:
-        raise Error("asn1: ECDSA sig: outer not SEQUENCE")
+    if outer[0] != TAG_SEQUENCE or outer[2] != len(der):
+        raise Error("asn1: ECDSA sig: not a single SEQUENCE")
     var children = der_children(outer[1])
-    if len(children) < 2:
-        raise Error("asn1: ECDSA sig: need r and s")
+    if len(children) != 2:
+        raise Error("asn1: ECDSA sig: need exactly r and s")
     if children[0].tag != TAG_INTEGER or children[1].tag != TAG_INTEGER:
         raise Error("asn1: ECDSA sig: r or s not INTEGER")
-    var r = _pad32(der_int_bytes(children[0].content))
-    var s = _pad32(der_int_bytes(children[1].content))
+    var r = _ecdsa_int(children[0].content, size)
+    var s = _ecdsa_int(children[1].content, size)
     return (r^, s^)
 
 
-# ============================================================================
-# High-level: parse DER-encoded ECDSA signature → (r_bytes, s_bytes) P-384
-# Both r and s are returned zero-padded to 48 bytes.
-# ============================================================================
+def asn1_parse_ecdsa_sig(der: List[UInt8]) raises -> Tuple[List[UInt8], List[UInt8]]:
+    """Parse a DER ECDSA signature for P-256. Returns (r, s), 32 bytes each."""
+    return _ecdsa_sig(der, 32)
+
 
 def asn1_parse_ecdsa_sig_48(der: List[UInt8]) raises -> Tuple[List[UInt8], List[UInt8]]:
-    """Parse DER ECDSA signature. Returns (r, s) each 48 bytes (for P-384)."""
-    var outer = der_parse(der, 0)
-    if outer[0] != TAG_SEQUENCE:
-        raise Error("asn1: ECDSA sig48: outer not SEQUENCE")
-    var children = der_children(outer[1])
-    if len(children) < 2:
-        raise Error("asn1: ECDSA sig48: need r and s")
-    if children[0].tag != TAG_INTEGER or children[1].tag != TAG_INTEGER:
-        raise Error("asn1: ECDSA sig48: r or s not INTEGER")
-    var r = _pad48(der_int_bytes(children[0].content))
-    var s = _pad48(der_int_bytes(children[1].content))
-    return (r^, s^)
+    """Parse a DER ECDSA signature for P-384. Returns (r, s), 48 bytes each."""
+    return _ecdsa_sig(der, 48)

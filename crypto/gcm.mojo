@@ -19,6 +19,10 @@
 # ============================================================================
 
 from crypto.aes import AES
+
+# NIST SP 800-38D: at most 2^32 - 2 blocks per nonce (the 32-bit counter
+# must not wrap back to J0). Unreachable through TLS records; a guard.
+comptime _GCM_MAX_BYTES = (4294967296 - 2) * 16
 from crypto.hmac import hmac_equal
 
 
@@ -277,6 +281,8 @@ def gcm_encrypt(
     """
     if len(iv) != 12:
         raise Error("GCM IV must be 12 bytes")
+    if len(plaintext) > _GCM_MAX_BYTES:
+        raise Error("GCM plaintext too long for one nonce")
 
     var aes = AES(key)
     var setup = _gcm_setup(aes, iv)
@@ -313,6 +319,8 @@ def gcm_decrypt(
     """
     if len(iv) != 12:
         raise Error("GCM IV must be 12 bytes")
+    if len(ciphertext) > _GCM_MAX_BYTES:
+        raise Error("GCM ciphertext too long for one nonce")
     if len(tag) != 16:
         raise Error("GCM tag must be 16 bytes")
 

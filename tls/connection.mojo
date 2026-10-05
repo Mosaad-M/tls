@@ -39,8 +39,9 @@ from tls.message import (
     parse_handshake_msg, parse_server_hello, parse_server_hello_key_share,
     parse_certificate_chain, parse_cert_verify, parse_finished,
     parse_new_session_ticket, parse_alpn_from_ee, SessionTicket,
+    validate_encrypted_extensions, parse_certificate_request13, build_empty_certificate13,
     HandshakeMsg,
-    HS_SERVER_HELLO, HS_ENCRYPTED_EXTS, HS_CERTIFICATE,
+    HS_SERVER_HELLO, HS_ENCRYPTED_EXTS, HS_CERTIFICATE, HS_CERT_REQUEST,
     HS_CERT_VERIFY, HS_FINISHED, HS_NEW_SESSION_TICKET,
     GROUP_X25519, GROUP_SECP256R1, GROUP_SECP384R1,
 )
@@ -374,71 +375,136 @@ def _verify_cert_verify_sig(
 # Read all encrypted server handshake messages until Finished
 # ============================================================================
 
-def _read_server_hs_messages(
-    fd:         Int32,
-    cipher:     UInt8,
-    hs_key:     List[UInt8],
-    hs_iv:      List[UInt8],
-    mut seqno:  UInt64,
-) raises -> List[HandshakeMsg]:
-    """Read encrypted server handshake messages until Finished.
-    Handles multiple messages per record and multiple records.
+comptime HS_MAX_MESSAGE = 65536   # largest handshake message accepted
+comptime HS_MAX_FLIGHT = 262144   # total handshake bytes per reader
+
+
+struct HandshakeReader(Movable):
+    """Reads handshake messages from records, reassembling messages that span
+    records and splitting records that carry several (RFC 8446 §5.1, RFC 5246
+    §6.2.1). Plaintext, or decrypted with TLS 1.3 handshake keys after
+    use_keys(). Bounded: one message <= HS_MAX_MESSAGE, all messages <=
+    HS_MAX_FLIGHT, so a peer cannot make the client buffer without limit.
+
+    allow_ccs: accept plaintext ChangeCipherSpec records (value 1) and skip
+    them, as TLS 1.3 middlebox compatibility allows during the handshake.
     """
-    var all_msgs = List[HandshakeMsg]()
-    var got_finished = False
+    var fd: Int32
+    var buf: List[UInt8]        # handshake bytes received, not yet returned
+    var returned: Int           # bytes of messages returned so far
+    var allow_ccs: Bool
+    var encrypted: Bool
+    var cipher: UInt8
+    var key: List[UInt8]
+    var iv: List[UInt8]
+    var seqno: UInt64
 
-    while not got_finished:
-        var rec = _read_tls_record(fd)
-        var rtype = rec[0]
-        var rbody = rec[1].copy()
+    def __init__(out self, fd: Int32, allow_ccs: Bool, pending: List[UInt8] = List[UInt8]()):
+        self.fd = fd
+        self.buf = pending.copy()
+        self.returned = 0
+        self.allow_ccs = allow_ccs
+        self.encrypted = False
+        self.cipher = 0
+        self.key = List[UInt8]()
+        self.iv = List[UInt8]()
+        self.seqno = 0
 
-        # Skip ChangeCipherSpec (TLS 1.3 compat)
+    def __moveinit__(out self, deinit take: Self):
+        self.fd = take.fd
+        self.buf = take.buf^
+        self.returned = take.returned
+        self.allow_ccs = take.allow_ccs
+        self.encrypted = take.encrypted
+        self.cipher = take.cipher
+        self.key = take.key^
+        self.iv = take.iv^
+        self.seqno = take.seqno
+
+    def at_boundary(self) -> Bool:
+        return len(self.buf) == 0
+
+    def require_boundary(self, after: String) raises:
+        """Handshake messages may not span a key change (RFC 8446 §5.1)."""
+        if len(self.buf) != 0:
+            raise Error("tls: handshake data after " + after + " in the same record (unexpected_message)")
+
+    def use_keys(mut self, cipher: UInt8, key: List[UInt8], iv: List[UInt8]) raises:
+        self.require_boundary("ServerHello")
+        self.encrypted = True
+        self.cipher = cipher
+        self.key = key.copy()
+        self.iv = iv.copy()
+        self.seqno = 0
+
+    def _fill(mut self) raises:
+        var header = _tcp_read(self.fd, 5)
+        var rtype = header[0]
+        var rlen = (Int(header[3]) << 8) | Int(header[4])
+        var limit = 16384 + 256 if self.encrypted else 16384
+        if rlen > limit:
+            raise Error("tls: record too large: " + String(rlen) + " (record_overflow)")
+        var body = _tcp_read(self.fd, rlen)
         if rtype == CTYPE_CHANGE_CIPHER_SPEC:
-            continue
-
+            if not self.allow_ccs or len(body) != 1 or body[0] != 1:
+                raise Error("tls: unexpected ChangeCipherSpec (unexpected_message)")
+            return
         if rtype == CTYPE_ALERT:
-            tls_handle_incoming_alert(rbody)
+            tls_handle_incoming_alert(body)
             raise Error("tls: alert (unreachable)")
+        var data: List[UInt8]
+        if self.encrypted:
+            if rtype != CTYPE_APPLICATION_DATA:
+                raise Error("tls: plaintext record during the encrypted handshake (unexpected_message)")
+            var dec = record_open(self.cipher, self.key, self.iv, self.seqno, _make_tls_record(rtype, body))
+            self.seqno += 1
+            if dec[0] == CTYPE_ALERT:
+                tls_handle_incoming_alert(dec[1])
+                raise Error("tls: alert (unreachable)")
+            if dec[0] != CTYPE_HANDSHAKE:
+                raise Error("tls: non-handshake record during the handshake (unexpected_message)")
+            data = dec[1].copy()
+        else:
+            if rtype != CTYPE_HANDSHAKE:
+                raise Error("tls: expected a handshake record, got type " + String(Int(rtype)) + " (unexpected_message)")
+            data = body^
+        if len(data) == 0:
+            raise Error("tls: empty handshake record (unexpected_message)")
+        _append_bytes(self.buf, data)
 
-        if rtype != CTYPE_APPLICATION_DATA:
-            raise Error("tls: expected ApplicationData, got " + String(Int(rtype)))
+    def next_message(mut self) raises -> HandshakeMsg:
+        while True:
+            if len(self.buf) >= 4:
+                var mlen = (Int(self.buf[1]) << 16) | (Int(self.buf[2]) << 8) | Int(self.buf[3])
+                if mlen > HS_MAX_MESSAGE:
+                    raise Error("tls: handshake message too large: " + String(mlen))
+                if len(self.buf) >= 4 + mlen:
+                    self.returned += 4 + mlen
+                    if self.returned > HS_MAX_FLIGHT:
+                        raise Error("tls: handshake too large")
+                    var msg = HandshakeMsg()
+                    msg.msg_type = self.buf[0]
+                    var body = List[UInt8](capacity=mlen)
+                    for i in range(mlen):
+                        body.append(self.buf[4 + i])
+                    msg.body = body^
+                    var rest = List[UInt8](capacity=len(self.buf) - 4 - mlen)
+                    for i in range(4 + mlen, len(self.buf)):
+                        rest.append(self.buf[i])
+                    self.buf = rest^
+                    return msg^
+            self._fill()
 
-        # Reconstruct full record for record_open
-        var full_record = _make_tls_record(rtype, rbody)
-        var decrypted = record_open(cipher, hs_key, hs_iv, seqno, full_record)
-        seqno += 1
-
-        var inner_type = decrypted[0]
-        var plaintext  = decrypted[1].copy()
-
-        if inner_type == CTYPE_CHANGE_CIPHER_SPEC:
-            continue
-        if inner_type == CTYPE_ALERT:
-            tls_handle_incoming_alert(plaintext)
-            raise Error("tls: alert (unreachable)")
-        if inner_type != CTYPE_HANDSHAKE:
-            # Skip NewSessionTicket etc. that arrive here
-            continue
-
-        # Parse all handshake messages within this record
-        var off = 0
-        while off < len(plaintext):
-            var res = parse_handshake_msg(plaintext, off)
-            var msg = res[0].copy()
-            off = res[1]
-            if msg.msg_type == HS_FINISHED:
-                got_finished = True
-            all_msgs.append(msg^)
-
-    return all_msgs^
-
-
-def _find_msg(messages: List[HandshakeMsg], msg_type: UInt8) raises -> List[UInt8]:
-    """Find first message of the given type. Raises if not found."""
-    for i in range(len(messages)):
-        if messages[i].msg_type == msg_type:
-            return messages[i].body.copy()
-    raise Error("tls: handshake message type " + String(Int(msg_type)) + " not found")
+    def expect(mut self, msg_type: UInt8, what: String) raises -> HandshakeMsg:
+        """The next message, which must be of msg_type (RFC 8446 §4 / RFC 5246
+        §7.3 fix the order; anything else is unexpected_message)."""
+        var msg = self.next_message()
+        if msg.msg_type != msg_type:
+            raise Error(
+                "tls: expected " + what + ", got handshake message type "
+                + String(Int(msg.msg_type)) + " (unexpected_message)"
+            )
+        return msg^
 
 
 # ============================================================================
@@ -488,6 +554,7 @@ def tls13_after_server_hello(
     th:                SHA256,         # transcript hasher (updated with CH+SH)
     th384:             SHA384,
     key_share_group:   UInt16 = GROUP_X25519,  # group of ecdhe_private
+    alpn_protocols:    List[String] = List[String](),  # what the ClientHello offered
 ) raises -> TlsKeys:
     """Complete TLS 1.3 handshake after ClientHello+ServerHello exchange.
 
@@ -537,40 +604,33 @@ def tls13_after_server_hello(
         server_hs_key = hs_kp[0].copy()
         server_hs_iv  = hs_kp[1].copy()
 
-    var server_seqno: UInt64 = 0
+    # ── Server flight, in order: EncryptedExtensions, [CertificateRequest],
+    #    Certificate, CertificateVerify, Finished (RFC 8446 §2, §4) ─────────
+    var reader = HandshakeReader(fd, True)
+    reader.use_keys(negotiated_cipher, server_hs_key, server_hs_iv)
 
-    # ── Read all server encrypted handshake messages ──────────────────────────
-    var hs_msgs = _read_server_hs_messages(
-        fd, negotiated_cipher, server_hs_key, server_hs_iv, server_seqno
-    )
+    var ee = reader.expect(HS_ENCRYPTED_EXTS, "EncryptedExtensions")
+    var alpn_proto = validate_encrypted_extensions(ee.body, alpn_protocols)
+    th_local.update(_wrap_hs_msg(ee.msg_type, ee.body))
+    th384_local.update(_wrap_hs_msg(ee.msg_type, ee.body))
 
-    var ee_body   = _find_msg(hs_msgs, HS_ENCRYPTED_EXTS)
-    var alpn_proto = parse_alpn_from_ee(ee_body)
-    var cert_body = _find_msg(hs_msgs, HS_CERTIFICATE)
-    var cv_body   = _find_msg(hs_msgs, HS_CERT_VERIFY)
-    var fin_body  = _find_msg(hs_msgs, HS_FINISHED)
-
-    # Update transcript hashers in handshake message order
-    th_local.update(_wrap_hs_msg(HS_ENCRYPTED_EXTS, ee_body))
-    th384_local.update(_wrap_hs_msg(HS_ENCRYPTED_EXTS, ee_body))
+    var cert_msg = reader.next_message()
+    var cert_request = False
+    var cert_request_ctx = List[UInt8]()
+    if cert_msg.msg_type == HS_CERT_REQUEST:
+        cert_request_ctx = parse_certificate_request13(cert_msg.body)
+        cert_request = True
+        th_local.update(_wrap_hs_msg(cert_msg.msg_type, cert_msg.body))
+        th384_local.update(_wrap_hs_msg(cert_msg.msg_type, cert_msg.body))
+        cert_msg = reader.expect(HS_CERTIFICATE, "Certificate")
+    elif cert_msg.msg_type != HS_CERTIFICATE:
+        raise Error(
+            "tls: expected Certificate, got handshake message type "
+            + String(Int(cert_msg.msg_type)) + " (unexpected_message)"
+        )
+    var cert_body = cert_msg.body.copy()
     th_local.update(_wrap_hs_msg(HS_CERTIFICATE, cert_body))
     th384_local.update(_wrap_hs_msg(HS_CERTIFICATE, cert_body))
-
-    var th_for_cv: List[UInt8]
-    if use_sha384:
-        th_for_cv = _transcript_hash_sha384(th384_local)
-    else:
-        th_for_cv = _transcript_hash(th_local)
-    th_local.update(_wrap_hs_msg(HS_CERT_VERIFY, cv_body))
-    th384_local.update(_wrap_hs_msg(HS_CERT_VERIFY, cv_body))
-
-    var th_for_fin: List[UInt8]
-    if use_sha384:
-        th_for_fin = _transcript_hash_sha384(th384_local)
-    else:
-        th_for_fin = _transcript_hash(th_local)
-    th_local.update(_wrap_hs_msg(HS_FINISHED, fin_body))
-    th384_local.update(_wrap_hs_msg(HS_FINISHED, fin_body))
 
     # ── Verify certificate chain ──────────────────────────────────────────────
     var cert_ders = parse_certificate_chain(cert_body)
@@ -579,46 +639,79 @@ def tls13_after_server_hello(
         cert_chain.append(cert_parse(cert_ders[i]))
     cert_chain_verify(cert_chain, trust_anchors, hostname)
 
-    # ── Verify CertificateVerify ──────────────────────────────────────────────
-    var cv_result  = parse_cert_verify(cv_body)
+    # ── Verify CertificateVerify (signs the transcript through Certificate) ──
+    var th_for_cv: List[UInt8]
+    if use_sha384:
+        th_for_cv = _transcript_hash_sha384(th384_local)
+    else:
+        th_for_cv = _transcript_hash(th_local)
+    var cv = reader.expect(HS_CERT_VERIFY, "CertificateVerify")
+    var cv_result  = parse_cert_verify(cv.body)
     var sig_scheme = cv_result[0]
     var sig_bytes  = cv_result[1].copy()
     var cv_input   = tls13_cert_verify_input(CERT_VERIFY_SERVER_CTX, th_for_cv)
     _verify_cert_verify_sig(cert_chain[0], sig_scheme, sig_bytes, cv_input)
+    th_local.update(_wrap_hs_msg(cv.msg_type, cv.body))
+    th384_local.update(_wrap_hs_msg(cv.msg_type, cv.body))
 
     # ── Verify server Finished ────────────────────────────────────────────────
-    var server_vd = parse_finished(fin_body)
+    var th_for_fin: List[UInt8]
+    if use_sha384:
+        th_for_fin = _transcript_hash_sha384(th384_local)
+    else:
+        th_for_fin = _transcript_hash(th_local)
+    var fin = reader.expect(HS_FINISHED, "Finished")
+    # the next record uses new keys: nothing may follow Finished in its record
+    reader.require_boundary("Finished")
+    var server_vd = parse_finished(fin.body)
     if use_sha384:
         var s_fkey = tls13_finished_key_sha384(s_hs_ts)
         tls13_verify_finished_sha384(s_fkey, th_for_fin, server_vd)
     else:
         var s_fkey = tls13_finished_key(s_hs_ts)
         tls13_verify_finished(s_fkey, th_for_fin, server_vd)
+    th_local.update(_wrap_hs_msg(fin.msg_type, fin.body))
+    th384_local.update(_wrap_hs_msg(fin.msg_type, fin.body))
 
-    # ── Send client Finished ──────────────────────────────────────────────────
+    # Application traffic secrets use the transcript through server Finished
     var th_for_c_fin: List[UInt8]
-    var client_vd: List[UInt8]
+    if use_sha384:
+        th_for_c_fin = _transcript_hash_sha384(th384_local)
+    else:
+        th_for_c_fin = _transcript_hash(th_local)
+
+    # ── Client flight: [empty Certificate], Finished ─────────────────────────
     var client_hs_key: List[UInt8]
     var client_hs_iv: List[UInt8]
-
     if use_sha384:
         var c_hs_kp = tls13_traffic_keys_sha384(c_hs_ts, key_len, 12)
         client_hs_key = c_hs_kp[0].copy()
         client_hs_iv  = c_hs_kp[1].copy()
-        th_for_c_fin = _transcript_hash_sha384(th384_local)
-        var c_fkey = tls13_finished_key_sha384(c_hs_ts)
-        client_vd = tls13_compute_finished_sha384(c_fkey, th_for_c_fin)
     else:
         var c_hs_kp = tls13_traffic_keys(c_hs_ts, key_len, 12)
         client_hs_key = c_hs_kp[0].copy()
         client_hs_iv  = c_hs_kp[1].copy()
-        th_for_c_fin = _transcript_hash(th_local)
+    var client_seq: UInt64 = 0
+    if cert_request:
+        # No client certificates in TLS 1.3: decline with an empty
+        # Certificate (RFC 8446 §4.4.2); the server decides whether to continue
+        var empty_cert = build_empty_certificate13(cert_request_ctx)
+        _tcp_write(fd, record_seal(negotiated_cipher, client_hs_key, client_hs_iv, client_seq, CTYPE_HANDSHAKE, empty_cert))
+        client_seq += 1
+        th_local.update(empty_cert)
+        th384_local.update(empty_cert)
+
+    var client_vd: List[UInt8]
+    if use_sha384:
+        var c_fkey = tls13_finished_key_sha384(c_hs_ts)
+        client_vd = tls13_compute_finished_sha384(c_fkey, _transcript_hash_sha384(th384_local))
+    else:
         var c_fkey = tls13_finished_key(c_hs_ts)
-        client_vd = tls13_compute_finished(c_fkey, th_for_c_fin)
+        client_vd = tls13_compute_finished(c_fkey, _transcript_hash(th_local))
 
     var client_fin_msg = build_finished(client_vd)
     var client_fin_sealed = record_seal(
-        negotiated_cipher, client_hs_key, client_hs_iv, 0, CTYPE_HANDSHAKE, client_fin_msg
+        negotiated_cipher, client_hs_key, client_hs_iv, client_seq, CTYPE_HANDSHAKE, client_fin_msg
     )
     _tcp_write(fd, client_fin_sealed)
 
@@ -808,8 +901,8 @@ def tls_handle_incoming_alert(alert_body: List[UInt8]) raises:
     alert_body[1] = description code
     close_notify (0) at warning level is treated as EOF.
     """
-    if len(alert_body) < 2:
-        raise Error("tls: malformed alert")
+    if len(alert_body) != 2:
+        raise Error("tls: malformed alert (decode_error)")
     var level = alert_body[0]
     var code  = alert_body[1]
     # All alerts cause connection termination; just report the description.

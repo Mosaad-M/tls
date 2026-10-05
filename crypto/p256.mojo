@@ -602,6 +602,8 @@ def p256_ecdsa_verify(
     var parsed = _parse_pub(pub_key)
     var qx = parsed[0].copy()
     var qy = parsed[1].copy()
+    if bigint_cmp(qx, p) >= 0 or bigint_cmp(qy, p) >= 0:
+        raise Error("p256: public key coordinate out of range")
     if not _point_on_curve(qx.copy(), qy.copy(), p):
         raise Error("p256: public key not on curve")
 

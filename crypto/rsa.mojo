@@ -10,7 +10,7 @@
 # ============================================================================
 
 from crypto.bigint import (
-    BigInt, bigint_from_bytes, bigint_to_bytes, bigint_modexp, bigint_bit_len,
+    BigInt, bigint_from_bytes, bigint_to_bytes, bigint_modexp, bigint_bit_len, bigint_cmp,
 )
 from crypto.hash import sha256, sha384
 
@@ -123,6 +123,9 @@ def rsa_pkcs1_verify(
     # 00 01 FF*8 00 DigestInfo(19) Hash: shorter moduli cannot hold an encoding
     if k < 11 + 19 + hash_len:
         raise Error("rsa_pkcs1: modulus too short")
+    # RFC 8017 RSAVP1 step 1: s must be < n (else s + n is a second encoding)
+    if bigint_cmp(bigint_from_bytes(sig), n) >= 0:
+        raise Error("rsa_pkcs1: signature representative out of range")
 
     # Recover encoded message: em = sig^e mod n, padded to k bytes
     var em = _rsa_raw(sig, n, e, k)
@@ -187,9 +190,19 @@ def rsa_pss_verify(
         raise Error("rsa_pss: signature length != key length")
     if em_len < h_len + salt_len + 2:
         raise Error("rsa_pss: key too small for given hash/salt")
+    # RFC 8017 RSAVP1 step 1: s must be < n
+    if bigint_cmp(bigint_from_bytes(sig), n) >= 0:
+        raise Error("rsa_pss: signature representative out of range")
 
-    # Recover EM: sig^e mod n, padded to em_len bytes
-    var em = _rsa_raw(sig, n, e, em_len)
+    # Recover m = s^e mod n as k bytes. EM is its low em_len bytes; when
+    # em_len < k (modBits = 1 mod 8) the dropped high byte must be zero.
+    var m_full = _rsa_raw(sig, n, e, k)
+    for i in range(k - em_len):
+        if m_full[i] != 0:
+            raise Error("rsa_pss: encoded message longer than emLen")
+    var em = List[UInt8](capacity=em_len)
+    for i in range(k - em_len, k):
+        em.append(m_full[i])
 
     # Last byte must be 0xBC
     if em[em_len - 1] != 0xBC:
@@ -215,9 +228,12 @@ def rsa_pss_verify(
     for i in range(h_start):
         db.append(masked_db[i] ^ db_mask[i])
 
-    # Zero out the (8*em_len - em_bits) most significant bits of db[0]
+    # RFC 8017 §9.1.2 step 6: the leftmost 8*em_len - em_bits bits of
+    # maskedDB must be zero (checked, not just cleared), then clear them in DB
     var top_bits = 8 * em_len - em_bits
     if top_bits > 0:
+        if em[0] & ~UInt8(0xFF >> top_bits) != 0:
+            raise Error("rsa_pss: nonzero leftmost bits in maskedDB")
         db[0] = db[0] & UInt8(0xFF >> top_bits)
 
     # Check DB format: 0x00...0x00 0x01 salt

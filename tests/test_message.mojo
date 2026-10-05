@@ -215,8 +215,9 @@ def test_parse_handshake_msg() raises:
 # ── parse_server_hello ────────────────────────────────────────────────────────
 
 def test_parse_server_hello() raises:
-    # ServerHello hex from Python: server_random=bytes(32..63), session_id=32xaa, cipher=0x1301, pub=bytes(64..95)
-    var sh_bytes = hex_to_bytes("020000760303202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f20aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa130100002e00330024001d0020404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f002b00020304")
+    # ServerHello: server_random=bytes(32..63), empty session_id (this client sends
+    # an empty one, and the echo must match), cipher=0x1301, pub=bytes(64..95)
+    var sh_bytes = hex_to_bytes("020000560303202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f00130100002e00330024001d0020404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f002b00020304")
     var result = parse_handshake_msg(sh_bytes, 0)
     var msg = result[0].copy()
     if msg.msg_type != HS_SERVER_HELLO:

@@ -14,6 +14,10 @@ from path_fixtures import (
     LEAF_KENC, INTER_CRIT, LEAF_CRIT, INTER_NONCRIT, LEAF_NONCRIT, INTER_NC,
     LEAF_NC, LEAF_DN, LEAF_EXPIRED, INTER_FUTURE, LEAF_FUTURE, NEW_ROOT,
     CROSS_EXPIRED, INTER_X, LEAF_X, STRAY_INTER, STRAY_LEAF,
+    INTER_NCD, LEAF_NCD_OK, LEAF_NCD_BAD, INTER_NCX, LEAF_NCX_OK, LEAF_NCX_BAD,
+    LEAF_NCX_WILD, INTER_NCIP, LEAF_NCIP_OK, LEAF_NCIP_BAD, INTER_NCEMAIL,
+    LEAF_NCEMAIL, INTER_EKU_EMAIL, LEAF_EKU_EMAIL, INTER_EKU_SERVER,
+    LEAF_EKU_SERVER, RSA1024_LEAF, RSA2048_LEAF, LEAF_IPSAN, LEAF_DNS_IP,
 )
 
 
@@ -164,12 +168,61 @@ def test_unknown_critical_extension() raises:
     )
 
 
-def test_critical_name_constraints_unsupported() raises:
-    # Name constraints are not enforced, so a CA that relies on them is
-    # rejected (fail closed). OpenSSL enforces them and accepts this chain.
-    expect_reject(
-        chain_of(LEAF_NC, INTER_NC), anchors_of(ROOT), "nc.example", "critical extension"
-    )
+def test_critical_name_constraints_enforced() raises:
+    # Critical nameConstraints permitting nc.example; the leaf is nc.example.
+    # (tls <= 1.5.0 rejected every critical nameConstraints.)
+    expect_ok(chain_of(LEAF_NC, INTER_NC), anchors_of(ROOT), "nc.example")
+
+
+# ── Name constraints, EKU on intermediates, RSA size, IP SANs (1.6.0).
+#    Expected results match `openssl verify -purpose sslserver` except where
+#    noted. ───────────────────────────────────────────────────────────────
+
+def test_noncritical_name_constraints_permitted() raises:
+    # tls 1.5.0 ignored non-critical nameConstraints and accepted the bad leaf
+    expect_ok(chain_of(LEAF_NCD_OK, INTER_NCD), anchors_of(ROOT), "www.allowed.example")
+    expect_reject(chain_of(LEAF_NCD_BAD, INTER_NCD), anchors_of(ROOT), "victim.example", "name constraint")
+
+
+def test_excluded_name_constraints() raises:
+    expect_ok(chain_of(LEAF_NCX_OK, INTER_NCX), anchors_of(ROOT), "good.example")
+    expect_reject(chain_of(LEAF_NCX_BAD, INTER_NCX), anchors_of(ROOT), "x.bad.example", "name constraint")
+    # a wildcard that would cover excluded names is rejected too
+    expect_reject(chain_of(LEAF_NCX_WILD, INTER_NCX), anchors_of(ROOT), "a.bad.example", "name constraint")
+
+
+def test_ip_name_constraints() raises:
+    expect_ok(chain_of(LEAF_NCIP_OK, INTER_NCIP), anchors_of(ROOT), "10.1.2.3")
+    expect_reject(chain_of(LEAF_NCIP_BAD, INTER_NCIP), anchors_of(ROOT), "192.168.1.1", "name constraint")
+
+
+def test_unsupported_name_constraint_form() raises:
+    # rfc822Name constraints are not evaluated, so the chain is rejected
+    # (fail closed). OpenSSL evaluates them and accepts (the leaf has no
+    # email names): an intentional difference.
+    expect_reject(chain_of(LEAF_NCEMAIL, INTER_NCEMAIL), anchors_of(ROOT), "mail.example", "unsupported name constraint")
+
+
+def test_intermediate_eku() raises:
+    # tls 1.5.0 checked extendedKeyUsage on the leaf only
+    expect_reject(chain_of(LEAF_EKU_EMAIL, INTER_EKU_EMAIL), anchors_of(ROOT), "ekuemail.example", "extendedKeyUsage")
+    expect_ok(chain_of(LEAF_EKU_SERVER, INTER_EKU_SERVER), anchors_of(ROOT), "ekuserver.example")
+
+
+def test_rsa_minimum_key_size() raises:
+    # 2048-bit minimum (CA/Browser Forum). OpenSSL's default security
+    # level accepts 1024; its level 2 rejects it, as here.
+    expect_reject(chain_of(RSA1024_LEAF, INTER), anchors_of(ROOT), "rsa1024.example", "RSA key")
+    expect_ok(chain_of(RSA2048_LEAF, INTER), anchors_of(ROOT), "rsa2048.example")
+
+
+def test_ip_san_matching() raises:
+    expect_ok(chain_of(LEAF_IPSAN, INTER), anchors_of(ROOT), "192.0.2.7")
+    expect_ok(chain_of(LEAF_IPSAN, INTER), anchors_of(ROOT), "2001:db8::7")
+    expect_ok(chain_of(LEAF_IPSAN, INTER), anchors_of(ROOT), "ipsan.example")
+    expect_reject(chain_of(LEAF_IPSAN, INTER), anchors_of(ROOT), "192.0.2.9", "does not match")
+    # an IP address is never matched against a dNSName (tls 1.5.0 did)
+    expect_reject(chain_of(LEAF_DNS_IP, INTER), anchors_of(ROOT), "192.0.2.8", "does not match")
 
 
 def test_issuer_subject_mismatch() raises:
@@ -259,7 +312,14 @@ def main() raises:
     run_test[test_leaf_eku_client_auth_only]("leaf EKU clientAuth only", passed, failed)
     run_test[test_leaf_key_usage_without_digital_signature]("leaf keyUsage without digitalSignature", passed, failed)
     run_test[test_unknown_critical_extension]("unknown critical extension", passed, failed)
-    run_test[test_critical_name_constraints_unsupported]("critical nameConstraints (unsupported)", passed, failed)
+    run_test[test_critical_name_constraints_enforced]("critical nameConstraints enforced (permitted)", passed, failed)
+    run_test[test_noncritical_name_constraints_permitted]("non-critical nameConstraints enforced", passed, failed)
+    run_test[test_excluded_name_constraints]("excluded DNS subtrees (incl. wildcards)", passed, failed)
+    run_test[test_ip_name_constraints]("IP address name constraints", passed, failed)
+    run_test[test_unsupported_name_constraint_form]("unsupported constraint form fails closed", passed, failed)
+    run_test[test_intermediate_eku]("extendedKeyUsage enforced on intermediates", passed, failed)
+    run_test[test_rsa_minimum_key_size]("RSA keys below 2048 bits rejected", passed, failed)
+    run_test[test_ip_san_matching]("IP hosts match iPAddress SANs only", passed, failed)
     run_test[test_issuer_subject_mismatch]("issuer/subject name mismatch", passed, failed)
     run_test[test_expired_leaf]("expired leaf", passed, failed)
     run_test[test_not_yet_valid_intermediate]("not-yet-valid intermediate", passed, failed)
