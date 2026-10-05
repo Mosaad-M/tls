@@ -6,6 +6,7 @@
 
 from crypto.cert import X509Cert
 from tls.connection import _verify_cert_verify_sig
+from crypto.handshake import tls13_next_traffic_secret
 from crypto.handshake import (
     tls13_early_secret, tls13_handshake_secret, tls13_master_secret,
     tls13_derive_secret, tls13_traffic_keys,
@@ -403,6 +404,33 @@ def test_verify_finished_sha384_accept_reject() raises:
         raise Error("verify_finished_sha384_reject: bad MAC not rejected")
 
 
+def _seq_bytes(n: Int) -> List[UInt8]:
+    var out = List[UInt8](capacity=n)
+    for i in range(n):
+        out.append(UInt8(i))
+    return out^
+
+
+def _hex(b: List[UInt8]) -> String:
+    var digits = "0123456789abcdef".as_bytes()
+    var out = String()
+    for i in range(len(b)):
+        out += chr(Int(digits[Int(b[i] >> 4)]))
+        out += chr(Int(digits[Int(b[i] & 0x0F)]))
+    return out
+
+
+def test_next_traffic_secret() raises:
+    # RFC 8446 §7.2: HKDF-Expand-Label(secret, "traffic upd", "", Hash.length).
+    # Expected values computed independently with Python hmac/hashlib.
+    var s256 = tls13_next_traffic_secret(_seq_bytes(32), False)
+    if _hex(s256) != "2cecd0a17506ef5fa73edc062d6e7b5397cf074ec1b4d8f99a120772932f0b45":
+        raise Error("SHA-256 traffic upd mismatch: " + _hex(s256))
+    var s384 = tls13_next_traffic_secret(_seq_bytes(48), True)
+    if _hex(s384) != "401331b63e9d59f202e8f041042d9516f4cd7fa2e2ee14631d3b49fc340d7af37fc2c0c9f252d8036f81ec5b85cbe5db":
+        raise Error("SHA-384 traffic upd mismatch: " + _hex(s384))
+
+
 def test_cert_verify_rejects_pkcs1() raises:
     # RFC 8446 §4.4.3: RSA CertificateVerify must use PSS, never PKCS#1 v1.5
     var cert = X509Cert()
@@ -436,6 +464,7 @@ def main() raises:
     run_test[test_derive_secret_sha384]("SHA-384 Derive-Secret", passed, failed)
     run_test[test_finished_sha384]("SHA-384 Finished key + compute", passed, failed)
     run_test[test_verify_finished_sha384_accept_reject]("SHA-384 Verify Finished accept + reject", passed, failed)
+    run_test[test_next_traffic_secret]("KeyUpdate next traffic secret (SHA-256/384)", passed, failed)
     run_test[test_cert_verify_rejects_pkcs1]("TLS 1.3 CertificateVerify rejects rsa_pkcs1_sha256", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
