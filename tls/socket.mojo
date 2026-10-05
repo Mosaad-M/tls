@@ -41,22 +41,25 @@ from crypto.record import (
 from tls.connection import (
     tls13_after_server_hello, tls_cipher_from_suite, TlsKeys,
     tls_tcp_read, tls_tcp_write, tls_read_some, tls_prepare_fd, tls_set_timeout,
-    tls_handle_incoming_alert, tls_send_plaintext_alert,
+    tls_handle_incoming_alert, tls_send_plaintext_alert, tls_ec_keypair,
     ALERT_LEVEL_WARNING, ALERT_CLOSE_NOTIFY,
 )
 from tls.connection12 import (
     tls12_client_handshake, tls12_client_handshake_mtls, TlsKeys12,
 )
 from tls.message import (
-    build_client_hello, parse_handshake_msg,
-    parse_new_session_ticket, SessionTicket,
-    HS_SERVER_HELLO, HS_NEW_SESSION_TICKET,
+    build_client_hello, parse_handshake_msg, parse_server_hello,
+    parse_new_session_ticket, SessionTicket, HandshakeMsg,
+    is_hello_retry_request, parse_hello_retry_request, hrr_message_hash,
+    HS_SERVER_HELLO, HS_NEW_SESSION_TICKET, GROUP_X25519,
 )
 from crypto.handshake import (
     tls13_psk_from_ticket, tls13_next_traffic_secret,
     tls13_traffic_keys, tls13_traffic_keys_sha384,
 )
-from tls.message12 import parse_server_hello_version, check_downgrade_sentinel
+from tls.message12 import (
+    parse_server_hello_version, check_downgrade_sentinel, parse_server_hello_tls12_exts,
+)
 
 comptime _ALERT_UNEXPECTED_MESSAGE : UInt8 = 10
 comptime _HS_KEY_UPDATE : UInt8 = 24
@@ -218,18 +221,8 @@ struct TlsSocket(Movable):
 
         # ── Build + send ClientHello (unified TLS 1.3 + 1.2 cipher suites) ───
         var ch_msg = build_client_hello(client_random, List[UInt8](), key_share_pub, hostname, alpn_protocols)
-
-        # ClientHello record uses legacy version 0x0301 for compatibility
-        var ch_n = len(ch_msg)
-        var ch_record = List[UInt8](capacity=5 + ch_n)
-        ch_record.append(0x16)  # content_type = Handshake
-        ch_record.append(0x03)
-        ch_record.append(0x01)  # legacy version
-        ch_record.append(UInt8((ch_n >> 8) & 0xFF))
-        ch_record.append(UInt8(ch_n & 0xFF))
-        _sock_append_bytes(ch_record, ch_msg)
         tls_prepare_fd(self._fd)
-        tls_tcp_write(self._fd, ch_record)
+        self._send_handshake_plain(ch_msg, 0x01)  # ClientHello record: legacy version 0x0301
 
         # Initialize both transcript hashers
         var th    = SHA256()
@@ -237,34 +230,46 @@ struct TlsSocket(Movable):
         th.update(ch_msg)
         th384.update(ch_msg)
 
-        # ── Read ServerHello (skip any leading CCS) ───────────────────────────
-        var sh_rec_type: UInt8
-        var sh_rec_body: List[UInt8]
+        var sh_msg = self._read_server_hello()
+        var key_share_group = GROUP_X25519
+        var hrr_cipher: UInt16 = 0
 
-        while True:
-            var header = tls_tcp_read(self._fd, 5)
-            var rtype = header[0]
-            var rlen = (Int(header[3]) << 8) | Int(header[4])
-            var rbody = tls_tcp_read(self._fd, rlen)
-            if rtype == CTYPE_CHANGE_CIPHER_SPEC:
-                continue
-            if rtype == CTYPE_ALERT:
-                tls_handle_incoming_alert(rbody)
-                raise Error("tls: alert before ServerHello")
-            sh_rec_type = rtype
-            sh_rec_body = rbody^
-            break
+        # ── HelloRetryRequest (RFC 8446 §4.1.4) ───────────────────────────────
+        if is_hello_retry_request(parse_server_hello(sh_msg.body).random):
+            var cookie: List[UInt8]
+            try:
+                var hrr = parse_hello_retry_request(sh_msg.body)
+                hrr_cipher = hrr.cipher_suite
+                key_share_group = hrr.selected_group
+                cookie = hrr.cookie.copy()
+            except e:
+                tls_send_plaintext_alert(self._fd, _ALERT_ILLEGAL_PARAMETER)
+                raise e^
+            # ClientHello1 is replaced in the transcript by message_hash(CH1)
+            th = SHA256()
+            th384 = SHA384()
+            th.update(hrr_message_hash(ch_msg, False))
+            th384.update(hrr_message_hash(ch_msg, True))
+            var hrr_full = _sock_wrap_hs_msg(HS_SERVER_HELLO, sh_msg.body)
+            th.update(hrr_full)
+            th384.update(hrr_full)
 
-        if sh_rec_type != CTYPE_HANDSHAKE:
-            raise Error("tls: expected Handshake record for ServerHello, got "
-                        + String(Int(sh_rec_type)))
+            # ClientHello2: same random, a key share for the group the server
+            # selected, and the server's cookie
+            var kp = tls_ec_keypair(key_share_group)
+            ecdhe_private = kp[0].copy()
+            var ch2 = build_client_hello(
+                client_random, List[UInt8](), kp[1], hostname,
+                alpn_protocols, key_share_group, cookie,
+            )
+            self._send_handshake_plain(ch2, 0x03)
+            th.update(ch2)
+            th384.update(ch2)
 
-        # ── Parse ServerHello handshake message ───────────────────────────────
-        var sh_parse  = parse_handshake_msg(sh_rec_body, 0)
-        var sh_msg    = sh_parse[0].copy()
-        if sh_msg.msg_type != HS_SERVER_HELLO:
-            raise Error("tls: expected ServerHello (0x02), got "
-                        + String(Int(sh_msg.msg_type)))
+            sh_msg = self._read_server_hello()
+            if is_hello_retry_request(parse_server_hello(sh_msg.body).random):
+                tls_send_plaintext_alert(self._fd, _ALERT_UNEXPECTED_MESSAGE)
+                raise Error("tls: second HelloRetryRequest (unexpected_message)")
 
         # Update transcript with the full ServerHello handshake message
         var sh_full = _sock_wrap_hs_msg(HS_SERVER_HELLO, sh_msg.body)
@@ -277,12 +282,18 @@ struct TlsSocket(Movable):
         var server_random = sv[1].copy()
         var use_tls13 = sv[3]
 
+        if hrr_cipher != 0 and (not use_tls13 or cipher_suite != hrr_cipher):
+            # After a HelloRetryRequest the ServerHello must keep TLS 1.3
+            # and the cipher suite the HRR chose
+            tls_send_plaintext_alert(self._fd, _ALERT_ILLEGAL_PARAMETER)
+            raise Error("tls: ServerHello does not match the HelloRetryRequest (illegal_parameter)")
+
         if use_tls13:
             # ── TLS 1.3 path ──────────────────────────────────────────────────
             try:
                 self._keys = tls13_after_server_hello(
                     self._fd, hostname, trust_anchors,
-                    ecdhe_private, sh_msg.body, th, th384,
+                    ecdhe_private, sh_msg.body, th, th384, key_share_group,
                 )
                 self._is12 = False
             except e:
@@ -291,12 +302,13 @@ struct TlsSocket(Movable):
         else:
             # ── TLS 1.2 path ──────────────────────────────────────────────────
             self._check_downgrade(server_random)
+            var ems = parse_server_hello_tls12_exts(sh_msg.body)
             var use_sha384 = (cipher_suite == 0xC030 or cipher_suite == 0xC02C)
             try:
                 self._keys12 = tls12_client_handshake(
                     self._fd, hostname, trust_anchors,
                     client_random, server_random, cipher_suite,
-                    th, th384, use_sha384,
+                    th, th384, use_sha384, ems,
                 )
                 self._is12 = True
             except e:
@@ -377,6 +389,7 @@ struct TlsSocket(Movable):
         if use_tls13:
             raise Error("mTLS: requires TLS 1.2; server negotiated TLS 1.3")
         self._check_downgrade(server_random)
+        var ems = parse_server_hello_tls12_exts(sh_msg.body)
 
         var use_sha384 = (cipher_suite == 0xC030 or cipher_suite == 0xC02C)
         try:
@@ -384,12 +397,52 @@ struct TlsSocket(Movable):
                 self._fd, hostname, trust_anchors,
                 client_random, server_random, cipher_suite,
                 th, th384, use_sha384,
-                client_cert, client_key,
+                client_cert, client_key, ems,
             )
             self._is12 = True
         except e:
             self._is12 = False
             raise Error(String(e))
+
+    def _send_handshake_plain(self, msg: List[UInt8], minor: UInt8) raises:
+        """Send a plaintext handshake record (ClientHello) with version 3.minor."""
+        var n = len(msg)
+        var record = List[UInt8](capacity=5 + n)
+        record.append(0x16)  # content_type = Handshake
+        record.append(0x03)
+        record.append(minor)
+        record.append(UInt8((n >> 8) & 0xFF))
+        record.append(UInt8(n & 0xFF))
+        _sock_append_bytes(record, msg)
+        tls_tcp_write(self._fd, record)
+
+    def _read_server_hello(self) raises -> HandshakeMsg:
+        """Read the next ServerHello (or HelloRetryRequest), skipping
+        compatibility ChangeCipherSpec records."""
+        var sh_rec_type: UInt8
+        var sh_rec_body: List[UInt8]
+        while True:
+            var header = tls_tcp_read(self._fd, 5)
+            var rtype = header[0]
+            var rlen = (Int(header[3]) << 8) | Int(header[4])
+            var rbody = tls_tcp_read(self._fd, rlen)
+            if rtype == CTYPE_CHANGE_CIPHER_SPEC:
+                continue
+            if rtype == CTYPE_ALERT:
+                tls_handle_incoming_alert(rbody)
+                raise Error("tls: alert before ServerHello")
+            sh_rec_type = rtype
+            sh_rec_body = rbody^
+            break
+        if sh_rec_type != CTYPE_HANDSHAKE:
+            raise Error("tls: expected Handshake record for ServerHello, got "
+                        + String(Int(sh_rec_type)))
+        var sh_parse = parse_handshake_msg(sh_rec_body, 0)
+        var sh_msg = sh_parse[0].copy()
+        if sh_msg.msg_type != HS_SERVER_HELLO:
+            raise Error("tls: expected ServerHello (0x02), got "
+                        + String(Int(sh_msg.msg_type)))
+        return sh_msg^
 
     def _check_downgrade(self, server_random: List[UInt8]) raises:
         """Send illegal_parameter and raise if a TLS 1.2 ServerHello carries

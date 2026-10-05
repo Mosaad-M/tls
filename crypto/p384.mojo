@@ -1,16 +1,18 @@
 # ============================================================================
-# p384.mojo — NIST P-384 elliptic curve for TLS 1.3 certificate verification
+# p384.mojo — NIST P-384 elliptic curve
 # ============================================================================
 # Provides:
 #   p384_ecdsa_verify(pub, hash, r, s) → raises on invalid signature
+#   p384_public_key(private_key)       → 97-byte uncompressed public key
+#   p384_ecdh(private_key, peer_pub)   → 48-byte shared secret (x-coord)
 #
-# Uses BigInt arithmetic; field elements are BigInt in [0, p-1].
-# Points use Jacobian coordinates (X:Y:Z) with Z=1 for affine input.
-#
-# Note: P-384 key generation and ECDH are not implemented (not needed for
-# certificate verification in TLS 1.3 — X25519 is used for key exchange).
+# Key generation and ECDH (secret scalars) use the constant-time arithmetic
+# in crypto/ec_ct.mojo. Verification and public-key validation see only
+# public data and use BigInt arithmetic; field elements are BigInt in
+# [0, p-1], points use Jacobian coordinates (X:Y:Z).
 # ============================================================================
 
+import crypto.ec_ct as ct
 from crypto.bigint import (
     BigInt, bigint_zero, bigint_one, bigint_from_u64, bigint_from_bytes,
     bigint_to_bytes, bigint_is_zero, bigint_cmp, bigint_add, bigint_sub,
@@ -562,6 +564,34 @@ def _p384_parse_pub(pub: List[UInt8]) raises -> Tuple[BigInt, BigInt]:
 # ============================================================================
 # Public API
 # ============================================================================
+
+def p384_public_key(private_key: List[UInt8]) raises -> List[UInt8]:
+    """Derive the 97-byte uncompressed P-384 public key from a 48-byte scalar
+    in [1, n-1]. Constant time in the private key (crypto/ec_ct.mojo)."""
+    if len(private_key) != 48:
+        raise Error("p384: private key must be 48 bytes")
+    return ct.public_key(private_key, ct.p384_curve())
+
+
+def p384_ecdh(private_key: List[UInt8], peer_public_key: List[UInt8]) raises -> List[UInt8]:
+    """48-byte P-384 ECDH shared secret (x-coordinate).
+
+    The peer key is validated (format, coordinates < p, on the curve) with
+    the BigInt code, since it is public; the scalar multiplication by the
+    private key is constant time (crypto/ec_ct.mojo).
+    """
+    if len(private_key) != 48:
+        raise Error("p384: private key must be 48 bytes")
+    var p = _p384_p()
+    var parsed = _p384_parse_pub(peer_public_key)
+    var qx = parsed[0].copy()
+    var qy = parsed[1].copy()
+    if bigint_cmp(qx, p) >= 0 or bigint_cmp(qy, p) >= 0:
+        raise Error("p384: peer public key coordinate out of range")
+    if not _p384_point_on_curve(qx.copy(), qy.copy(), p):
+        raise Error("p384: peer public key not on curve")
+    return ct.ecdh_x(private_key, peer_public_key, ct.p384_curve())
+
 
 def p384_ecdsa_verify(
     pub_key:  List[UInt8],   # 97-byte uncompressed P-384 public key

@@ -61,6 +61,37 @@ def check_downgrade_sentinel(server_random: List[UInt8]) raises:
         raise Error("tls: downgrade detected (illegal_parameter)")
 
 
+def parse_server_hello_tls12_exts(body: List[UInt8]) raises -> Bool:
+    """Check a TLS 1.2 ServerHello's extensions; return True if the server
+    agreed to the extended master secret (RFC 7627).
+
+    renegotiation_info (RFC 5746), if present, must carry an empty
+    renegotiated_connection (the single byte 0x00) on an initial handshake;
+    anything else is a handshake_failure. Duplicate extensions are rejected.
+    """
+    var sh = parse_server_hello(body)
+    var ext_bytes = sh.extensions.copy()
+    var ems = False
+    var seen_ri = False
+    var off = 0
+    while off + 4 <= len(ext_bytes):
+        var ext_type = _read_u16be(ext_bytes, off)
+        var ext_len  = Int(_read_u16be(ext_bytes, off + 2))
+        off += 4
+        if off + ext_len > len(ext_bytes):
+            raise Error("tls12: ServerHello extension overruns the message (decode_error)")
+        if ext_type == 0x0017:  # extended_master_secret
+            if ems or ext_len != 0:
+                raise Error("tls12: bad extended_master_secret extension (decode_error)")
+            ems = True
+        elif ext_type == 0xFF01:  # renegotiation_info
+            if seen_ri or ext_len != 1 or ext_bytes[off] != 0:
+                raise Error("tls12: renegotiation_info not empty (handshake_failure)")
+            seen_ri = True
+        off += ext_len
+    return ems
+
+
 def parse_server_hello_version(body: List[UInt8]) raises -> Tuple[UInt16, List[UInt8], List[UInt8], Bool]:
     """Parse ServerHello body, determine TLS version.
 

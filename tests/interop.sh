@@ -72,6 +72,32 @@ scenario "TLS 1.3, X25519, ChaCha20-Poly1305" "New, TLSv1.3, Cipher is TLS_CHACH
 scenario "TLS 1.2, ECDHE-ECDSA-AES128-GCM-SHA256" "New, TLSv1.2, Cipher is ECDHE-ECDSA-AES128-GCM-SHA256" \
     -- -tls1_2 -cipher ECDHE-ECDSA-AES128-GCM-SHA256
 
+# ── Protocol completeness (1.5.0) ───────────────────────────────────────────
+scenario "TLS 1.3 HelloRetryRequest to P-256 (server has no X25519)" \
+    "New, TLSv1.3, Cipher is;;Shared groups: secp256r1" \
+    -- -tls1_3 -groups P-256
+scenario "TLS 1.3 HelloRetryRequest to P-384" \
+    "New, TLSv1.3, Cipher is;;Shared groups: secp384r1" \
+    -- -tls1_3 -groups P-384
+scenario "TLS 1.2, P-384 ECDHE (constant-time ECDH)" \
+    "New, TLSv1.2, Cipher is ECDHE-ECDSA;;Shared groups: secp384r1" \
+    -- -tls1_2 -groups P-384
+scenario "TLS 1.2 ECDHE-ECDSA-AES256-GCM-SHA384 (SHA-384 PRF)" \
+    "New, TLSv1.2, Cipher is ECDHE-ECDSA-AES256-GCM-SHA384" \
+    -- -tls1_2 -cipher ECDHE-ECDSA-AES256-GCM-SHA384
+CERT="$WORK/p384.pem" KEY="$WORK/p384.key" scenario "TLS 1.3, P-384 ECDSA server certificate" \
+    "New, TLSv1.3, Cipher is" \
+    -- -tls1_3
+CERT="$WORK/p384.pem" KEY="$WORK/p384.key" scenario "TLS 1.2, P-384 ECDSA server certificate" \
+    "New, TLSv1.2, Cipher is ECDHE-ECDSA" \
+    -- -tls1_2
+scenario "TLS 1.2 extended master secret negotiated" \
+    "New, TLSv1.2, Cipher is;;Extended master secret: yes" \
+    -- -tls1_2
+scenario "TLS 1.2 without extended master secret (server -no_ems)" \
+    "New, TLSv1.2, Cipher is;;Extended master secret: no" \
+    -- -tls1_2 -no_ems
+
 echo
 if [ "$FAILURES" -gt 0 ]; then
     echo "$FAILURES scenario(s) failed"

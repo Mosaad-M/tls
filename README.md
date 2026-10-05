@@ -17,7 +17,7 @@ With [mojo-pkg](https://github.com/Mosaad-M/mojo-pkg), add the dependency to
 
 ```toml
 [dependencies]
-tls = { git = "Mosaad-M/tls", version = ">=1.4.6" }
+tls = { git = "Mosaad-M/tls", version = ">=1.5.0" }
 tcp = { git = "Mosaad-M/tcp", version = ">=1.1.0" }   # optional: DNS + connect helper
 ```
 
@@ -139,14 +139,13 @@ skipped. For your own trust anchors, parse DER certificates with `cert_parse` fr
 | | TLS 1.3 | TLS 1.2 |
 |---|---|---|
 | Cipher suites | AES-128-GCM, ChaCha20-Poly1305, AES-256-GCM | ECDHE-RSA and ECDHE-ECDSA with AES-128-GCM or AES-256-GCM |
-| Key exchange | X25519 | X25519, P-256 |
-| Server signatures | ECDSA P-256 and P-384, RSA-PSS (SHA-256/384) | same, plus RSA PKCS#1 v1.5 (SHA-256/384) |
+| Key exchange | X25519; P-256 or P-384 after a HelloRetryRequest | X25519, P-256, P-384 |
+| Server signatures | ECDSA P-256 and P-384, RSA-PSS (SHA-256/384) | same (any SHA-256/384 + curve pairing), plus RSA PKCS#1 v1.5 (SHA-256/384) |
 | SNI | yes | yes |
 | ALPN | yes | offered; the result is not reported |
 | Client certificates | no | P-256 ECDSA |
 
 Not supported: TLS 1.1 and older, CBC or non-ECDHE cipher suites (never offered),
-HelloRetryRequest (a TLS 1.3 server that does not accept X25519 fails the handshake),
 session resumption (tickets are collected but not used), 0-RTT and post-handshake
 authentication. TLS 1.3 KeyUpdate is supported in both directions: the client follows
 the server's key changes and answers when the server asks it to update its own keys.
@@ -176,20 +175,30 @@ there is no option to skip it.
 
 ## Security status
 
-This library has not had an external audit. An internal review (October 2026) found the
-following, which are **not yet fixed**:
+This library has not had an external audit. Every item from an internal review
+(October 2026) is fixed as of 1.5.0; the fixes are listed below by release. Known
+limitations, by design for now: no certificate revocation checking (OCSP/CRL), no
+name-constraints support (such chains are rejected), no session resumption or 0-RTT,
+and no SHA-512 signatures.
 
-- **TLS 1.2 extensions:** extended master secret (RFC 7627) and renegotiation_info are
-  not sent or checked.
-- **HelloRetryRequest:** a TLS 1.3 server that will not use X25519 fails the handshake.
-- **TLS 1.2 ECDSA:** the signature hash is assumed to match the curve (SHA-256 with
-  P-256, SHA-384 with P-384), so a P-384 server signing with SHA-256 fails.
+Fixed in 1.5.0:
+- **HelloRetryRequest:** a TLS 1.3 server that does not accept X25519 can ask for P-256
+  or P-384; the key exchange for both is constant time.
+- **TLS 1.2 extended master secret and renegotiation_info** (RFC 7627, RFC 5746) are
+  offered; EMS is used when the server agrees, and a non-empty renegotiation_info is
+  rejected.
+- **TLS 1.2 SHA-384 cipher suites** used the SHA-256 PRF for the master secret, so
+  servers that chose `*-AES256-GCM-SHA384` failed the handshake.
+- **P-384 ECDSA servers:** the P-384 signature scheme was advertised with the wrong
+  codepoint (DSA's), and TLS 1.2 tied the ECDSA hash to the curve, so servers with P-384
+  certificates could not connect. secp384r1 is now offered, and P-384 key exchange is
+  supported (constant time).
 
 Fixed in 1.4.6:
 - **Timing side channels:** AES is bitsliced (no S-box tables), GHASH uses a table-free
   carry-less multiply, and P-256 operations on secrets (key generation, ECDH, ECDSA
-  signing) use fixed-width Montgomery arithmetic, complete point formulas and a
-  256-step ladder. All three are also faster than before. Remaining primitives were
+  signing; P-384 key exchange since 1.5.0) use fixed-width Montgomery arithmetic,
+  complete point formulas and a fixed-length ladder. All three are also faster than before. Remaining primitives were
   already constant time: X25519 (Montgomery ladder), ChaCha20-Poly1305 (no tables),
   tag and Finished comparisons. Signature verification and RSA handle only public data.
 
@@ -224,7 +233,7 @@ before the path is anchored.
 crypto/  primitives and X.509
   aes, gcm, chacha20, poly1305           AEAD ciphers (constant time)
   hash (SHA-256/384/512), sha1, hmac, hkdf, prf (TLS 1.2 PRF)
-  curve25519, p256, p256_ct, p384, rsa, bigint, ed25519 (not used by TLS)
+  curve25519, p256, p384, ec_ct (constant-time P-256/P-384), rsa, bigint, ed25519 (not used by TLS)
   asn1, pem, base64, cert                X.509 parsing and path validation
   random                                 OS randomness (/dev/urandom)
   record, handshake                      record protection, TLS 1.3 key schedule
