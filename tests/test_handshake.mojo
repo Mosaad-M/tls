@@ -4,6 +4,8 @@
 # Test vectors computed with Python (hashlib/hmac), matching RFC 8446 §7.1.
 # ============================================================================
 
+from crypto.cert import X509Cert
+from tls.connection import _verify_cert_verify_sig
 from crypto.handshake import (
     tls13_early_secret, tls13_handshake_secret, tls13_master_secret,
     tls13_derive_secret, tls13_traffic_keys,
@@ -401,6 +403,19 @@ def test_verify_finished_sha384_accept_reject() raises:
         raise Error("verify_finished_sha384_reject: bad MAC not rejected")
 
 
+def test_cert_verify_rejects_pkcs1() raises:
+    # RFC 8446 §4.4.3: RSA CertificateVerify must use PSS, never PKCS#1 v1.5
+    var cert = X509Cert()
+    cert.pub_key_alg = "rsa"
+    var message = String()
+    try:
+        _verify_cert_verify_sig(cert, 0x0401, List[UInt8](), List[UInt8]())
+    except e:
+        message = String(e)
+    if message.find("unsupported sig_scheme") < 0:
+        raise Error("rsa_pkcs1_sha256 not rejected as unsupported: '" + message + "'")
+
+
 def main() raises:
     var passed = 0
     var failed = 0
@@ -421,6 +436,7 @@ def main() raises:
     run_test[test_derive_secret_sha384]("SHA-384 Derive-Secret", passed, failed)
     run_test[test_finished_sha384]("SHA-384 Finished key + compute", passed, failed)
     run_test[test_verify_finished_sha384_accept_reject]("SHA-384 Verify Finished accept + reject", passed, failed)
+    run_test[test_cert_verify_rejects_pkcs1]("TLS 1.3 CertificateVerify rejects rsa_pkcs1_sha256", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:

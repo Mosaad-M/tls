@@ -301,7 +301,7 @@ def build_client_hello(
     _append_u16be(exts, GROUP_X25519)  # 0x001D — TLS 1.3 preferred
     _append_u16be(exts, 0x0017)        # secp256r1 (P-256) — TLS 1.2 ECDHE
 
-    # signature_algorithms: RSA-PSS + ECDSA P-256/P-384 + RSA-PKCS1
+    # signature_algorithms: only schemes this library can verify
     _append_u16be(exts, EXT_SIG_ALGS)
     _append_u16be(exts, 14)  # ext data length = 2 + 6*2
     _append_u16be(exts, 12)  # sig alg list length in bytes (6 algs)
@@ -310,7 +310,7 @@ def build_client_hello(
     _append_u16be(exts, 0x0401)  # rsa_pkcs1_sha256
     _append_u16be(exts, 0x0804)  # rsa_pss_rsae_sha256
     _append_u16be(exts, 0x0501)  # rsa_pkcs1_sha384
-    _append_u16be(exts, 0x0601)  # rsa_pkcs1_sha512
+    _append_u16be(exts, 0x0805)  # rsa_pss_rsae_sha384
 
     # key_share: x25519 public key
     var ks_entry_len = 2 + 2 + 32  # group + key_len + key
@@ -720,7 +720,7 @@ def build_client_hello_with_psk(
     _append_u16be(exts, 0x0401)
     _append_u16be(exts, 0x0804)
     _append_u16be(exts, 0x0501)
-    _append_u16be(exts, 0x0601)
+    _append_u16be(exts, 0x0805)
 
     # key_share: x25519
     var ks_entry_len = 2 + 2 + 32

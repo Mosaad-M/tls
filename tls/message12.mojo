@@ -42,6 +42,25 @@ comptime HS_CERTIFICATE_VERIFY  : UInt8 = 0x0F
 # parse_server_hello_version
 # ============================================================================
 
+def check_downgrade_sentinel(server_random: List[UInt8]) raises:
+    """Abort if a TLS 1.2 ServerHello carries the TLS 1.3 downgrade sentinel.
+
+    A TLS 1.3 server that negotiates an older version sets the last 8 bytes
+    of ServerHello.random to "DOWNGRD" 01 (TLS 1.2) or 00 (TLS 1.1 and
+    below). This client always offers TLS 1.3, so seeing either means an
+    attacker stripped TLS 1.3 from the ClientHello (RFC 8446 §4.1.3).
+    """
+    if len(server_random) != 32:
+        raise Error("tls: ServerHello.random must be 32 bytes")
+    var sentinel: List[UInt8] = [0x44, 0x4F, 0x57, 0x4E, 0x47, 0x52, 0x44]
+    for i in range(7):
+        if server_random[24 + i] != sentinel[i]:
+            return
+    var last = server_random[31]
+    if last == 0x01 or last == 0x00:
+        raise Error("tls: downgrade detected (illegal_parameter)")
+
+
 def parse_server_hello_version(body: List[UInt8]) raises -> Tuple[UInt16, List[UInt8], List[UInt8], Bool]:
     """Parse ServerHello body, determine TLS version.
 

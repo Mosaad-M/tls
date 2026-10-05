@@ -27,11 +27,11 @@ from crypto.record import (
 )
 from crypto.cert import X509Cert, cert_parse, cert_chain_verify
 from crypto.asn1 import asn1_parse_ecdsa_sig, asn1_parse_ecdsa_sig_48
-from crypto.curve25519 import x25519_public_key, x25519
+from crypto.curve25519 import x25519_public_key, x25519_shared
 from crypto.random import csprng_bytes
 from crypto.p256 import p256_ecdsa_verify
 from crypto.p384 import p384_ecdsa_verify
-from crypto.rsa import rsa_pkcs1_verify, rsa_pss_verify
+from crypto.rsa import rsa_pss_verify
 from tls.message import (
     build_client_hello, build_finished,
     parse_handshake_msg, parse_server_hello, parse_server_hello_key_share,
@@ -223,7 +223,11 @@ def _verify_cert_verify_sig(
     sig_bytes:  List[UInt8],
     cv_input:   List[UInt8],
 ) raises:
-    """Verify CertificateVerify signature."""
+    """Verify a TLS 1.3 CertificateVerify signature.
+
+    RSA must use PSS here: RFC 8446 §4.4.3 forbids PKCS#1 v1.5 (0x0401) in
+    CertificateVerify, so it falls through to "unsupported sig_scheme".
+    """
     if sig_scheme == 0x0403:  # ecdsa_secp256r1_sha256
         if cert.pub_key_alg != "ec":
             raise Error("tls: sig_scheme ECDSA but cert has no EC key")
@@ -236,11 +240,6 @@ def _verify_cert_verify_sig(
         var msg_hash = sha384(cv_input)
         var sig_res = asn1_parse_ecdsa_sig_48(sig_bytes)
         p384_ecdsa_verify(cert.ec_point, msg_hash, sig_res[0].copy(), sig_res[1].copy())
-    elif sig_scheme == 0x0401:  # rsa_pkcs1_sha256
-        if cert.pub_key_alg != "rsa":
-            raise Error("tls: sig_scheme RSA-PKCS1 but cert has no RSA key")
-        var msg_hash = sha256(cv_input)
-        rsa_pkcs1_verify(cert.rsa_n, cert.rsa_e, msg_hash, sig_bytes)
     elif sig_scheme == 0x0804:  # rsa_pss_rsae_sha256
         if cert.pub_key_alg != "rsa":
             raise Error("tls: sig_scheme RSA-PSS-SHA256 but cert has no RSA key")
@@ -359,7 +358,7 @@ def tls13_after_server_hello(
 
     # ── Handshake key derivation ──────────────────────────────────────────────
     var server_pub_key = parse_server_hello_key_share(server_hello.extensions)
-    var dhe_shared = x25519(ecdhe_private, server_pub_key)
+    var dhe_shared = x25519_shared(ecdhe_private, server_pub_key)
 
     var hs_secret: List[UInt8]
     var s_hs_ts: List[UInt8]
@@ -720,6 +719,48 @@ def tls_handle_incoming_alert(alert_body: List[UInt8]) raises:
 def tls_tcp_read(fd: Int32, n: Int) raises -> List[UInt8]:
     """Read exactly n bytes from tcp socket fd."""
     return _tcp_read(fd, n)
+
+
+def _tcp_read_part(fd: Int32, n: Int, at_boundary: Bool) raises -> List[UInt8]:
+    """Read exactly n bytes of a post-handshake record.
+
+    EOF before any byte at a record boundary is a clean TCP close; EOF
+    anywhere else cuts a record short.
+    """
+    var out = List[UInt8](capacity=n)
+    if n == 0:
+        return out^
+    var buf = alloc[UInt8](n)
+    var total = 0
+    while total < n:
+        var got = external_call["read", Int](fd, buf.unsafe_offset(total), n - total)
+        if got < 0:
+            buf.unsafe_free()
+            raise Error("tls: tcp read failed")
+        if got == 0:
+            buf.unsafe_free()
+            if at_boundary and total == 0:
+                raise Error("tls: connection closed without close_notify")
+            raise Error("tls: truncated record")
+        total += got
+    for i in range(n):
+        out.append(buf[unsafe_offset=i])
+    buf.unsafe_free()
+    return out^
+
+
+def tls_tcp_read_record(fd: Int32) raises -> Tuple[List[UInt8], List[UInt8]]:
+    """Read one post-handshake record; returns (5-byte header, body).
+
+    Raises "tls: connection closed without close_notify" when TCP closes
+    between records and "tls: truncated record" when it closes inside one.
+    """
+    var header = _tcp_read_part(fd, 5, True)
+    var rlen = (Int(header[3]) << 8) | Int(header[4])
+    if rlen > 16640:  # 2^14 + 256 (RFC 8446 §5.2)
+        raise Error("tls: record too large: " + String(rlen))
+    var body = _tcp_read_part(fd, rlen, False)
+    return (header^, body^)
 
 
 def tls_tcp_write(fd: Int32, data: List[UInt8]) raises:

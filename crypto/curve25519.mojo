@@ -483,6 +483,24 @@ def x25519(scalar: List[UInt8], u_point: List[UInt8]) -> List[UInt8]:
     return fe_to_bytes(result)
 
 
+def x25519_shared(private_key: List[UInt8], peer_public: List[UInt8]) raises -> List[UInt8]:
+    """X25519 key agreement for TLS: x25519() plus the all-zero check.
+
+    A low-order peer point makes the shared secret all zeros, which TLS
+    must reject (RFC 8446 §7.4.2, RFC 7748 §6.1). The check ORs every byte
+    so it takes the same time for any secret.
+    """
+    if len(private_key) != 32 or len(peer_public) != 32:
+        raise Error("tls: x25519 keys must be 32 bytes")
+    var shared = x25519(private_key, peer_public)
+    var acc: UInt8 = 0
+    for i in range(len(shared)):
+        acc |= shared[i]
+    if acc == 0:
+        raise Error("tls: x25519 shared secret is zero (low-order point)")
+    return shared^
+
+
 def x25519_public_key(private_key: List[UInt8]) -> List[UInt8]:
     """Compute X25519 public key = scalar * base_point (u=9).
 

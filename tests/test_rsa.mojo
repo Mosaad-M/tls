@@ -159,6 +159,46 @@ def test_pss_reject_tampered_sig() raises:
         raise Error("pss_reject_tampered_sig: tampered sig not rejected")
 
 
+def _rsa_err(n: List[UInt8], e: List[UInt8], h: List[UInt8], sig: List[UInt8]) -> String:
+    try:
+        rsa_pkcs1_verify(n, e, h, sig)
+    except err:
+        return String(err)
+    return String()
+
+
+def test_pkcs1_reject_padding_without_separator() raises:
+    # e = 1 makes em = sig, so a malformed encoding can be fed in directly:
+    # 00 01 FF...FF with no 0x00 separator. tls 1.4.3 read em[k] here.
+    var k = 64
+    var n = List[UInt8](capacity=k)
+    for _ in range(k):
+        n.append(0xFF)
+    var e = List[UInt8]()
+    e.append(1)
+    var sig = List[UInt8](capacity=k)
+    sig.append(0x00)
+    sig.append(0x01)
+    for _ in range(k - 2):
+        sig.append(0xFF)
+    var msg = _rsa_err(n, e, _msg_hash(), sig)
+    if msg.find("separator") < 0:
+        raise Error("expected a missing-separator error, got '" + msg + "'")
+
+
+def test_pkcs1_reject_tiny_modulus() raises:
+    # A 1-byte modulus: tls 1.4.3 read em[1] before checking the length.
+    var n = List[UInt8]()
+    n.append(0xFF)
+    var e = List[UInt8]()
+    e.append(1)
+    var sig = List[UInt8]()
+    sig.append(0x00)
+    var msg = _rsa_err(n, e, _msg_hash(), sig)
+    if msg.find("modulus too short") < 0:
+        raise Error("expected 'modulus too short', got '" + msg + "'")
+
+
 def main() raises:
     var passed = 0
     var failed = 0
@@ -167,6 +207,8 @@ def main() raises:
     run_test[test_pkcs1_valid]("PKCS#1 v1.5 valid signature", passed, failed)
     run_test[test_pkcs1_reject_wrong_hash]("PKCS#1 v1.5 reject wrong hash", passed, failed)
     run_test[test_pkcs1_reject_tampered_sig]("PKCS#1 v1.5 reject tampered sig", passed, failed)
+    run_test[test_pkcs1_reject_padding_without_separator]("PKCS#1 v1.5 reject FF padding with no separator", passed, failed)
+    run_test[test_pkcs1_reject_tiny_modulus]("PKCS#1 v1.5 reject tiny modulus", passed, failed)
     run_test[test_pss_valid]("RSA-PSS valid signature", passed, failed)
     run_test[test_pss_reject_wrong_hash]("RSA-PSS reject wrong hash", passed, failed)
     run_test[test_pss_reject_tampered_sig]("RSA-PSS reject tampered sig", passed, failed)

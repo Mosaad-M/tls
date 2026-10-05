@@ -157,6 +157,8 @@ def test_tls12_send_recv_roundtrip() raises:
 
     # Read response
     var response = tls.recv_all()
+    if not tls.close_notify_received():
+        raise Error("recv_all returned without an authenticated close_notify")
 
     try:
         tls.close()

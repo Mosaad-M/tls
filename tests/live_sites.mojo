@@ -23,6 +23,7 @@ def main() raises:
         "www.apple.com", "example.com", "www.python.org", "pypi.org",
         "www.mozilla.org", "www.bing.com", "conda.modular.com",
         "www.youtube.com", "www.reddit.com", "www.digicert.com", "www.netflix.com",
+        "badssl.com",  # TLS 1.2 only, RSA certificate
     ]:
         hosts.append(h)
     var failures = 0

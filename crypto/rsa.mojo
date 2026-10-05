@@ -120,6 +120,9 @@ def rsa_pkcs1_verify(
     var k = len(n_bytes)
     if len(sig) != k:
         raise Error("rsa_pkcs1: signature length != key length")
+    # 00 01 FF*8 00 DigestInfo(19) Hash: shorter moduli cannot hold an encoding
+    if k < 11 + 19 + hash_len:
+        raise Error("rsa_pkcs1: modulus too short")
 
     # Recover encoded message: em = sig^e mod n, padded to k bytes
     var em = _rsa_raw(sig, n, e, k)
@@ -134,7 +137,7 @@ def rsa_pkcs1_verify(
         i += 1
     if i < 10:  # at least 8 FF bytes (i started at 2, so >= 10 means >= 8 FFs)
         raise Error("rsa_pkcs1: padding too short (need ≥ 8 FF bytes)")
-    if em[i] != 0x00:
+    if i >= k or em[i] != 0x00:
         raise Error("rsa_pkcs1: expected 0x00 separator after FF padding")
     i += 1  # skip separator
 
