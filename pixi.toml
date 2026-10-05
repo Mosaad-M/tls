@@ -26,6 +26,9 @@ test-record = "mojo run -I . tests/test_record.mojo"
 test-record-eof = "mojo run -I . tests/test_record_eof.mojo"
 test-socket-io = "mojo run -I . tests/test_socket_io.mojo"
 test-ffi-compat = "mojo run -I . tests/test_ffi_compat.mojo"
+test-ct-crypto = "mojo run -I . -I tests tests/test_ct_crypto.mojo"
+ct-check = "mojo run -I . -I tests bench/ct_check.mojo"
+test-interop = "bash tests/interop.sh && bash tests/keyupdate_interop.sh"
 test-handshake = "mojo run -I . tests/test_handshake.mojo"
 test-random = "mojo run -I . tests/test_random.mojo"
 test-base64 = "mojo run -I . tests/test_base64.mojo"
@@ -59,7 +62,7 @@ test = { depends-on = [
   "test-bigint", "test-rsa", "test-curve25519", "test-p256", "test-p384",
   "test-asn1", "test-cert", "test-cert-sha384", "test-cert-hostname", "test-cert-chain", "test-cert-path",
   "test-base64", "test-pem", "test-random", "test-sha1", "test-ed25519",
-  "test-record", "test-record-eof", "test-socket-io", "test-ffi-compat", "test-record12", "test-handshake",
+  "test-record", "test-record-eof", "test-socket-io", "test-ffi-compat", "test-ct-crypto", "test-record12", "test-handshake",
   "test-message", "test-message12", "test-prf", "test-alert",
   "test-psk-handshake", "test-session-ticket", "test-p256-sign",
   "test-message12-mtls", "test-rsa4096", "test-sha512-vec"
@@ -67,3 +70,4 @@ test = { depends-on = [
 
 [dependencies]
 mojo = ">=1.0.0"
+openssl = ">=3.0"  # tests/interop.sh and keyupdate_interop.sh (openssl s_server)

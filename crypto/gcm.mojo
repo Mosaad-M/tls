@@ -12,6 +12,7 @@
 #         CTR encryption starts at inc32(J0) = IV || 0x00000002
 #
 # Security:
+#   - Constant time: bitsliced AES (crypto/aes.mojo) and table-free GHASH
 #   - Tag verification is constant-time (OR-accumulation, no early exit)
 #   - Plaintext is NOT returned until tag verification passes
 #   - 12-byte (96-bit) IV only — the standard safe form
@@ -22,128 +23,110 @@ from crypto.hmac import hmac_equal
 
 
 # ============================================================================
-# GF(2^128) multiplication — GHASH spec compliant (NIST SP 800-38D Algorithm 1)
-#
-# Elements are (hi: UInt64, lo: UInt64) in big-endian bit order.
-# Bit 0 of the 128-bit value is the MSB of hi.
-# Reduction polynomial: x^128 + x^7 + x^2 + x + 1
+# GHASH — constant-time GF(2^128) multiply (port of BearSSL ghash_ctmul64)
 # ============================================================================
+# The carry-less 64x64 product is computed with ordinary integer
+# multiplications on operands masked to every 4th bit: carries then land in
+# bit positions that are masked away. No tables, no secret-dependent branches.
+# (Integer multiply is constant time on the 64-bit CPUs this targets.)
 
-def _gf128_mul_x(hi: UInt64, lo: UInt64) -> Tuple[UInt64, UInt64]:
-    """Multiply GF(2^128) element by x (right-shift by 1 bit with conditional reduction)."""
-    var lsb = lo & 1
-    var r_lo = (lo >> 1) | (hi << 63)
-    var r_hi = hi >> 1
-    if lsb != 0:
-        r_hi ^= UInt64(0xE100000000000000)
-    return r_hi, r_lo
-
-
-def _gf128_mul_x4(hi: UInt64, lo: UInt64) -> Tuple[UInt64, UInt64]:
-    """Multiply GF(2^128) element by x^4 (four applications of mul_x)."""
-    var r = _gf128_mul_x(hi, lo)
-    r = _gf128_mul_x(r[0], r[1])
-    r = _gf128_mul_x(r[0], r[1])
-    return _gf128_mul_x(r[0], r[1])
-
-
-# ============================================================================
-# Precomputed 16-entry H-table for 4-bit GHASH
-# ============================================================================
-
-def _build_h_table(h_hi: UInt64, h_lo: UInt64) -> Tuple[List[UInt64], List[UInt64]]:
-    """Build H_table[0..15] where H_table[v] = v * H in GF(2^128).
-
-    Nibble bits are in MSB-first order: bit3=weight8, bit2=weight4, bit1=weight2, bit0=weight1.
-    H_table[8]=H, H_table[4]=H*x, H_table[2]=H*x^2, H_table[1]=H*x^3.
-    """
-    # Four base vectors: b0=H*x^0=H, b1=H*x, b2=H*x^2, b3=H*x^3
-    var b0_hi = h_hi;  var b0_lo = h_lo
-    var r = _gf128_mul_x(h_hi, h_lo)
-    var b1_hi = r[0];  var b1_lo = r[1]
-    r = _gf128_mul_x(b1_hi, b1_lo)
-    var b2_hi = r[0];  var b2_lo = r[1]
-    r = _gf128_mul_x(b2_hi, b2_lo)
-    var b3_hi = r[0];  var b3_lo = r[1]
-
-    var hi_table = List[UInt64](capacity=16)
-    var lo_table = List[UInt64](capacity=16)
-    for v in range(16):
-        var vh: UInt64 = 0
-        var vl: UInt64 = 0
-        if v & 8 != 0:
-            vh ^= b0_hi; vl ^= b0_lo
-        if v & 4 != 0:
-            vh ^= b1_hi; vl ^= b1_lo
-        if v & 2 != 0:
-            vh ^= b2_hi; vl ^= b2_lo
-        if v & 1 != 0:
-            vh ^= b3_hi; vl ^= b3_lo
-        hi_table.append(vh)
-        lo_table.append(vl)
-    return hi_table^, lo_table^
+@always_inline
+def _bmul64(x: UInt64, y: UInt64) -> UInt64:
+    """Low 64 bits of the carry-less product x * y."""
+    comptime M0 = UInt64(0x1111111111111111)
+    comptime M1 = UInt64(0x2222222222222222)
+    comptime M2 = UInt64(0x4444444444444444)
+    comptime M3 = UInt64(0x8888888888888888)
+    var x0 = x & M0
+    var x1 = x & M1
+    var x2 = x & M2
+    var x3 = x & M3
+    var y0 = y & M0
+    var y1 = y & M1
+    var y2 = y & M2
+    var y3 = y & M3
+    var z0 = (x0 * y0) ^ (x1 * y3) ^ (x2 * y2) ^ (x3 * y1)
+    var z1 = (x0 * y1) ^ (x1 * y0) ^ (x2 * y3) ^ (x3 * y2)
+    var z2 = (x0 * y2) ^ (x1 * y1) ^ (x2 * y0) ^ (x3 * y3)
+    var z3 = (x0 * y3) ^ (x1 * y2) ^ (x2 * y1) ^ (x3 * y0)
+    return (z0 & M0) | (z1 & M1) | (z2 & M2) | (z3 & M3)
 
 
-def _ghash_mul_block(
-    hi_table: List[UInt64], lo_table: List[UInt64],
-    y_hi: UInt64, y_lo: UInt64,
-) -> Tuple[UInt64, UInt64]:
-    """Multiply y by H using the precomputed 16-entry table.
-
-    Processes 32 nibbles of y from LSB (i=0) to MSB (i=31), accumulating:
-      acc = acc * x^4 XOR H_table[nib]
-    which evaluates the Horner scheme y*H = sum_j H_table[nib_j] * x^{4j}.
-
-    Nibble extraction: i=0..15 → y_lo nibbles LSB-first; i=16..31 → y_hi nibbles LSB-first.
-    """
-    var acc_hi: UInt64 = 0
-    var acc_lo: UInt64 = 0
-    for i in range(32):
-        var nib: Int
-        if i < 16:
-            nib = Int((y_lo >> UInt64(4 * i)) & UInt64(0xF))
-        else:
-            nib = Int((y_hi >> UInt64(4 * (i - 16))) & UInt64(0xF))
-        var r4 = _gf128_mul_x4(acc_hi, acc_lo)
-        acc_hi = r4[0] ^ hi_table[nib]
-        acc_lo = r4[1] ^ lo_table[nib]
-    return acc_hi, acc_lo
+@always_inline
+def _rev64(v: UInt64) -> UInt64:
+    """Reverse the bit order of a 64-bit word."""
+    var x = v
+    x = ((x & UInt64(0x5555555555555555)) << 1) | ((x >> 1) & UInt64(0x5555555555555555))
+    x = ((x & UInt64(0x3333333333333333)) << 2) | ((x >> 2) & UInt64(0x3333333333333333))
+    x = ((x & UInt64(0x0F0F0F0F0F0F0F0F)) << 4) | ((x >> 4) & UInt64(0x0F0F0F0F0F0F0F0F))
+    x = ((x & UInt64(0x00FF00FF00FF00FF)) << 8) | ((x >> 8) & UInt64(0x00FF00FF00FF00FF))
+    x = ((x & UInt64(0x0000FFFF0000FFFF)) << 16) | ((x >> 16) & UInt64(0x0000FFFF0000FFFF))
+    return (x << 32) | (x >> 32)
 
 
-# ============================================================================
-# GHASH — polynomial hash over GF(2^128)
-# ============================================================================
+struct _GHashKey(Copyable, Movable):
+    """H split into the halves (and bit-reversed halves) ghash_ctmul64 uses."""
+    var h0: UInt64   # low 64 bits of H (big-endian bytes 8..15)
+    var h1: UInt64   # high 64 bits of H (bytes 0..7)
+    var h2: UInt64
+    var h0r: UInt64
+    var h1r: UInt64
+    var h2r: UInt64
 
-def _ghash(
-    h_hi: UInt64, h_lo: UInt64,
-    data: List[UInt8],
-) -> Tuple[UInt64, UInt64]:
-    """Compute GHASH_H(data).
+    def __init__(out self, h1: UInt64, h0: UInt64):
+        self.h0 = h0
+        self.h1 = h1
+        self.h2 = h0 ^ h1
+        self.h0r = _rev64(h0)
+        self.h1r = _rev64(h1)
+        self.h2r = self.h0r ^ self.h1r
 
-    data must be a multiple of 16 bytes (caller zero-pads if needed).
-    Returns (y_hi, y_lo) — 128-bit authentication value.
-    """
-    var y_hi: UInt64 = 0
-    var y_lo: UInt64 = 0
-    var n_blocks = len(data) // 16
 
-    for b in range(n_blocks):
-        # Load 16-byte block as big-endian (hi, lo)
-        var off = b * 16
-        var xi_hi: UInt64 = 0
-        var xi_lo: UInt64 = 0
-        for i in range(8):
-            xi_hi = (xi_hi << 8) | UInt64(data[off + i])
-        for i in range(8):
-            xi_lo = (xi_lo << 8) | UInt64(data[off + 8 + i])
+@always_inline
+def _ghash_block(k: _GHashKey, y1_in: UInt64, y0_in: UInt64) -> Tuple[UInt64, UInt64]:
+    """(y1:y0) * H in GF(2^128), GHASH bit order. Returns (y1, y0)."""
+    var y0 = y0_in
+    var y1 = y1_in
+    var y0r = _rev64(y0)
+    var y1r = _rev64(y1)
+    var y2 = y0 ^ y1
+    var y2r = y0r ^ y1r
 
-        y_hi ^= xi_hi
-        y_lo ^= xi_lo
-        var res = _gf128_mul(y_hi, y_lo, h_hi, h_lo)
-        y_hi = res[0]
-        y_lo = res[1]
+    var z0 = _bmul64(y0, k.h0)
+    var z1 = _bmul64(y1, k.h1)
+    var z2 = _bmul64(y2, k.h2)
+    var z0h = _bmul64(y0r, k.h0r)
+    var z1h = _bmul64(y1r, k.h1r)
+    var z2h = _bmul64(y2r, k.h2r)
+    z2 ^= z0 ^ z1
+    z2h ^= z0h ^ z1h
+    z0h = _rev64(z0h) >> 1
+    z1h = _rev64(z1h) >> 1
+    z2h = _rev64(z2h) >> 1
 
-    return y_hi, y_lo
+    var v0 = z0
+    var v1 = z0h ^ z2
+    var v2 = z1 ^ z2h
+    var v3 = z1h
+
+    v3 = (v3 << 1) | (v2 >> 63)
+    v2 = (v2 << 1) | (v1 >> 63)
+    v1 = (v1 << 1) | (v0 >> 63)
+    v0 = v0 << 1
+
+    v2 ^= v0 ^ (v0 >> 1) ^ (v0 >> 2) ^ (v0 >> 7)
+    v1 ^= (v0 << 63) ^ (v0 << 62) ^ (v0 << 57)
+    v3 ^= v1 ^ (v1 >> 1) ^ (v1 >> 2) ^ (v1 >> 7)
+    v2 ^= (v1 << 63) ^ (v1 << 62) ^ (v1 << 57)
+    return (v3, v2)
+
+
+@always_inline
+def _load64be(b: List[UInt8], off: Int) -> UInt64:
+    var v: UInt64 = 0
+    for i in range(8):
+        v = (v << 8) | UInt64(b[off + i])
+    return v
 
 
 # ============================================================================
@@ -163,18 +146,25 @@ def _inc32(ctr: List[UInt8]) -> List[UInt8]:
 
 
 def _aes_ctr(aes: AES, j0: List[UInt8], data: List[UInt8]) raises -> List[UInt8]:
-    """XOR data with AES-CTR keystream starting at counter = inc32(j0)."""
+    """XOR data with AES-CTR keystream starting at counter = inc32(j0).
+
+    Counters are encrypted four at a time (the bitsliced AES's natural width).
+    """
     var out = List[UInt8](capacity=len(data))
     var ctr = _inc32(j0)
     var pos = 0
+    var counters = List[UInt8](capacity=64)
     while pos < len(data):
-        var block = aes.encrypt_block(ctr)
-        var n = min(16, len(data) - pos)
-        for i in range(n):
-            out.append(data[pos + i] ^ block[i])
-        pos += n
-        if pos < len(data):
+        counters.clear()
+        for _ in range(4):
+            for i in range(16):
+                counters.append(ctr[i])
             ctr = _inc32(ctr)
+        var ks = aes.encrypt_blocks4(counters)
+        var n = min(64, len(data) - pos)
+        for i in range(n):
+            out.append(data[pos + i] ^ ks[i])
+        pos += n
     return out^
 
 
@@ -219,69 +209,48 @@ def _build_ghash_input(aad: List[UInt8], ct: List[UInt8]) -> List[UInt8]:
 # Shared key-setup helper (used by both encrypt and decrypt)
 # ============================================================================
 
-def _gcm_setup(
-    aes: AES,
-    iv: List[UInt8],
-) raises -> Tuple[UInt64, UInt64, List[UInt8], List[UInt64], List[UInt64]]:
-    """Return (H_hi, H_lo, J0, H_hi_table, H_lo_table) for a given AES instance and 12-byte IV."""
+def _gcm_setup(aes: AES, iv: List[UInt8]) raises -> Tuple[_GHashKey, List[UInt8]]:
+    """Return (GHASH key, J0) for a given AES instance and 12-byte IV."""
     # H = AES_K(0^128)
     var zero_block = List[UInt8](capacity=16)
     for _ in range(16):
         zero_block.append(0x00)
     var h_block = aes.encrypt_block(zero_block)
-    var h_hi: UInt64 = 0
-    var h_lo: UInt64 = 0
-    for i in range(8):
-        h_hi = (h_hi << 8) | UInt64(h_block[i])
-    for i in range(8):
-        h_lo = (h_lo << 8) | UInt64(h_block[8 + i])
+    var key = _GHashKey(_load64be(h_block, 0), _load64be(h_block, 8))
 
     # J0 = IV || 0x00000001
     var j0 = List[UInt8](capacity=16)
     for b in iv:
         j0.append(b)
     j0.append(0x00); j0.append(0x00); j0.append(0x00); j0.append(0x01)
-
-    # Precompute 16-entry GHASH multiplication table
-    var tables = _build_h_table(h_hi, h_lo)
-    var hi_tbl = tables[0].copy()
-    var lo_tbl = tables[1].copy()
-    return h_hi, h_lo, j0^, hi_tbl^, lo_tbl^
+    return key^, j0^
 
 
 def _compute_tag(
     aes: AES,
-    hi_table: List[UInt64], lo_table: List[UInt64],
+    key: _GHashKey,
     j0: List[UInt8],
     aad: List[UInt8],
     ct: List[UInt8],
 ) raises -> List[UInt8]:
-    """Compute GCM authentication tag using 4-bit precomputed GHASH table."""
+    """Compute the GCM authentication tag (constant-time GHASH)."""
     var ghash_input = _build_ghash_input(aad, ct)
-    # Use table-based GHASH (4x faster than bit-by-bit)
-    var y_hi: UInt64 = 0
-    var y_lo: UInt64 = 0
-    var n_blocks = len(ghash_input) // 16
-    for b in range(n_blocks):
+    var y1: UInt64 = 0
+    var y0: UInt64 = 0
+    for b in range(len(ghash_input) // 16):
         var off = b * 16
-        var xi_hi: UInt64 = 0
-        var xi_lo: UInt64 = 0
-        for i in range(8):
-            xi_hi = (xi_hi << 8) | UInt64(ghash_input[off + i])
-        for i in range(8):
-            xi_lo = (xi_lo << 8) | UInt64(ghash_input[off + 8 + i])
-        y_hi ^= xi_hi
-        y_lo ^= xi_lo
-        var gh = _ghash_mul_block(hi_table, lo_table, y_hi, y_lo)
-        y_hi = gh[0]
-        y_lo = gh[1]
+        y1 ^= _load64be(ghash_input, off)
+        y0 ^= _load64be(ghash_input, off + 8)
+        var r = _ghash_block(key, y1, y0)
+        y1 = r[0]
+        y0 = r[1]
 
     var s_block = aes.encrypt_block(j0)
     var tag = List[UInt8](capacity=16)
     for i in range(8):
-        tag.append(UInt8((y_hi >> UInt64((7 - i) * 8)) & 0xFF) ^ s_block[i])
+        tag.append(UInt8((y1 >> UInt64((7 - i) * 8)) & 0xFF) ^ s_block[i])
     for i in range(8):
-        tag.append(UInt8((y_lo >> UInt64((7 - i) * 8)) & 0xFF) ^ s_block[8 + i])
+        tag.append(UInt8((y0 >> UInt64((7 - i) * 8)) & 0xFF) ^ s_block[8 + i])
     return tag^
 
 
@@ -311,12 +280,11 @@ def gcm_encrypt(
 
     var aes = AES(key)
     var setup = _gcm_setup(aes, iv)
-    var j0        = setup[2].copy()
-    var hi_table  = setup[3].copy()
-    var lo_table  = setup[4].copy()
+    var gkey = setup[0].copy()
+    var j0   = setup[1].copy()
 
     var ciphertext = _aes_ctr(aes, j0, plaintext)
-    var tag = _compute_tag(aes, hi_table, lo_table, j0, aad, ciphertext)
+    var tag = _compute_tag(aes, gkey, j0, aad, ciphertext)
 
     return ciphertext^, tag^
 
@@ -350,12 +318,11 @@ def gcm_decrypt(
 
     var aes = AES(key)
     var setup = _gcm_setup(aes, iv)
-    var j0        = setup[2].copy()
-    var hi_table  = setup[3].copy()
-    var lo_table  = setup[4].copy()
+    var gkey = setup[0].copy()
+    var j0   = setup[1].copy()
 
     # Recompute expected tag over the received ciphertext
-    var expected_tag = _compute_tag(aes, hi_table, lo_table, j0, aad, ciphertext)
+    var expected_tag = _compute_tag(aes, gkey, j0, aad, ciphertext)
 
     # Constant-time tag comparison — MUST complete before decrypting
     if not hmac_equal(tag, expected_tag):
