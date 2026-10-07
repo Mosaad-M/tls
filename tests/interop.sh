@@ -109,6 +109,18 @@ scenario "TLS 1.2 mTLS over ECDHE-ECDSA-AES256-GCM-SHA384" \
     "New, TLSv1.2, Cipher is ECDHE-ECDSA-AES256-GCM-SHA384;;CN=interop-client" "$CLIENT_CERT_HEX" "$CLIENT_KEY_HEX" \
     -- -tls1_2 -cipher ECDHE-ECDSA-AES256-GCM-SHA384 -Verify 1 -CAfile "$WORK/ca.pem"
 
+# ── SHA-512 signatures (1.6.1): RSA-2048 leaf signed ecdsa-with-SHA512, and
+# s_server restricted to one SHA-512 handshake signature scheme ─────────────
+CERT="$WORK/rsa.pem" KEY="$WORK/rsa.key" scenario "TLS 1.3 rsa_pss_rsae_sha512 CertificateVerify" \
+    "New, TLSv1.3, Cipher is" \
+    -- -tls1_3 -sigalgs rsa_pss_rsae_sha512
+CERT="$WORK/rsa.pem" KEY="$WORK/rsa.key" scenario "TLS 1.2 rsa_pkcs1_sha512 ServerKeyExchange" \
+    "New, TLSv1.2, Cipher is ECDHE-RSA" \
+    -- -tls1_2 -sigalgs RSA+SHA512
+CERT="$WORK/rsa.pem" KEY="$WORK/rsa.key" scenario "TLS 1.2 rsa_pss_rsae_sha512 ServerKeyExchange" \
+    "New, TLSv1.2, Cipher is ECDHE-RSA" \
+    -- -tls1_2 -sigalgs rsa_pss_rsae_sha512
+
 # hostile <name> <mode> <expect> [upstream s_server args...]
 # expect: "ok:<page check>" (handshake must succeed) or "fail:<error text>"
 # (the client must exit with a clean error: status 1, not an abort).

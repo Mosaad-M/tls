@@ -9,7 +9,7 @@
 from std.time import perf_counter_ns
 from crypto.curve25519 import x25519, x25519_public_key
 from crypto.p256 import p256_ecdh, p256_public_key, p256_ecdsa_sign
-from crypto.gcm import gcm_encrypt
+from crypto.gcm import gcm_encrypt, GcmKey
 from crypto.poly1305 import chacha20_poly1305_encrypt
 from crypto.hash import sha256
 
@@ -64,6 +64,18 @@ def bench_aead() raises:
     for _ in range(n_small):
         _ = gcm_encrypt(key128, nonce, small, aad)
     _per_op("AES-128-GCM encrypt 64-byte record", n_small, Int(perf_counter_ns() - start))
+
+    # The same with the key prepared once, as TLS records use it (1.6.1)
+    var gk = GcmKey(key128)
+    start = perf_counter_ns()
+    for _ in range(n_small):
+        _ = gk.seal(nonce, small, aad)
+    _per_op("AES-128-GCM encrypt 64-byte record, prepared key", n_small, Int(perf_counter_ns() - start))
+    var big = _bytes(16384, 7)
+    start = perf_counter_ns()
+    for _ in range(200):
+        _ = gk.seal(nonce, big, aad)
+    _throughput("AES-128-GCM encrypt 16 KiB records, prepared key", 16384 * 200, Int(perf_counter_ns() - start))
 
 
 def bench_x25519() raises:

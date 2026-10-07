@@ -149,112 +149,134 @@ def _inc32(ctr: List[UInt8]) -> List[UInt8]:
     return out^
 
 
-def _aes_ctr(aes: AES, j0: List[UInt8], data: List[UInt8]) raises -> List[UInt8]:
-    """XOR data with AES-CTR keystream starting at counter = inc32(j0).
-
-    Counters are encrypted four at a time (the bitsliced AES's natural width).
-    """
+def _aes_ctr(aes: AES, j0: List[UInt8], data: List[UInt8]) raises -> Tuple[List[UInt8], List[UInt8]]:
+    """XOR data with the AES-CTR keystream from inc32(j0); also return the tag
+    mask E(K, J0). Counters are encrypted four at a time (the bitsliced AES's
+    width), with J0 in the first batch so short records need one AES pass."""
     var out = List[UInt8](capacity=len(data))
-    var ctr = _inc32(j0)
-    var pos = 0
     var counters = List[UInt8](capacity=64)
+    var ctr = j0.copy()
+    for _ in range(4):
+        for i in range(16):
+            counters.append(ctr[i])
+        ctr = _inc32(ctr)
+    var ks = aes.encrypt_blocks4(counters)
+    var mask = List[UInt8](capacity=16)
+    for i in range(16):
+        mask.append(ks[i])
+    var pos = 0
+    var ks_off = 16  # keystream for the data starts after E(K, J0)
     while pos < len(data):
-        counters.clear()
-        for _ in range(4):
-            for i in range(16):
-                counters.append(ctr[i])
-            ctr = _inc32(ctr)
-        var ks = aes.encrypt_blocks4(counters)
-        var n = min(64, len(data) - pos)
+        if ks_off == 64:
+            counters.clear()
+            for _ in range(4):
+                for i in range(16):
+                    counters.append(ctr[i])
+                ctr = _inc32(ctr)
+            ks = aes.encrypt_blocks4(counters)
+            ks_off = 0
+        var n = min(64 - ks_off, len(data) - pos)
         for i in range(n):
-            out.append(data[pos + i] ^ ks[i])
+            out.append(data[pos + i] ^ ks[ks_off + i])
         pos += n
-    return out^
+        ks_off += n
+    return (out^, mask^)
 
 
 # ============================================================================
-# GHASH input construction
+# Prepared keys and the tag
 # ============================================================================
 
-def _pad16(data: List[UInt8]) -> List[UInt8]:
-    """Zero-pad data to a multiple of 16 bytes."""
-    var n = len(data)
-    var padded_n = ((n + 15) // 16) * 16
-    var out = List[UInt8](capacity=padded_n)
-    for i in range(n):
-        out.append(data[i])
-    for _ in range(padded_n - n):
-        out.append(0x00)
-    return out^
+struct GcmKey(Copyable, Movable):
+    """An AES-GCM key prepared once: the AES key schedule and the GHASH key
+    H = E(K, 0^128). Reuse it for every record under the same key (TLS
+    record keys live for a whole connection or until KeyUpdate)."""
+    var aes: AES
+    var hkey: _GHashKey
+
+    def __init__(out self, key: List[UInt8]) raises:
+        self.aes = AES(key)
+        var zero_block = List[UInt8](capacity=16)
+        for _ in range(16):
+            zero_block.append(0x00)
+        var h = self.aes.encrypt_block(zero_block)
+        self.hkey = _GHashKey(_load64be(h, 0), _load64be(h, 8))
+
+    def seal(self, iv: List[UInt8], plaintext: List[UInt8], aad: List[UInt8]) raises -> Tuple[List[UInt8], List[UInt8]]:
+        """Encrypt; returns (ciphertext, 16-byte tag)."""
+        if len(iv) != 12:
+            raise Error("GCM IV must be 12 bytes")
+        if len(plaintext) > _GCM_MAX_BYTES:
+            raise Error("GCM plaintext too long for one nonce")
+        var ctr = _aes_ctr(self.aes, _j0(iv), plaintext)
+        var tag = _compute_tag(self.hkey, ctr[1], aad, ctr[0])
+        return (ctr[0].copy(), tag^)
+
+    def open(self, iv: List[UInt8], ciphertext: List[UInt8], tag: List[UInt8], aad: List[UInt8]) raises -> List[UInt8]:
+        """Verify the tag (constant time), then decrypt; raises
+        "authentication failed" without releasing any plaintext."""
+        if len(iv) != 12:
+            raise Error("GCM IV must be 12 bytes")
+        if len(ciphertext) > _GCM_MAX_BYTES:
+            raise Error("GCM ciphertext too long for one nonce")
+        if len(tag) != 16:
+            raise Error("GCM tag must be 16 bytes")
+        # CTR is its own inverse: one pass yields the plaintext and the mask;
+        # the plaintext is returned only after the tag check
+        var ctr = _aes_ctr(self.aes, _j0(iv), ciphertext)
+        var expected = _compute_tag(self.hkey, ctr[1], aad, ciphertext)
+        if not hmac_equal(tag, expected):
+            raise Error("authentication failed")
+        return ctr[0].copy()
 
 
-def _build_ghash_input(aad: List[UInt8], ct: List[UInt8]) -> List[UInt8]:
-    """Build GHASH input: pad(AAD) || pad(CT) || len(AAD)_bits64 || len(CT)_bits64."""
-    var aad_padded = _pad16(aad)
-    var ct_padded  = _pad16(ct)
-    var total = len(aad_padded) + len(ct_padded) + 16
-    var out = List[UInt8](capacity=total)
-    for b in aad_padded:
-        out.append(b)
-    for b in ct_padded:
-        out.append(b)
-    # len(AAD) in bits, 64-bit big-endian
-    var aad_bits = UInt64(len(aad)) * 8
-    for i in range(7, -1, -1):
-        out.append(UInt8((aad_bits >> UInt64(i * 8)) & 0xFF))
-    # len(CT) in bits, 64-bit big-endian
-    var ct_bits = UInt64(len(ct)) * 8
-    for i in range(7, -1, -1):
-        out.append(UInt8((ct_bits >> UInt64(i * 8)) & 0xFF))
-    return out^
-
-
-# ============================================================================
-# Shared key-setup helper (used by both encrypt and decrypt)
-# ============================================================================
-
-def _gcm_setup(aes: AES, iv: List[UInt8]) raises -> Tuple[_GHashKey, List[UInt8]]:
-    """Return (GHASH key, J0) for a given AES instance and 12-byte IV."""
-    # H = AES_K(0^128)
-    var zero_block = List[UInt8](capacity=16)
-    for _ in range(16):
-        zero_block.append(0x00)
-    var h_block = aes.encrypt_block(zero_block)
-    var key = _GHashKey(_load64be(h_block, 0), _load64be(h_block, 8))
-
-    # J0 = IV || 0x00000001
+def _j0(iv: List[UInt8]) -> List[UInt8]:
+    """J0 = IV || 0x00000001 for a 96-bit IV."""
     var j0 = List[UInt8](capacity=16)
     for b in iv:
         j0.append(b)
     j0.append(0x00); j0.append(0x00); j0.append(0x00); j0.append(0x01)
-    return key^, j0^
+    return j0^
+
+
+@always_inline
+def _ghash_bytes(key: _GHashKey, data: List[UInt8], mut y1: UInt64, mut y0: UInt64):
+    """Absorb data into the GHASH state, zero-padding the last block."""
+    var n = len(data)
+    var off = 0
+    while off < n:
+        var hi: UInt64 = 0
+        var lo: UInt64 = 0
+        for i in range(8):
+            hi = (hi << 8) | (UInt64(data[off + i]) if off + i < n else 0)
+        for i in range(8):
+            lo = (lo << 8) | (UInt64(data[off + 8 + i]) if off + 8 + i < n else 0)
+        var r = _ghash_block(key, y1 ^ hi, y0 ^ lo)
+        y1 = r[0]
+        y0 = r[1]
+        off += 16
 
 
 def _compute_tag(
-    aes: AES,
     key: _GHashKey,
-    j0: List[UInt8],
+    mask: List[UInt8],
     aad: List[UInt8],
     ct: List[UInt8],
 ) raises -> List[UInt8]:
-    """Compute the GCM authentication tag (constant-time GHASH)."""
-    var ghash_input = _build_ghash_input(aad, ct)
+    """GCM tag: GHASH_H(pad(aad) || pad(ct) || lengths) XOR E(K, J0), streamed
+    without building the padded input (constant-time GHASH)."""
     var y1: UInt64 = 0
     var y0: UInt64 = 0
-    for b in range(len(ghash_input) // 16):
-        var off = b * 16
-        y1 ^= _load64be(ghash_input, off)
-        y0 ^= _load64be(ghash_input, off + 8)
-        var r = _ghash_block(key, y1, y0)
-        y1 = r[0]
-        y0 = r[1]
-
-    var s_block = aes.encrypt_block(j0)
+    _ghash_bytes(key, aad, y1, y0)
+    _ghash_bytes(key, ct, y1, y0)
+    var r = _ghash_block(key, y1 ^ (UInt64(len(aad)) * 8), y0 ^ (UInt64(len(ct)) * 8))
+    y1 = r[0]
+    y0 = r[1]
     var tag = List[UInt8](capacity=16)
     for i in range(8):
-        tag.append(UInt8((y1 >> UInt64((7 - i) * 8)) & 0xFF) ^ s_block[i])
+        tag.append(UInt8((y1 >> UInt64((7 - i) * 8)) & 0xFF) ^ mask[i])
     for i in range(8):
-        tag.append(UInt8((y0 >> UInt64((7 - i) * 8)) & 0xFF) ^ s_block[8 + i])
+        tag.append(UInt8((y0 >> UInt64((7 - i) * 8)) & 0xFF) ^ mask[8 + i])
     return tag^
 
 
@@ -268,7 +290,7 @@ def gcm_encrypt(
     plaintext: List[UInt8],
     aad: List[UInt8],
 ) raises -> Tuple[List[UInt8], List[UInt8]]:
-    """AES-GCM encrypt.
+    """AES-GCM encrypt with a one-off key (use GcmKey to reuse a key).
 
     Args:
         key:       AES key, 16 or 32 bytes (AES-128 or AES-256)
@@ -281,18 +303,7 @@ def gcm_encrypt(
     """
     if len(iv) != 12:
         raise Error("GCM IV must be 12 bytes")
-    if len(plaintext) > _GCM_MAX_BYTES:
-        raise Error("GCM plaintext too long for one nonce")
-
-    var aes = AES(key)
-    var setup = _gcm_setup(aes, iv)
-    var gkey = setup[0].copy()
-    var j0   = setup[1].copy()
-
-    var ciphertext = _aes_ctr(aes, j0, plaintext)
-    var tag = _compute_tag(aes, gkey, j0, aad, ciphertext)
-
-    return ciphertext^, tag^
+    return GcmKey(key).seal(iv, plaintext, aad)
 
 
 def gcm_decrypt(
@@ -302,39 +313,11 @@ def gcm_decrypt(
     tag: List[UInt8],
     aad: List[UInt8],
 ) raises -> List[UInt8]:
-    """AES-GCM decrypt and verify.
+    """AES-GCM decrypt and verify with a one-off key (use GcmKey to reuse a key).
 
     Verifies the authentication tag BEFORE returning plaintext.
     Raises Error if the tag does not match (constant-time comparison).
-
-    Args:
-        key:        AES key, 16 or 32 bytes
-        iv:         Nonce, must be exactly 12 bytes
-        ciphertext: Encrypted data
-        tag:        16-byte authentication tag
-        aad:        Additional authenticated data
-
-    Returns:
-        Plaintext (only if tag verification succeeds)
     """
     if len(iv) != 12:
         raise Error("GCM IV must be 12 bytes")
-    if len(ciphertext) > _GCM_MAX_BYTES:
-        raise Error("GCM ciphertext too long for one nonce")
-    if len(tag) != 16:
-        raise Error("GCM tag must be 16 bytes")
-
-    var aes = AES(key)
-    var setup = _gcm_setup(aes, iv)
-    var gkey = setup[0].copy()
-    var j0   = setup[1].copy()
-
-    # Recompute expected tag over the received ciphertext
-    var expected_tag = _compute_tag(aes, gkey, j0, aad, ciphertext)
-
-    # Constant-time tag comparison — MUST complete before decrypting
-    if not hmac_equal(tag, expected_tag):
-        raise Error("authentication failed")
-
-    # Tag verified — decrypt
-    return _aes_ctr(aes, j0, ciphertext)
+    return GcmKey(key).open(iv, ciphertext, tag, aad)

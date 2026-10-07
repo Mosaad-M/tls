@@ -249,13 +249,15 @@ def test_finished_body_roundtrip() raises:
 
 
 def test_ch_sig_algs_all_verifiable() raises:
-    # rsa_pkcs1_sha512 (0x0601) cannot be verified, so it must not be
-    # offered: a TLS 1.2 server that picked it failed the handshake.
+    # Only schemes the client can verify may be offered: a server that picks
+    # an unverifiable one fails the handshake. 0x0603 (secp521r1 / SHA-512
+    # ECDSA) is not verifiable; since 1.6.1 rsa_pkcs1_sha512
+    # (0x0601) is. (tests/test_sha512_sigs.mojo parses the exact list.)
     var ch = build_client_hello(make_bytes(0x01, 32), List[UInt8](), make_bytes(0x02, 32), "example.com")
-    if contains_u16(ch, 0x0601):
-        raise Error("ClientHello offers rsa_pkcs1_sha512")
-    if not contains_u16(ch, 0x0805):
-        raise Error("ClientHello does not offer rsa_pss_rsae_sha384")
+    if contains_u16(ch, 0x0603):
+        raise Error("ClientHello offers an unverifiable scheme")
+    if not contains_u16(ch, 0x0805) or not contains_u16(ch, 0x0601):
+        raise Error("ClientHello does not offer rsa_pss_rsae_sha384 / rsa_pkcs1_sha512")
 
 
 def _random_with_tail(last: UInt8) -> List[UInt8]:

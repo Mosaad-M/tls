@@ -374,15 +374,18 @@ def build_client_hello(
     _append_u16be(exts, GROUP_SECP384R1)  # 0x0018
 
     # signature_algorithms: only schemes this library can verify
+    # (not 0x0603: secp521r1 in TLS 1.3, which this library cannot verify)
     _append_u16be(exts, EXT_SIG_ALGS)
-    _append_u16be(exts, 14)  # ext data length = 2 + 6*2
-    _append_u16be(exts, 12)  # sig alg list length in bytes (6 algs)
+    _append_u16be(exts, 18)  # ext data length = 2 + 8*2
+    _append_u16be(exts, 16)  # sig alg list length in bytes (8 algs)
     _append_u16be(exts, 0x0403)  # ecdsa_secp256r1_sha256
     _append_u16be(exts, 0x0503)  # ecdsa_secp384r1_sha384
     _append_u16be(exts, 0x0401)  # rsa_pkcs1_sha256
     _append_u16be(exts, 0x0804)  # rsa_pss_rsae_sha256
     _append_u16be(exts, 0x0501)  # rsa_pkcs1_sha384
     _append_u16be(exts, 0x0805)  # rsa_pss_rsae_sha384
+    _append_u16be(exts, 0x0601)  # rsa_pkcs1_sha512
+    _append_u16be(exts, 0x0806)  # rsa_pss_rsae_sha512
 
     # key_share: one entry for key_share_group
     var ks_entry_len = 2 + 2 + len(key_share_pub)  # group + key_len + key
@@ -975,14 +978,16 @@ def build_client_hello_with_psk(
 
     # signature_algorithms
     _append_u16be(exts, EXT_SIG_ALGS)
-    _append_u16be(exts, 14)
-    _append_u16be(exts, 12)
+    _append_u16be(exts, 18)
+    _append_u16be(exts, 16)
     _append_u16be(exts, 0x0403)
     _append_u16be(exts, 0x0503)
     _append_u16be(exts, 0x0401)
     _append_u16be(exts, 0x0804)
     _append_u16be(exts, 0x0501)
     _append_u16be(exts, 0x0805)
+    _append_u16be(exts, 0x0601)
+    _append_u16be(exts, 0x0806)
 
     # key_share: x25519
     var ks_entry_len = 2 + 2 + 32

@@ -9,7 +9,8 @@
 # ============================================================================
 
 from crypto.aes import AES
-from crypto.gcm import gcm_encrypt, gcm_decrypt
+from crypto.gcm import gcm_encrypt, gcm_decrypt, GcmKey
+from crypto.record import AeadKey, record_seal_k, record_open_k, record_seal, CIPHER_AES_128_GCM, CTYPE_APPLICATION_DATA
 from crypto.random import csprng_bytes
 from ref_aes_table import RefAES
 from ref_gcm_table import ref_gcm_encrypt
@@ -103,6 +104,37 @@ def test_gcm_long_message() raises:
     var want = ref_gcm_encrypt(key, iv, pt, aad)
     _same(got[0], want[0], "GCM 16 KiB ciphertext")
     _same(got[1], want[1], "GCM 16 KiB tag")
+
+
+def test_gcm_key_reuse_matches_reference() raises:
+    # One prepared key, many records with different nonces and lengths
+    for key_len in [16, 32]:
+        var key = csprng_bytes(key_len)
+        var gk = GcmKey(key)
+        for n in range(0, 200, 7):
+            var iv = csprng_bytes(12)
+            var pt = csprng_bytes(n)
+            var aad = csprng_bytes(13)
+            var got = gk.seal(iv, pt, aad)
+            var want = ref_gcm_encrypt(key, iv, pt, aad)
+            _same(got[0], want[0], "reused-key ciphertext len " + String(n))
+            _same(got[1], want[1], "reused-key tag len " + String(n))
+            _same(gk.open(iv, got[0], got[1], aad), pt, "reused-key round trip")
+
+
+def test_aead_key_follows_key_changes() raises:
+    # The cache must notice a new key (KeyUpdate) and never reuse the old one
+    var ak = AeadKey()
+    var iv = csprng_bytes(12)
+    var k1 = csprng_bytes(16)
+    var k2 = csprng_bytes(16)
+    var pt = csprng_bytes(40)
+    _same(record_seal_k(ak, CIPHER_AES_128_GCM, k1, iv, 0, CTYPE_APPLICATION_DATA, pt),
+          record_seal(CIPHER_AES_128_GCM, k1, iv, 0, CTYPE_APPLICATION_DATA, pt), "first key")
+    _same(record_seal_k(ak, CIPHER_AES_128_GCM, k2, iv, 0, CTYPE_APPLICATION_DATA, pt),
+          record_seal(CIPHER_AES_128_GCM, k2, iv, 0, CTYPE_APPLICATION_DATA, pt), "after a key change")
+    var rec = record_seal(CIPHER_AES_128_GCM, k1, iv, 5, CTYPE_APPLICATION_DATA, pt)
+    _same(record_open_k(ak, CIPHER_AES_128_GCM, k1, iv, 5, rec)[1], pt, "back to the first key")
 
 
 def test_gcm_rejects_bad_tag() raises:
@@ -325,6 +357,8 @@ def main() raises:
     run_test[test_gcm_matches_reference]("AES-GCM lengths 0..100 vs table GCM", passed, failed)
     run_test[test_gcm_long_message]("AES-GCM 16 KiB record vs table GCM", passed, failed)
     run_test[test_gcm_rejects_bad_tag]("AES-GCM rejects a tampered tag", passed, failed)
+    run_test[test_gcm_key_reuse_matches_reference]("GcmKey reused across records vs table GCM", passed, failed)
+    run_test[test_aead_key_follows_key_changes]("AeadKey cache follows key changes", passed, failed)
     run_test[test_p256_public_key_matches_reference]("P-256 k*G vs BigInt ladder (edge + random)", passed, failed)
     run_test[test_p256_ecdh_matches_reference]("P-256 ECDH vs BigInt ladder (edge + random)", passed, failed)
     run_test[test_p256_nist_cdh_vector]("P-256 NIST CAVP ECC CDH vector", passed, failed)

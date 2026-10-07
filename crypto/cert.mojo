@@ -24,7 +24,7 @@ from crypto.asn1 import (
     OID_SHA256_WITH_RSA, OID_SHA256_WITH_ECDSA,
     OID_SHA384_WITH_RSA, OID_SHA384_WITH_ECDSA,
     OID_SHA512_WITH_RSA,
-    OID_RSA_PSS, OID_HASH_SHA384,
+    OID_RSA_PSS, OID_HASH_SHA384, OID_HASH_SHA512, OID_SHA512_WITH_ECDSA,
     OID_SUBJECT_ALT_NAME, OID_COMMON_NAME,
     OID_BASIC_CONSTRAINTS, OID_KEY_USAGE, OID_EXT_KEY_USAGE,
     OID_KP_SERVER_AUTH, OID_ANY_EXT_KEY_USAGE,
@@ -33,7 +33,7 @@ from crypto.asn1 import (
 from crypto.rsa import rsa_pkcs1_verify, rsa_pss_verify
 from crypto.p256 import p256_ecdsa_verify
 from crypto.p384 import p384_ecdsa_verify
-from crypto.hash import sha256, sha384
+from crypto.hash import sha256, sha384, sha512
 from crypto.sha1 import sha1
 
 
@@ -239,6 +239,9 @@ def cert_parse(der: List[UInt8]) raises -> X509Cert:
     elif der_oid_eq(alg_ch[0].content, OID_SHA512_WITH_RSA):
         sig_alg = String("rsa")
         sig_hash = String("sha512")
+    elif der_oid_eq(alg_ch[0].content, OID_SHA512_WITH_ECDSA):
+        sig_alg = String("ecdsa")
+        sig_hash = String("sha512")
     elif der_oid_eq(alg_ch[0].content, OID_RSA_PSS):
         sig_alg = String("rsa-pss")
         # Parse hash from RSASSA-PSS-params if present ([0] hashAlgorithm)
@@ -251,6 +254,8 @@ def cert_parse(der: List[UInt8]) raises -> X509Cert:
                     if len(hash_oid_ch) >= 1 and hash_oid_ch[0].tag == TAG_OID:
                         if der_oid_eq(hash_oid_ch[0].content, OID_HASH_SHA384):
                             sig_hash = String("sha384")
+                        elif der_oid_eq(hash_oid_ch[0].content, OID_HASH_SHA512):
+                            sig_hash = String("sha512")
     else:
         raise Error("cert: unsupported signatureAlgorithm OID")
 
@@ -550,15 +555,25 @@ def _parse_ext_key_usage(mut cert: X509Cert, value: List[UInt8]) raises:
 # cert_verify_sig — verify cert's signature against issuer's public key
 # ============================================================================
 
+def _ecdsa_e(msg_hash: List[UInt8], order_len: Int) -> List[UInt8]:
+    """The ECDSA input e: the leftmost order_len bytes of the hash (SEC 1
+    §4.1.4; P-256 and P-384 orders are whole bytes). A shorter hash is used
+    as is, being the same integer as its left-padded form."""
+    var e = List[UInt8](capacity=order_len)
+    for i in range(min(order_len, len(msg_hash))):
+        e.append(msg_hash[i])
+    return e^
+
+
 def cert_verify_sig(cert: X509Cert, issuer: X509Cert) raises:
     """Verify cert's digital signature using issuer's public key. Raises on invalid."""
     var tbs_hash: List[UInt8]
     if cert.sig_hash == "sha384":
         tbs_hash = sha384(cert.tbs_raw)
+    elif cert.sig_hash == "sha512":
+        tbs_hash = sha512(cert.tbs_raw)
     elif cert.sig_hash == "sha1":
         tbs_hash = sha1(cert.tbs_raw)
-    elif cert.sig_hash == "sha512":
-        raise Error("cert_verify: sha512 signature verification not supported")
     else:
         tbs_hash = sha256(cert.tbs_raw)
 
@@ -569,32 +584,19 @@ def cert_verify_sig(cert: X509Cert, issuer: X509Cert) raises:
     elif cert.sig_alg == "rsa-pss":
         if issuer.pub_key_alg != "rsa":
             raise Error("cert_verify: sig is RSA-PSS but issuer has no RSA key")
-        var salt_len: Int
-        if cert.sig_hash == "sha384":
-            salt_len = 48
-        else:
-            salt_len = 32
-        rsa_pss_verify(issuer.rsa_n, issuer.rsa_e, tbs_hash, cert.sig_bytes, salt_len)
+        # Salt length = hash length (the TLS and CA/B Forum profile)
+        rsa_pss_verify(issuer.rsa_n, issuer.rsa_e, tbs_hash, cert.sig_bytes, len(tbs_hash))
     elif cert.sig_alg == "ecdsa":
         if issuer.pub_key_alg != "ec":
             raise Error("cert_verify: sig is ECDSA but issuer has no EC key")
         if issuer.ec_curve == "p384":
             var sig_res = asn1_parse_ecdsa_sig_48(cert.sig_bytes)
-            var r = sig_res[0].copy()
-            var s = sig_res[1].copy()
-            p384_ecdsa_verify(issuer.ec_point, tbs_hash, r, s)
+            p384_ecdsa_verify(issuer.ec_point, _ecdsa_e(tbs_hash, 48),
+                              sig_res[0].copy(), sig_res[1].copy())
         else:
             var sig_res = asn1_parse_ecdsa_sig(cert.sig_bytes)
-            var r = sig_res[0].copy()
-            var s = sig_res[1].copy()
-            # P-256 uses 32-byte e; truncate hash to 32 bytes if longer
-            if len(tbs_hash) > 32:
-                var truncated = List[UInt8](capacity=32)
-                for i in range(32):
-                    truncated.append(tbs_hash[i])
-                p256_ecdsa_verify(issuer.ec_point, truncated, r, s)
-            else:
-                p256_ecdsa_verify(issuer.ec_point, tbs_hash, r, s)
+            p256_ecdsa_verify(issuer.ec_point, _ecdsa_e(tbs_hash, 32),
+                              sig_res[0].copy(), sig_res[1].copy())
     else:
         raise Error("cert_verify: unknown sig_alg: " + cert.sig_alg)
 
