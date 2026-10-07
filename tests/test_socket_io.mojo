@@ -7,6 +7,7 @@
 # ============================================================================
 
 from std.ffi import external_call
+from sockpair import Pair, send_all as _write, recv_exact as _read_exact
 from std.memory import alloc
 from crypto.record import (
     record_seal, record_open,
@@ -28,55 +29,6 @@ def run_test[test_fn: def() thin raises -> None](
     except e:
         print("  FAIL:", name, "-", String(e))
         failed += 1
-
-
-# ── socketpair plumbing ─────────────────────────────────────────────────────
-
-struct Pair(Movable):
-    var mine: Int32  # TlsSocket side
-    var peer: Int32  # test "server" side
-
-    def __init__(out self) raises:
-        var fds = alloc[Int32](2)
-        # AF_UNIX = 1, SOCK_STREAM = 1 on Linux and macOS
-        var rc = external_call["socketpair", Int32](Int32(1), Int32(1), Int32(0), fds)
-        if rc != 0:
-            fds.unsafe_free()
-            raise Error("socketpair failed")
-        self.mine = fds[0]
-        self.peer = fds[1]
-        fds.unsafe_free()
-
-    def close(self):
-        _ = external_call["close", Int32](self.mine)
-        _ = external_call["close", Int32](self.peer)
-
-
-def _write(fd: Int32, data: List[UInt8]) raises:
-    var n = len(data)
-    var buf = alloc[UInt8](n)
-    for i in range(n):
-        buf[unsafe_offset=i] = data[i]
-    var sent = external_call["write", Int](Int(fd), buf, n)
-    buf.unsafe_free()
-    if sent != n:
-        raise Error("peer write failed")
-
-
-def _read_exact(fd: Int32, n: Int) raises -> List[UInt8]:
-    var buf = alloc[UInt8](n)
-    var total = 0
-    while total < n:
-        var got = external_call["read", Int](fd, buf.unsafe_offset(total), n - total)
-        if got <= 0:
-            buf.unsafe_free()
-            raise Error("peer read failed")
-        total += got
-    var out = List[UInt8](capacity=n)
-    for i in range(n):
-        out.append(buf[unsafe_offset=i])
-    buf.unsafe_free()
-    return out^
 
 
 def _read_record(fd: Int32) raises -> List[UInt8]:

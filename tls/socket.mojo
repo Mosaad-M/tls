@@ -25,7 +25,6 @@
 # ============================================================================
 
 from std.ffi import external_call
-from std.memory import alloc
 from std.sys.info import CompilationTarget
 from crypto.cert import X509Cert, cert_parse
 from crypto.pem import pem_decode
@@ -122,30 +121,14 @@ def load_system_ca_bundle() raises -> List[X509Cert]:
     """
     comptime CA_BUNDLE = "/etc/ssl/cert.pem" if CompilationTarget.is_macos() else "/etc/ssl/certs/ca-certificates.crt"
     var path = String(CA_BUNDLE)
-    var O_RDONLY: Int32 = 0
-    # as_c_string_slice() guarantees the NUL terminator open() needs;
-    # path.unsafe_ptr() does not, so open() could read past the string
-    # and fail on Linux depending on what followed it in memory.
-    var fd = external_call["open", Int32](path.as_c_string_slice().unsafe_ptr(), O_RDONLY)
-    if fd < 0:
+    var raw: List[UInt8]
+    try:
+        with open(path, "r") as f:
+            raw = f.read_bytes()
+    except:
         raise Error("load_system_ca_bundle: cannot open " + path)
-
-    # CA bundles are typically 200-400 KB; allocate 2 MB to be safe
-    var buf_size = 2097152
-    var buf = alloc[UInt8](buf_size)
-    var total: Int = 0
-    while total < buf_size:
-        var got = external_call["read", Int](fd, buf.unsafe_offset(total), buf_size - total)
-        if got <= 0:
-            break
-        total += got
-    _ = external_call["close", Int32](fd)
-
-    # Collect into List[UInt8], then convert to String
-    var raw = List[UInt8](capacity=total)
-    for i in range(total):
-        raw.append(buf[unsafe_offset=i])
-    buf.unsafe_free()
+    # Not validated as UTF-8 (read() would be): only the ASCII PEM blocks
+    # matter, and a stray byte in a comment must not lose the whole bundle
     var content = String(unsafe_from_utf8=raw^)
 
     # Decode all PEM CERTIFICATE blocks

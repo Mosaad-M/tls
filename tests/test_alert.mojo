@@ -5,9 +5,6 @@
 # Output capture uses a temp file to avoid needing global mutable state.
 # ============================================================================
 
-from std.ffi import external_call
-from std.memory import alloc
-from std.sys.info import CompilationTarget
 from tls.connection import (
     tls_send_alert,
     tls_handle_incoming_alert,
@@ -22,53 +19,25 @@ from tls.connection import (
 # ── Temp-file capture helpers ──────────────────────────────────────────────
 # These avoid needing module-level mutable state.
 
+comptime CAPTURE = "/tmp/mojo_alert_test.bin"
+
+
 def _capture_reset() raises:
-    """Truncate /tmp/mojo_alert_test.bin to zero bytes."""
-    var path = String("/tmp/mojo_alert_test.bin")
-    # O_WRONLY | O_CREAT | O_TRUNC: Linux 1|64|512=577, macOS 1|512|1024=1537
-    comptime FLAGS_RESET = 1537 if CompilationTarget.is_macos() else 577
-    var fd = external_call["open", Int32](path.as_c_string_slice().unsafe_ptr(), Int32(FLAGS_RESET), Int32(420))
-    if fd < 0:
-        raise Error("capture_reset: open failed")
-    _ = external_call["close", Int32](fd)
-    # Mojo FFI does not reliably pass the variadic mode arg to open() on macOS;
-    # use chmod to ensure the file is readable for _capture_read.
-    _ = external_call["chmod", Int32](path.as_c_string_slice().unsafe_ptr(), Int32(420))
+    """Truncate the capture file to zero bytes."""
+    with open(CAPTURE, "w") as f:
+        f.write("")
 
 
 def _capture_write(data: List[UInt8]) raises:
-    """Append data to /tmp/mojo_alert_test.bin."""
-    var path = String("/tmp/mojo_alert_test.bin")
-    # O_WRONLY | O_CREAT | O_APPEND: Linux 1|64|1024=1089, macOS 1|512|8=521
-    comptime FLAGS_WRITE = 521 if CompilationTarget.is_macos() else 1089
-    var fd = external_call["open", Int32](path.as_c_string_slice().unsafe_ptr(), Int32(FLAGS_WRITE), Int32(420))
-    if fd < 0:
-        raise Error("capture_write: open failed")
-    var n = len(data)
-    if n > 0:
-        var buf = alloc[UInt8](n)
-        for i in range(n):
-            buf[unsafe_offset=i] = data[i]
-        _ = external_call["write", Int](Int(fd), buf, n)
-        buf.unsafe_free()
-    _ = external_call["close", Int32](fd)
+    """Append data to the capture file."""
+    with open(CAPTURE, "a") as f:
+        f.write_bytes(data)
 
 
 def _capture_read() raises -> List[UInt8]:
-    """Read all bytes from /tmp/mojo_alert_test.bin."""
-    var path = String("/tmp/mojo_alert_test.bin")
-    var fd = external_call["open", Int32](path.as_c_string_slice().unsafe_ptr(), Int32(0), Int32(0))  # O_RDONLY
-    if fd < 0:
-        raise Error("capture_read: open failed")
-    var max_size = 4096
-    var buf = alloc[UInt8](max_size)
-    var n = external_call["read", Int](Int(fd), buf, max_size)
-    _ = external_call["close", Int32](fd)
-    var out = List[UInt8](capacity=Int(n))
-    for i in range(Int(n)):
-        out.append(buf[unsafe_offset=i])
-    buf.unsafe_free()
-    return out^
+    """Read all bytes from the capture file."""
+    with open(CAPTURE, "r") as f:
+        return f.read_bytes()
 
 
 # ── run_test helper ────────────────────────────────────────────────────────

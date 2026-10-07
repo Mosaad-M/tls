@@ -17,7 +17,6 @@
 # ============================================================================
 
 from std.ffi import external_call
-from std.memory import alloc
 from std.sys import argv
 from crypto.cert import cert_parse, cert_chain_verify, cert_hostname_match, parse_ip_literal, X509Cert
 from crypto.asn1 import (
@@ -33,6 +32,7 @@ from tls.message12 import (
 )
 from tls.connection import tls_handle_incoming_alert, HandshakeReader
 from tls.socket import TlsSocket
+from sockpair import Pair, send_all
 from path_fixtures import ROOT, INTER, LEAF_OK, LEAF_IPSAN, INTER_NCD, RSA2048_LEAF
 from sha512_fixtures import PSS_LEAF, EC384_LEAF
 
@@ -502,69 +502,37 @@ def run_target(target: String, b: List[UInt8], anchors: List[X509Cert]) raises:
 
 
 def _hs_reader(b: List[UInt8]) raises:
-    var fds = alloc[Int32](2)
-    if external_call["socketpair", Int32](Int32(1), Int32(1), Int32(0), fds) != 0:
-        fds.unsafe_free()
-        raise Error("socketpair")
-    var mine = fds[unsafe_offset=0]
-    var peer = fds[unsafe_offset=1]
-    fds.unsafe_free()
-    var n = len(b)
-    var buf = alloc[UInt8](max(n, 1))
-    for i in range(n):
-        buf[unsafe_offset=i] = b[i]
-    _ = external_call["write", Int](Int(peer), buf, n)
-    buf.unsafe_free()
-    _ = external_call["close", Int32](peer)
-    var reader = HandshakeReader(mine, False)
+    var p = Pair()
+    send_all(p.peer, b)
+    _ = external_call["close", Int32](p.peer)
+    var reader = HandshakeReader(p.mine, False)
     try:
         for _ in range(8):
             _ = reader.next_message()
     except e:
-        _ = external_call["close", Int32](mine)
+        _ = external_call["close", Int32](p.mine)
         raise e^
-    _ = external_call["close", Int32](mine)
+    _ = external_call["close", Int32](p.mine)
 
 
 # ── Current-input file (kept when the process aborts) ───────────────────────
 
+def read_file(path: String) raises -> List[UInt8]:
+    with open(path, "r") as f:
+        return f.read_bytes()
+
+
 def open_current(path: String) -> Int32:
+    """The current-input file, kept open for the whole run. creat, ftruncate
+    and pwrite are C functions std does not declare (unlike open/write/lseek),
+    so declaring them here cannot clash with std or tls."""
     var p = path
     return external_call["creat", Int32](p.as_c_string_slice().unsafe_ptr(), Int32(420))
 
 
-def read_file(path: String) raises -> List[UInt8]:
-    """Read a whole file through libc, with the open/read signatures tls uses
-    (Mojo's open() declares errno access differently from tls, and a program
-    may hold only one declaration per C function)."""
-    var p = path
-    var fd = external_call["open", Int32](p.as_c_string_slice().unsafe_ptr(), Int32(0))
-    if fd < 0:
-        raise Error("cannot open " + path)
-    var out = List[UInt8]()
-    var buf = alloc[UInt8](4096)
-    while True:
-        var got = external_call["read", Int](fd, buf, 4096)
-        if got <= 0:
-            break
-        for i in range(got):
-            out.append(buf[unsafe_offset=i])
-    buf.unsafe_free()
-    _ = external_call["close", Int32](fd)
-    return out^
-
-
 def save_current(fd: Int32, b: List[UInt8]):
-    _ = external_call["lseek", Int](fd, Int(0), Int32(0))
     _ = external_call["ftruncate", Int32](fd, Int(0))
-    var n = len(b)
-    if n == 0:
-        return
-    var buf = alloc[UInt8](n)
-    for i in range(n):
-        buf[unsafe_offset=i] = b[i]
-    _ = external_call["write", Int](Int(fd), buf, n)
-    buf.unsafe_free()
+    _ = external_call["pwrite", Int](fd, Int(b.unsafe_ptr()), len(b), Int(0))
 
 
 def fuzz(target: String, seed: UInt64, iterations: Int, fd: Int32, anchors: List[X509Cert]) raises:

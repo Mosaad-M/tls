@@ -1,22 +1,19 @@
 # ============================================================================
 # test_record_eof.mojo — post-handshake receive path: alerts and truncation
 # ============================================================================
-# Crafted records are written to a temp file whose read-only fd stands in for
-# the TCP socket (end of file = TCP close). TlsSocket gets known keys, so the
+# Crafted records are sent through a socketpair whose other end then closes
+# (end of stream = TCP close). TlsSocket gets known keys, so the
 # tests drive the real _fill_buf / recv / recv_all code without a handshake.
 # ============================================================================
 
 from std.ffi import external_call
-from std.memory import alloc
-from std.sys.info import CompilationTarget
 from crypto.record import (
     record_seal, record_seal_12, record_open,
     CIPHER_AES_128_GCM, CTYPE_ALERT, CTYPE_APPLICATION_DATA,
 )
 from tls.socket import TlsSocket
+from sockpair import Pair, send_all
 
-
-comptime PATH = "/tmp/mojo_tls_record_eof_test.bin"
 
 
 def run_test[test_fn: def() thin raises -> None](
@@ -36,27 +33,12 @@ def run_test[test_fn: def() thin raises -> None](
 # ── Stream helpers ──────────────────────────────────────────────────────────
 
 def _stream_fd(data: List[UInt8]) raises -> Int32:
-    """Write data to PATH and return a read-only fd positioned at its start."""
-    var path = String(PATH)
-    # O_WRONLY | O_CREAT | O_TRUNC: Linux 1|64|512=577, macOS 1|512|1024=1537
-    comptime FLAGS = 1537 if CompilationTarget.is_macos() else 577
-    var wfd = external_call["open", Int32](path.as_c_string_slice().unsafe_ptr(), Int32(FLAGS), Int32(420))
-    if wfd < 0:
-        raise Error("open for write failed")
-    # Mojo FFI does not reliably pass open()'s mode on macOS; chmod instead.
-    _ = external_call["chmod", Int32](path.as_c_string_slice().unsafe_ptr(), Int32(420))
-    var n = len(data)
-    if n > 0:
-        var buf = alloc[UInt8](n)
-        for i in range(n):
-            buf[unsafe_offset=i] = data[i]
-        _ = external_call["write", Int](Int(wfd), buf, n)
-        buf.unsafe_free()
-    _ = external_call["close", Int32](wfd)
-    var rfd = external_call["open", Int32](path.as_c_string_slice().unsafe_ptr(), Int32(0), Int32(0))
-    if rfd < 0:
-        raise Error("open for read failed")
-    return rfd
+    """A socket that delivers data and then end of stream: the peer end of a
+    socketpair sends it and closes (what tls then writes fails quietly)."""
+    var p = Pair()
+    send_all(p.peer, data)
+    _ = external_call["close", Int32](p.peer)
+    return p.mine
 
 
 def _close_fd(fd: Int32):
