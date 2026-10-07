@@ -522,19 +522,27 @@ def read_file(path: String) raises -> List[UInt8]:
         return f.read_bytes()
 
 
-def save_current(path: String, b: List[UInt8]) raises:
-    with open(path, "w") as f:
-        f.write_bytes(b)
+def open_current(path: String) -> Int32:
+    """The current-input file, kept open for the whole run. creat, ftruncate
+    and pwrite are C functions std does not declare (unlike open/write/lseek),
+    so declaring them here cannot clash with std or tls."""
+    var p = path
+    return external_call["creat", Int32](p.as_c_string_slice().unsafe_ptr(), Int32(420))
 
 
-def fuzz(target: String, seed: UInt64, iterations: Int, path: String, anchors: List[X509Cert]) raises:
+def save_current(fd: Int32, b: List[UInt8]):
+    _ = external_call["ftruncate", Int32](fd, Int(0))
+    _ = external_call["pwrite", Int](fd, Int(b.unsafe_ptr()), len(b), Int(0))
+
+
+def fuzz(target: String, seed: UInt64, iterations: Int, fd: Int32, anchors: List[X509Cert]) raises:
     var seeds = seeds_for(target)
     var rng = Rng(seed)
     var raised = 0
     var der_target = target == "cert" or target == "spki" or target == "ecdsa_sig"
     # seeds themselves first, then mutations
     for i in range(len(seeds)):
-        save_current(path, seeds[i])
+        save_current(fd, seeds[i])
         try:
             run_target(target, seeds[i], anchors)
         except:
@@ -547,7 +555,7 @@ def fuzz(target: String, seed: UInt64, iterations: Int, path: String, anchors: L
             input = der_mutate(seeds[a], rng)
         else:
             input = mutate(seeds[a], seeds[c], rng)
-        save_current(path, input)
+        save_current(fd, input)
         try:
             run_target(target, input, anchors)
         except:
@@ -582,12 +590,16 @@ def main() raises:
     var seed = UInt64(Int(String(args[2])))
     var iterations = Int(String(args[3]))
     var path = String(args[4]) if len(args) > 4 else String("fuzz_current.bin")
+    var fd = open_current(path)
+    if fd < 0:
+        raise Error("cannot create " + path)
     var anchors = List[X509Cert]()
     anchors.append(cert_parse(unhex(ROOT)))
     if target == "all":
         var all = targets()
         for i in range(len(all)):
             print("target", all[i], flush=True)
-            fuzz(all[i], seed + UInt64(i), iterations, path, anchors)
+            fuzz(all[i], seed + UInt64(i), iterations, fd, anchors)
     else:
-        fuzz(target, seed, iterations, path, anchors)
+        fuzz(target, seed, iterations, fd, anchors)
+    _ = external_call["close", Int32](fd)
