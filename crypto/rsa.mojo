@@ -5,52 +5,52 @@
 #   rsa_pkcs1_verify(n_bytes, e_bytes, msg_hash, sig)           → raises on bad
 #   rsa_pss_verify(n_bytes, e_bytes, msg_hash, sig, salt_len)   → raises on bad
 #
-# Both functions accept big-endian byte arrays for n, e, sig.
-# msg_hash must be a 32-byte SHA-256 digest.
+# Both functions accept big-endian byte arrays for n, e, sig. msg_hash is a
+# SHA-256, SHA-384 or SHA-512 digest (32, 48 or 64 bytes); its length selects
+# the DigestInfo (PKCS#1) or the hash and MGF1 hash (PSS).
 # ============================================================================
 
 from crypto.bigint import (
     BigInt, bigint_from_bytes, bigint_to_bytes, bigint_modexp, bigint_bit_len, bigint_cmp,
 )
-from crypto.hash import sha256, sha384
+from crypto.hash import sha256, sha384, sha512
 
 
 # ============================================================================
-# SHA-256 DigestInfo ASN.1 prefix (for PKCS#1 v1.5)
-# 30 31 30 0d 06 09 60 86 48 01 65 03 04 02 01 05 00 04 20
+# Hashes: SHA-256, SHA-384 and SHA-512, chosen by digest length
 # ============================================================================
 
-def _sha256_di() -> List[UInt8]:
+def _check_hash_len(h_len: Int, what: String) raises:
+    if h_len != 32 and h_len != 48 and h_len != 64:
+        raise Error(what + ": hash must be 32, 48 or 64 bytes (SHA-256/384/512)")
+
+
+def _hash(data: List[UInt8], h_len: Int) -> List[UInt8]:
+    if h_len == 64:
+        return sha512(data)
+    if h_len == 48:
+        return sha384(data)
+    return sha256(data)
+
+
+def _digest_info(h_len: Int) -> List[UInt8]:
+    """PKCS#1 v1.5 DigestInfo prefix (RFC 8017 §9.2 note 1):
+    30 L 30 0d 06 09 60 86 48 01 65 03 04 02 id 05 00 04 h_len, where
+    (L, id) = (0x31, 1) SHA-256, (0x41, 2) SHA-384, (0x51, 3) SHA-512."""
     var b = List[UInt8](capacity=19)
-    b.append(0x30); b.append(0x31)
+    b.append(0x30); b.append(UInt8(0x11 + h_len))
     b.append(0x30); b.append(0x0D)
     b.append(0x06); b.append(0x09)
     b.append(0x60); b.append(0x86); b.append(0x48); b.append(0x01)
     b.append(0x65); b.append(0x03); b.append(0x04); b.append(0x02)
-    b.append(0x01); b.append(0x05); b.append(0x00)
-    b.append(0x04); b.append(0x20)
+    b.append(UInt8(1 if h_len == 32 else (2 if h_len == 48 else 3)))
+    b.append(0x05); b.append(0x00)
+    b.append(0x04); b.append(UInt8(h_len))
     return b^
 
 
-def _sha384_di() -> List[UInt8]:
-    """SHA-384 DigestInfo prefix for PKCS#1 v1.5: 30 41 30 0d 06 09 ... 02 02 05 00 04 30."""
-    var b = List[UInt8](capacity=19)
-    b.append(0x30); b.append(0x41)
-    b.append(0x30); b.append(0x0D)
-    b.append(0x06); b.append(0x09)
-    b.append(0x60); b.append(0x86); b.append(0x48); b.append(0x01)
-    b.append(0x65); b.append(0x03); b.append(0x04); b.append(0x02)
-    b.append(0x02); b.append(0x05); b.append(0x00)
-    b.append(0x04); b.append(0x30)
-    return b^
-
-
-# ============================================================================
-# MGF1 with SHA-256
-# ============================================================================
-
-def _mgf1_sha256(seed: List[UInt8], length: Int) -> List[UInt8]:
-    """MGF1(seed, length) using SHA-256."""
+def _mgf1(seed: List[UInt8], length: Int, h_len: Int) -> List[UInt8]:
+    """MGF1(seed, length) with the hash whose digest is h_len bytes."""
     var out = List[UInt8](capacity=length)
     var counter: UInt32 = 0
     while len(out) < length:
@@ -62,27 +62,7 @@ def _mgf1_sha256(seed: List[UInt8], length: Int) -> List[UInt8]:
         input.append(UInt8((counter >> 16) & 0xFF))
         input.append(UInt8((counter >> 8) & 0xFF))
         input.append(UInt8(counter & 0xFF))
-        var h = sha256(input)
-        for i in range(len(h)):
-            if len(out) < length:
-                out.append(h[i])
-        counter += 1
-    return out^
-
-
-def _mgf1_sha384(seed: List[UInt8], length: Int) -> List[UInt8]:
-    """MGF1(seed, length) using SHA-384."""
-    var out = List[UInt8](capacity=length)
-    var counter: UInt32 = 0
-    while len(out) < length:
-        var input = List[UInt8](capacity=len(seed) + 4)
-        for i in range(len(seed)):
-            input.append(seed[i])
-        input.append(UInt8((counter >> 24) & 0xFF))
-        input.append(UInt8((counter >> 16) & 0xFF))
-        input.append(UInt8((counter >> 8) & 0xFF))
-        input.append(UInt8(counter & 0xFF))
-        var h = sha384(input)
+        var h = _hash(input, h_len)
         for i in range(len(h)):
             if len(out) < length:
                 out.append(h[i])
@@ -102,19 +82,18 @@ def _rsa_raw(sig: List[UInt8], n: BigInt, e: BigInt, em_len: Int) -> List[UInt8]
 
 
 # ============================================================================
-# PKCS#1 v1.5 signature verification (SHA-256)
+# PKCS#1 v1.5 signature verification
 # ============================================================================
 
 def rsa_pkcs1_verify(
     n_bytes:  List[UInt8],   # RSA modulus (big-endian)
     e_bytes:  List[UInt8],   # RSA public exponent (big-endian)
-    msg_hash: List[UInt8],   # 32-byte SHA-256 or 48-byte SHA-384 message hash
+    msg_hash: List[UInt8],   # SHA-256, SHA-384 or SHA-512 message hash
     sig:      List[UInt8],   # signature (same length as n)
 ) raises:
-    """Verify RSA-PKCS#1 v1.5 SHA-256 or SHA-384 signature. Raises on invalid."""
+    """Verify an RSA PKCS#1 v1.5 signature (SHA-256/384/512). Raises on invalid."""
     var hash_len = len(msg_hash)
-    if hash_len != 32 and hash_len != 48:
-        raise Error("rsa_pkcs1: hash must be 32 (SHA-256) or 48 (SHA-384) bytes")
+    _check_hash_len(hash_len, "rsa_pkcs1")
     var n = bigint_from_bytes(n_bytes)
     var e = bigint_from_bytes(e_bytes)
     var k = len(n_bytes)
@@ -144,12 +123,7 @@ def rsa_pkcs1_verify(
         raise Error("rsa_pkcs1: expected 0x00 separator after FF padding")
     i += 1  # skip separator
 
-    # Choose DigestInfo prefix based on hash length
-    var di: List[UInt8]
-    if hash_len == 32:
-        di = _sha256_di()
-    else:
-        di = _sha384_di()
+    var di = _digest_info(hash_len)
     if i + 19 + hash_len != k:
         raise Error("rsa_pkcs1: EM length mismatch")
     for j in range(19):
@@ -166,20 +140,19 @@ def rsa_pkcs1_verify(
 
 
 # ============================================================================
-# RSA-PSS signature verification (SHA-256, MGF1-SHA-256)
+# RSA-PSS signature verification (MGF1 with the message hash)
 # ============================================================================
 
 def rsa_pss_verify(
     n_bytes:  List[UInt8],   # RSA modulus (big-endian)
     e_bytes:  List[UInt8],   # RSA public exponent (big-endian)
-    msg_hash: List[UInt8],   # 32-byte SHA-256 or 48-byte SHA-384 message hash
+    msg_hash: List[UInt8],   # SHA-256, SHA-384 or SHA-512 message hash
     sig:      List[UInt8],   # signature
-    salt_len: Int,           # expected salt length (32 for SHA-256, 48 for SHA-384)
+    salt_len: Int,           # expected salt length (the hash length in TLS)
 ) raises:
-    """Verify RSA-PSS (MGF1) signature. Supports SHA-256 (32-byte) and SHA-384 (48-byte) hashes."""
+    """Verify an RSA-PSS signature (SHA-256/384/512, MGF1 with the same hash)."""
     var h_len = len(msg_hash)
-    if h_len != 32 and h_len != 48:
-        raise Error("rsa_pss: hash must be 32 (SHA-256) or 48 (SHA-384) bytes")
+    _check_hash_len(h_len, "rsa_pss")
     var n    = bigint_from_bytes(n_bytes)
     var e    = bigint_from_bytes(e_bytes)
     var mod_bits = bigint_bit_len(n)
@@ -219,11 +192,7 @@ def rsa_pss_verify(
     var masked_db = List[UInt8](capacity=h_start)
     for i in range(h_start):
         masked_db.append(em[i])
-    var db_mask: List[UInt8]
-    if h_len == 48:
-        db_mask = _mgf1_sha384(h_bytes, h_start)
-    else:
-        db_mask = _mgf1_sha256(h_bytes, h_start)
+    var db_mask = _mgf1(h_bytes, h_start, h_len)
     var db = List[UInt8](capacity=h_start)
     for i in range(h_start):
         db.append(masked_db[i] ^ db_mask[i])
@@ -259,11 +228,7 @@ def rsa_pss_verify(
         m_prime.append(msg_hash[i])
     for i in range(salt_len):
         m_prime.append(salt[i])
-    var h_prime: List[UInt8]
-    if h_len == 48:
-        h_prime = sha384(m_prime)
-    else:
-        h_prime = sha256(m_prime)
+    var h_prime = _hash(m_prime, h_len)
 
     # Verify H' == H (constant-time comparison to avoid timing side channel)
     var pss_diff: UInt8 = 0

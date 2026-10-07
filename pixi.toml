@@ -53,6 +53,10 @@ test-psk-handshake = "mojo run -I . tests/test_psk_handshake.mojo"
 test-session-ticket = "mojo run -I . tests/test_session_ticket.mojo"
 test-p256-sign = "mojo run -I . tests/test_p256_sign.mojo"
 test-message12-mtls = "mojo run -I . tests/test_message12_mtls.mojo"
+test-sha512-sigs = "mojo run -I . -I tests tests/test_sha512_sigs.mojo"
+# Fuzzing (tests/fuzz/run_fuzz.sh): `pixi run fuzz <iterations> [seed ...]`
+fuzz = "bash tests/fuzz/run_fuzz.sh"
+test-fuzz-regressions = "bash tests/fuzz/run_fuzz.sh replay"
 bench = "mojo run -I . bench/bench_crypto.mojo"
 format-hash = "mblack crypto/hash.mojo tests/test_hash.mojo"
 
@@ -67,7 +71,8 @@ test = { depends-on = [
   "test-record", "test-record-eof", "test-socket-io", "test-ffi-compat", "test-ct-crypto", "test-protocol", "test-review-fixes", "test-record12", "test-handshake",
   "test-message", "test-message12", "test-prf", "test-alert",
   "test-psk-handshake", "test-session-ticket", "test-p256-sign",
-  "test-message12-mtls", "test-rsa4096", "test-sha512-vec"
+  "test-message12-mtls", "test-rsa4096", "test-sha512-vec", "test-sha512-sigs",
+  "test-fuzz-regressions"
 ] }
 
 [dependencies]

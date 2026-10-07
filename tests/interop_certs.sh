@@ -3,15 +3,21 @@
 #   $WORK/ca.pem, ca.key            P-256 test CA
 #   $WORK/server.pem, server.key    P-256 leaf for localhost (serverAuth)
 #   $WORK/p384.pem, p384.key        P-384 leaf for localhost (serverAuth)
+#   $WORK/rsa.pem, rsa.key          RSA-2048 leaf for localhost (serverAuth),
+#                                   signed ecdsa-with-SHA512 by the CA
 #   $WORK/client.pem, client.key    P-256 client certificate (clientAuth)
 # and exports CA_HEX (CA as DER hex), CLIENT_CERT_HEX and CLIENT_KEY_HEX.
 
-_leaf() {  # _leaf <name> <curve> <CN> <extensions>
-    openssl ecparam -name "$2" -genkey -noout -out "$WORK/$1.key" 2>/dev/null
+_leaf() {  # _leaf <name> <curve or rsa2048> <CN> <extensions> [digest]
+    if [ "$2" = rsa2048 ]; then
+        openssl genrsa -out "$WORK/$1.key" 2048 2>/dev/null
+    else
+        openssl ecparam -name "$2" -genkey -noout -out "$WORK/$1.key" 2>/dev/null
+    fi
     openssl req -new -key "$WORK/$1.key" -subj "/CN=$3" -out "$WORK/$1.csr" 2>/dev/null
     printf '%b' "$4" > "$WORK/$1.ext"
     openssl x509 -req -in "$WORK/$1.csr" -CA "$WORK/ca.pem" -CAkey "$WORK/ca.key" \
-        -CAserial "$WORK/ca.srl" -CAcreateserial -days 1 \
+        -CAserial "$WORK/ca.srl" -CAcreateserial -days 1 -"${5:-sha256}" \
         -extfile "$WORK/$1.ext" -out "$WORK/$1.pem" 2>/dev/null
 }
 
@@ -22,6 +28,7 @@ openssl req -new -x509 -key "$WORK/ca.key" -out "$WORK/ca.pem" -days 1 \
     -addext "keyUsage=critical,keyCertSign" 2>/dev/null
 _leaf server prime256v1 localhost 'subjectAltName=DNS:localhost\nextendedKeyUsage=serverAuth\n'
 _leaf p384 secp384r1 localhost 'subjectAltName=DNS:localhost\nextendedKeyUsage=serverAuth\n'
+_leaf rsa rsa2048 localhost 'subjectAltName=DNS:localhost\nextendedKeyUsage=serverAuth\n' sha512
 _leaf client prime256v1 interop-client 'extendedKeyUsage=clientAuth\n'
 
 CA_HEX="$(openssl x509 -in "$WORK/ca.pem" -outform DER | xxd -p | tr -d '\n')"

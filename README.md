@@ -17,7 +17,7 @@ With [mojo-pkg](https://github.com/Mosaad-M/mojo-pkg), add the dependency to
 
 ```toml
 [dependencies]
-tls = { git = "Mosaad-M/tls", version = ">=1.6.0" }
+tls = { git = "Mosaad-M/tls", version = ">=1.6.1" }
 tcp = { git = "Mosaad-M/tcp", version = ">=1.1.0" }   # optional: DNS + connect helper
 ```
 
@@ -140,7 +140,7 @@ skipped. For your own trust anchors, parse DER certificates with `cert_parse` fr
 |---|---|---|
 | Cipher suites | AES-128-GCM, ChaCha20-Poly1305, AES-256-GCM | ECDHE-RSA and ECDHE-ECDSA with AES-128-GCM or AES-256-GCM |
 | Key exchange | X25519; P-256 or P-384 after a HelloRetryRequest | X25519, P-256, P-384 |
-| Server signatures | ECDSA P-256 and P-384, RSA-PSS (SHA-256/384) | same (any SHA-256/384 + curve pairing), plus RSA PKCS#1 v1.5 (SHA-256/384) |
+| Server signatures | ECDSA P-256 and P-384, RSA-PSS (SHA-256/384/512) | ECDSA (SHA-256/384, either curve), RSA-PSS and RSA PKCS#1 v1.5 (SHA-256/384/512) |
 | SNI | yes | yes |
 | ALPN | yes | offered; the result is not reported |
 | Client certificates | no | P-256 ECDSA |
@@ -171,7 +171,7 @@ there is no option to skip it.
   the subject CN when there are none. A wildcard covers exactly one leftmost label, needs
   at least two labels after it (`*.com` matches nothing), and never matches an IP address.
 - **Algorithms:** RSA (PKCS#1 v1.5 and PSS) and ECDSA (P-256, P-384) certificate
-  signatures with SHA-256 or SHA-384. SHA-1 and SHA-512 signatures are rejected.
+  signatures with SHA-256, SHA-384 or SHA-512. SHA-1 signatures are rejected.
 
 ## Security status
 
@@ -179,8 +179,15 @@ This library has not had an external audit. Two internal reviews (October 2026) 
 been done; every finding is fixed as of 1.6.0, listed below by release. Known
 limitations, by design for now: no certificate revocation checking (OCSP/CRL), name
 constraints are enforced for DNS and IP names only (chains constraining other name
-forms are rejected), no session resumption or 0-RTT, no client certificates in TLS
-1.3, and no SHA-512 signatures.
+forms are rejected), no session resumption or 0-RTT, and no client certificates in
+TLS 1.3.
+
+Since 1.6.1 every parser that reads bytes from the peer (certificates, handshake
+messages, alerts, record reassembly) is fuzzed on each pull request and nightly; see
+[Development](#development). The fuzzer, run against 1.5.0, finds the empty-EC-point
+crash below within seconds. 1.6.1 also adds SHA-512 signatures and expands each
+AES-GCM key once per connection rather than once per record (a 64-byte record went
+from 4.9 to 2.9 µs, bulk transfer from 41 to 52 MB/s on an Apple M1 Pro).
 
 Fixed in 1.6.0 (second review, three independent reviewers):
 - **Crash:** a certificate with an empty EC public key aborted the process; it could be
@@ -284,13 +291,21 @@ pixi run test-connection12  # TLS 1.2 against a local Python server
 pixi run test-socket        # TlsSocket against a local Python server
 pixi run test-interop       # handshakes against openssl s_server (also run in CI)
 pixi run bench              # primitive benchmarks
+pixi run fuzz 20000 1 2     # fuzz every parser: <inputs per target> <seeds...>
 pixi run ct-check           # dudect-style timing-leak check (manual; noisy)
 mojo run -I . -I <path to tcp> tests/live_sites.mojo   # real sites + badssl.com (network)
 ```
 
 The three local-server tests need certificates: run `bash tests/gen_test_certs.sh` and
 paste the printed CA hex into the test files as the script describes.
-`tests/gen_path_fixtures.sh` regenerates the path-validation fixtures.
+`tests/gen_path_fixtures.sh` and `tests/gen_sha512_fixtures.sh` regenerate the
+certificate fixtures.
+
+The fuzzer (`tests/fuzz/fuzz_parsers.mojo`) mutates valid inputs, structure-aware for
+DER, and feeds them to each parser. Raising is fine; an out-of-bounds read aborts the
+process through Mojo's bounds checks. `pixi run fuzz` saves a crashing input to
+`tests/fuzz/crashers/`; commit it with the fix, and `pixi run test` replays it from
+then on. CI runs fixed seeds on every pull request and random seeds nightly.
 
 ## License
 

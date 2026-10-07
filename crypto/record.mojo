@@ -17,7 +17,7 @@
 #   CTYPE_APPLICATION_DATA   = 0x17
 # ============================================================================
 
-from crypto.gcm import gcm_encrypt, gcm_decrypt
+from crypto.gcm import gcm_encrypt, gcm_decrypt, GcmKey
 from crypto.poly1305 import chacha20_poly1305_encrypt, chacha20_poly1305_decrypt
 
 
@@ -64,10 +64,60 @@ def _make_aad(inner_len: Int) -> List[UInt8]:
 
 
 # ============================================================================
+# AeadKey — a record key prepared once (AES-GCM key schedule and GHASH key)
+# ============================================================================
+
+struct AeadKey(Movable):
+    """Caches the prepared AES-GCM key for one direction of a connection.
+
+    TLS keys stay the same for many records, but preparing a bitsliced AES
+    key schedule and the GHASH key costs more than sealing a small record.
+    ensure() rebuilds only when the cipher or key bytes change, so new
+    handshake keys and KeyUpdate are picked up automatically. ChaCha20 has
+    no per-key setup worth caching.
+    """
+    var cipher: UInt8
+    var key: List[UInt8]
+    var _gcm: List[GcmKey]   # zero or one prepared key
+
+    def __init__(out self):
+        self.cipher = 255
+        self.key = List[UInt8]()
+        self._gcm = List[GcmKey]()
+
+    def __moveinit__(out self, deinit take: Self):
+        self.cipher = take.cipher
+        self.key = take.key^
+        self._gcm = take._gcm^
+
+    def _ensure(mut self, cipher: UInt8, key: List[UInt8]) raises:
+        var same = self.cipher == cipher and len(self.key) == len(key) and len(self._gcm) == 1
+        if same:
+            for i in range(len(key)):
+                if self.key[i] != key[i]:
+                    same = False
+                    break
+        if not same:
+            self._gcm.clear()
+            self._gcm.append(GcmKey(key))
+            self.cipher = cipher
+            self.key = key.copy()
+
+    def gcm_seal(mut self, cipher: UInt8, key: List[UInt8], nonce: List[UInt8], pt: List[UInt8], aad: List[UInt8]) raises -> Tuple[List[UInt8], List[UInt8]]:
+        self._ensure(cipher, key)
+        return self._gcm[0].seal(nonce, pt, aad)
+
+    def gcm_open(mut self, cipher: UInt8, key: List[UInt8], nonce: List[UInt8], ct: List[UInt8], tag: List[UInt8], aad: List[UInt8]) raises -> List[UInt8]:
+        self._ensure(cipher, key)
+        return self._gcm[0].open(nonce, ct, tag, aad)
+
+
+# ============================================================================
 # record_seal — encrypt and authenticate a TLS 1.3 record
 # ============================================================================
 
-def record_seal(
+def record_seal_k(
+    mut ak:       AeadKey,
     cipher:       UInt8,
     key:          List[UInt8],
     iv:           List[UInt8],
@@ -92,7 +142,7 @@ def record_seal(
     var ct: List[UInt8]
     var tag: List[UInt8]
     if cipher == CIPHER_AES_128_GCM or cipher == CIPHER_AES_256_GCM:
-        var enc = gcm_encrypt(key, nonce, inner, aad)
+        var enc = ak.gcm_seal(cipher, key, nonce, inner, aad)
         ct  = enc[0].copy()
         tag = enc[1].copy()
     else:  # CIPHER_CHACHA20_POLY1305
@@ -115,7 +165,8 @@ def record_seal(
 # record_open — decrypt and verify a TLS 1.3 record
 # ============================================================================
 
-def record_open(
+def record_open_k(
+    mut ak: AeadKey,
     cipher: UInt8,
     key:    List[UInt8],
     iv:     List[UInt8],
@@ -156,7 +207,7 @@ def record_open(
     # Decrypt and verify
     var inner: List[UInt8]
     if cipher == CIPHER_AES_128_GCM or cipher == CIPHER_AES_256_GCM:
-        inner = gcm_decrypt(key, nonce, ciphertext, tag, aad)
+        inner = ak.gcm_open(cipher, key, nonce, ciphertext, tag, aad)
     else:  # CIPHER_CHACHA20_POLY1305
         inner = chacha20_poly1305_decrypt(key, nonce, aad, ciphertext, tag)
 
@@ -224,7 +275,8 @@ def _make_aad_12(seqno: UInt64, content_type: UInt8, plaintext_len: Int) -> List
     return aad^
 
 
-def record_seal_12(
+def record_seal_12_k(
+    mut ak:      AeadKey,
     cipher:      UInt8,
     key:         List[UInt8],
     iv_implicit: List[UInt8],   # 4-byte implicit IV from key_block
@@ -247,7 +299,7 @@ def record_seal_12(
     var ct: List[UInt8]
     var tag: List[UInt8]
     if cipher == CIPHER_AES_128_GCM or cipher == CIPHER_AES_256_GCM:
-        var enc = gcm_encrypt(key, nonce, plaintext, aad)
+        var enc = ak.gcm_seal(cipher, key, nonce, plaintext, aad)
         ct  = enc[0].copy()
         tag = enc[1].copy()
     else:
@@ -264,7 +316,8 @@ def record_seal_12(
     return out^
 
 
-def record_open_12(
+def record_open_12_k(
+    mut ak:      AeadKey,
     cipher:      UInt8,
     key:         List[UInt8],
     iv_implicit: List[UInt8],   # 4-byte implicit IV from key_block
@@ -302,6 +355,41 @@ def record_open_12(
     var aad = _make_aad_12(seqno, content_type, ct_len)
 
     if cipher == CIPHER_AES_128_GCM or cipher == CIPHER_AES_256_GCM:
-        return gcm_decrypt(key, nonce, ciphertext, tag, aad)
+        return ak.gcm_open(cipher, key, nonce, ciphertext, tag, aad)
     else:
         raise Error("record_open_12: only AES-GCM supported")
+
+
+# ============================================================================
+# One-off variants (prepare the key per call; for handshake records and tests)
+# ============================================================================
+
+def record_seal(
+    cipher: UInt8, key: List[UInt8], iv: List[UInt8], seqno: UInt64,
+    content_type: UInt8, plaintext: List[UInt8],
+) raises -> List[UInt8]:
+    var ak = AeadKey()
+    return record_seal_k(ak, cipher, key, iv, seqno, content_type, plaintext)
+
+
+def record_open(
+    cipher: UInt8, key: List[UInt8], iv: List[UInt8], seqno: UInt64, record: List[UInt8],
+) raises -> Tuple[UInt8, List[UInt8]]:
+    var ak = AeadKey()
+    return record_open_k(ak, cipher, key, iv, seqno, record)
+
+
+def record_seal_12(
+    cipher: UInt8, key: List[UInt8], iv_implicit: List[UInt8], seqno: UInt64,
+    content_type: UInt8, plaintext: List[UInt8],
+) raises -> List[UInt8]:
+    var ak = AeadKey()
+    return record_seal_12_k(ak, cipher, key, iv_implicit, seqno, content_type, plaintext)
+
+
+def record_open_12(
+    cipher: UInt8, key: List[UInt8], iv_implicit: List[UInt8], seqno: UInt64,
+    content_type: UInt8, payload: List[UInt8],
+) raises -> List[UInt8]:
+    var ak = AeadKey()
+    return record_open_12_k(ak, cipher, key, iv_implicit, seqno, content_type, payload)

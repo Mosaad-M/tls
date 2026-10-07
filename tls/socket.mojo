@@ -35,6 +35,7 @@ from crypto.curve25519 import x25519_public_key
 from crypto.record import (
     record_seal, record_open,
     record_seal_12, record_open_12,
+    AeadKey, record_seal_k, record_open_k, record_seal_12_k, record_open_12_k,
     CIPHER_AES_128_GCM, CIPHER_AES_256_GCM,
     CTYPE_APPLICATION_DATA, CTYPE_CHANGE_CIPHER_SPEC, CTYPE_ALERT, CTYPE_HANDSHAKE,
 )
@@ -182,6 +183,8 @@ struct TlsSocket(Movable):
     var _failed: String      # first fatal receive error; later calls re-raise it
     var _hs_rx:  List[UInt8] # post-handshake handshake bytes awaiting reassembly
     var _key_update_after: UInt64  # client records per key before a KeyUpdate
+    var _seal_ak: AeadKey    # prepared record keys, reused across records
+    var _open_ak: AeadKey
 
     def __init__(out self, tcp_fd: Int32 = 0):
         self._fd     = tcp_fd
@@ -196,6 +199,8 @@ struct TlsSocket(Movable):
         self._hs_rx  = List[UInt8]()
         # RFC 8446 §5.5: AES-GCM keys must change before ~2^24.5 records
         self._key_update_after = UInt64(1) << 24
+        self._seal_ak = AeadKey()
+        self._open_ak = AeadKey()
         if tcp_fd > 0:
             tls_prepare_fd(tcp_fd)
 
@@ -211,6 +216,8 @@ struct TlsSocket(Movable):
         self._failed = take._failed^
         self._hs_rx  = take._hs_rx^
         self._key_update_after = take._key_update_after
+        self._seal_ak = take._seal_ak^
+        self._open_ak = take._open_ak^
 
     def connect(
         mut self,
@@ -504,7 +511,8 @@ struct TlsSocket(Movable):
         var use384 = self._keys.use_sha384
         var key_len = 16 if self._keys.cipher == CIPHER_AES_128_GCM else 32
         var msg: List[UInt8] = [_HS_KEY_UPDATE, 0, 0, 1, 0]
-        var sealed = record_seal(
+        var sealed = record_seal_k(
+                self._seal_ak,
             self._keys.cipher,
             self._keys.client_write_key,
             self._keys.client_write_iv,
@@ -527,7 +535,8 @@ struct TlsSocket(Movable):
         if len(data) > 16384:
             raise Error("tls: send: plaintext exceeds TLS record limit (16384 bytes)")
         if self._is12:
-            var payload = record_seal_12(
+            var payload = record_seal_12_k(
+                self._seal_ak,
                 UInt8(self._keys12.cipher),
                 self._keys12.client_write_key,
                 self._keys12.client_write_iv,
@@ -550,7 +559,8 @@ struct TlsSocket(Movable):
         else:
             if self._keys.client_seqno >= self._key_update_after and len(self._keys.client_app_secret) > 0:
                 self._update_client_keys()
-            var sealed = record_seal(
+            var sealed = record_seal_k(
+                self._seal_ak,
                 self._keys.cipher,
                 self._keys.client_write_key,
                 self._keys.client_write_iv,
@@ -592,7 +602,8 @@ struct TlsSocket(Movable):
                     raise Error("tls: unexpected plaintext alert after handshake (unexpected_message)")
                 var alert_plain: List[UInt8]
                 try:
-                    alert_plain = record_open_12(
+                    alert_plain = record_open_12_k(
+                self._open_ak,
                         UInt8(self._keys12.cipher),
                         self._keys12.server_write_key,
                         self._keys12.server_write_iv,
@@ -612,7 +623,8 @@ struct TlsSocket(Movable):
             if rlen < 8 + 16:  # must have at least explicit_nonce + tag
                 raise Error("tls12_socket: record too short: " + String(rlen))
 
-            var plain = record_open_12(
+            var plain = record_open_12_k(
+                self._open_ak,
                 UInt8(self._keys12.cipher),
                 self._keys12.server_write_key,
                 self._keys12.server_write_iv,
@@ -664,7 +676,8 @@ struct TlsSocket(Movable):
             var full_record = header^
             _sock_append_bytes(full_record, rbody)
 
-            var decrypted = record_open(
+            var decrypted = record_open_k(
+                self._open_ak,
                 self._keys.cipher,
                 self._keys.server_write_key,
                 self._keys.server_write_iv,
@@ -754,7 +767,8 @@ struct TlsSocket(Movable):
             if self._is12:
                 if len(self._keys12.client_write_key) == 0:
                     return
-                var payload = record_seal_12(
+                var payload = record_seal_12_k(
+                self._seal_ak,
                     UInt8(self._keys12.cipher), self._keys12.client_write_key,
                     self._keys12.client_write_iv, self._keys12.client_seqno, CTYPE_ALERT, body,
                 )
@@ -769,7 +783,8 @@ struct TlsSocket(Movable):
             else:
                 if len(self._keys.client_write_key) == 0:
                     return
-                self._write_record(record_seal(
+                self._write_record(record_seal_k(
+                self._seal_ak,
                     self._keys.cipher, self._keys.client_write_key,
                     self._keys.client_write_iv, self._keys.client_seqno, CTYPE_ALERT, body,
                 ))
@@ -905,7 +920,8 @@ struct TlsSocket(Movable):
                 var alert_body = List[UInt8](capacity=2)
                 alert_body.append(ALERT_LEVEL_WARNING)
                 alert_body.append(ALERT_CLOSE_NOTIFY)
-                var payload = record_seal_12(
+                var payload = record_seal_12_k(
+                self._seal_ak,
                     UInt8(self._keys12.cipher),
                     self._keys12.client_write_key,
                     self._keys12.client_write_iv,
@@ -929,7 +945,8 @@ struct TlsSocket(Movable):
                 var alert_body = List[UInt8](capacity=2)
                 alert_body.append(ALERT_LEVEL_WARNING)
                 alert_body.append(ALERT_CLOSE_NOTIFY)
-                var sealed = record_seal(
+                var sealed = record_seal_k(
+                self._seal_ak,
                     self._keys.cipher,
                     self._keys.client_write_key,
                     self._keys.client_write_iv,

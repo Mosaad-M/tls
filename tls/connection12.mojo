@@ -18,7 +18,7 @@
 # ============================================================================
 
 from std.ffi import external_call
-from crypto.hash import SHA256, SHA384, sha256, sha384
+from crypto.hash import SHA256, SHA384, sha256, sha384, sha512
 from crypto.prf import (
     tls12_master_secret, tls12_extended_master_secret,
     tls12_key_block, tls12_key_block_sha384,
@@ -210,27 +210,38 @@ def _read_record12(fd: Int32) raises -> Tuple[UInt8, List[UInt8]]:
 
 def _verify_ske_signature(
     cert:           X509Cert,
-    sig_hash:       UInt8,      # 4=SHA-256, 5=SHA-384
+    sig_hash:       UInt8,      # 4=SHA-256, 5=SHA-384, 6=SHA-512, 8=PSS
     sig_sig:        UInt8,      # 1=RSA, 3=ECDSA
     sig_bytes:      List[UInt8],
     signed_data:    List[UInt8],
 ) raises:
-    """Verify ServerKeyExchange signature."""
-    # RSA-PSS schemes are 0x0804 / 0x0805: "hash" byte 8, "sig" byte 4 / 5
-    if sig_hash == 8 and (sig_sig == 4 or sig_sig == 5):
+    """Verify ServerKeyExchange signature.
+
+    Accepts exactly the offered schemes: 0x0403, 0x0503, 0x0401, 0x0501,
+    0x0601, 0x0804, 0x0805, 0x0806. (sha512, ecdsa) = 0x0603 is not offered
+    (in TLS 1.3 the code point means secp521r1, which is unsupported).
+    """
+    # RSA-PSS schemes are 0x0804-0x0806: "hash" byte 8, "sig" byte 4-6
+    if sig_hash == 8 and (sig_sig == 4 or sig_sig == 5 or sig_sig == 6):
         if cert.pub_key_alg != "rsa":
             raise Error("tls12: sig is RSA-PSS but cert has no RSA key")
         if sig_sig == 4:
             rsa_pss_verify(cert.rsa_n, cert.rsa_e, sha256(signed_data), sig_bytes, 32)
-        else:
+        elif sig_sig == 5:
             rsa_pss_verify(cert.rsa_n, cert.rsa_e, sha384(signed_data), sig_bytes, 48)
+        else:
+            rsa_pss_verify(cert.rsa_n, cert.rsa_e, sha512(signed_data), sig_bytes, 64)
         return
+    if sig_hash == 6 and sig_sig != 1:
+        raise Error("tls12: unsupported signature scheme (sha512, " + String(Int(sig_sig)) + ")")
 
     var msg_hash: List[UInt8]
     if sig_hash == 4:
         msg_hash = sha256(signed_data)
     elif sig_hash == 5:
         msg_hash = sha384(signed_data)
+    elif sig_hash == 6:
+        msg_hash = sha512(signed_data)
     else:
         raise Error("tls12: unsupported sig_hash " + String(Int(sig_hash)))
 

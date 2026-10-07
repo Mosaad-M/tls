@@ -11,7 +11,7 @@
 from std.ffi import external_call
 from std.memory import alloc
 from std.sys.info import CompilationTarget
-from crypto.hash import SHA256, SHA384, sha256, sha384
+from crypto.hash import SHA256, SHA384, sha256, sha384, sha512
 from crypto.handshake import (
     tls13_early_secret, tls13_handshake_secret, tls13_master_secret,
     tls13_derive_secret, tls13_traffic_keys, tls13_finished_key,
@@ -367,6 +367,11 @@ def _verify_cert_verify_sig(
             raise Error("tls: sig_scheme RSA-PSS-SHA384 but cert has no RSA key")
         var msg_hash = sha384(cv_input)
         rsa_pss_verify(cert.rsa_n, cert.rsa_e, msg_hash, sig_bytes, 48)
+    elif sig_scheme == 0x0806:  # rsa_pss_rsae_sha512
+        if cert.pub_key_alg != "rsa":
+            raise Error("tls: sig_scheme RSA-PSS-SHA512 but cert has no RSA key")
+        var msg_hash = sha512(cv_input)
+        rsa_pss_verify(cert.rsa_n, cert.rsa_e, msg_hash, sig_bytes, 64)
     else:
         raise Error("tls: unsupported sig_scheme " + String(Int(sig_scheme)))
 

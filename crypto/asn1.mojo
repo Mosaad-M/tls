@@ -56,10 +56,12 @@ comptime OID_SHA384_WITH_RSA   = "2a864886f70d01010c"  # 1.2.840.113549.1.1.12 s
 comptime OID_SHA384_WITH_ECDSA = "2a8648ce3d040303"    # 1.2.840.10045.4.3.3   ecdsa-with-SHA384
 comptime OID_RSA_PSS           = "2a864886f70d01010a"  # 1.2.840.113549.1.1.10 id-RSASSA-PSS
 comptime OID_SHA512_WITH_RSA   = "2a864886f70d01010d"  # 1.2.840.113549.1.1.13 sha512WithRSAEncryption
+comptime OID_SHA512_WITH_ECDSA = "2a8648ce3d040304"    # 1.2.840.10045.4.3.4   ecdsa-with-SHA512
 
 # Hash algorithm OIDs (used in RSASSA-PSS-params AlgorithmIdentifier)
 comptime OID_HASH_SHA256       = "608648016503040201"  # 2.16.840.1.101.3.4.2.1 id-sha256
 comptime OID_HASH_SHA384       = "608648016503040202"  # 2.16.840.1.101.3.4.2.2 id-sha384
+comptime OID_HASH_SHA512       = "608648016503040203"  # 2.16.840.1.101.3.4.2.3 id-sha512
 
 # EC curve OIDs (Session 3)
 comptime OID_P384              = "2b81040022"           # 1.3.132.0.34 secp384r1
