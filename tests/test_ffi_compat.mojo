@@ -5,6 +5,9 @@
 # package and the dependents (requests, websocket, pg, mojo-pkg) declare
 # these calls with the argument types below; if tls declared any of them
 # differently, every program importing both would fail to compile.
+# (C functions that Mojo's std declares itself - open/read/write, errno
+# access, getenv, clock_gettime - are not declared by tls or the dependents
+# at all; tests/test_std_compat.mojo checks that side.)
 #
 # Both sides must be reachable for the compiler to compare them, so this
 # calls them for real on fd -1 (each fails harmlessly with EBADF).
@@ -12,6 +15,7 @@
 
 from std.ffi import external_call
 from std.memory import alloc
+from crypto.cert import X509Cert, cert_chain_verify
 from tls.connection import tls_read_some, tls_set_timeout, tls_prepare_fd, tls_tcp_write
 
 
@@ -22,10 +26,12 @@ def _tcp_style_calls(fd: Int32) -> Int:
     var b = external_call["recv", Int](fd, Int(buf), Int(1), Int32(0))
     # tcp.mojo: _set_socket_timeouts
     var c = external_call["setsockopt", Int32](fd, Int32(0), Int32(0), Int(buf), Int32(16))
-    # websocket.mojo: _get_errno
+    # requests / pg / tcp: memcpy
     var d = external_call["memcpy", Int](Int(buf), Int(buf) + 8, Int(4))
+    # requests: _unix_time_secs (tls: cert_chain_verify's clock)
+    var e = external_call["time", Int64](Int(0))
     buf.unsafe_free()
-    return a + b + Int(c) + d
+    return a + b + Int(c) + d + Int(e)
 
 
 def main() raises:
@@ -43,6 +49,10 @@ def main() raises:
     try:
         var one: List[UInt8] = [1]
         tls_tcp_write(fd, one)
+    except:
+        pass
+    try:
+        cert_chain_verify(List[X509Cert](), List[X509Cert](), "example.com")
     except:
         pass
     print("=== FFI signature compatibility: compiled ===")

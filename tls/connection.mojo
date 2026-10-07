@@ -8,7 +8,7 @@
 # TlsKeys struct holds all post-handshake keying material.
 # ============================================================================
 
-from std.ffi import external_call
+from std.ffi import external_call, get_errno
 from std.memory import alloc
 from std.sys.info import CompilationTarget
 from crypto.hash import SHA256, SHA384, sha256, sha384, sha512
@@ -120,14 +120,18 @@ struct TlsKeys(Copyable, Movable):
 
 
 # ============================================================================
-# TCP I/O helpers (FFI: read / write system calls)
+# TCP I/O helpers (FFI: recv / send / setsockopt)
 # ============================================================================
+# A Mojo program may declare each C function with one signature only, and
+# std declares open/read/write and errno access (__error/__errno_location)
+# itself. tls therefore declares none of those: sockets use recv/send with
+# the tcp package's signatures (tests/test_ffi_compat.mojo), errno comes from
+# std.ffi.get_errno, and files go through std open() (tests/test_std_compat.mojo).
 
 comptime _EINTR      : Int32 = 4
 comptime _EPIPE      : Int32 = 32
 comptime _EAGAIN     : Int32 = 35 if CompilationTarget.is_macos() else 11
 comptime _ECONNRESET : Int32 = 54 if CompilationTarget.is_macos() else 104
-comptime _ENOTSOCK   : Int32 = 38 if CompilationTarget.is_macos() else 88
 comptime _MSG_NOSIGNAL : Int32 = 0x4000          # Linux; macOS uses SO_NOSIGPIPE
 comptime _SOL_SOCKET   : Int32 = 0xFFFF if CompilationTarget.is_macos() else 1
 comptime _SO_NOSIGPIPE : Int32 = 0x1022          # macOS only
@@ -136,17 +140,8 @@ comptime _SO_SNDTIMEO  : Int32 = 0x1005 if CompilationTarget.is_macos() else 21
 
 
 def _errno() -> Int32:
-    """Current errno (__errno_location on Linux, __error on macOS)."""
-    var ptr: Int
-    comptime if CompilationTarget.is_linux():
-        ptr = external_call["__errno_location", Int]()
-    else:
-        ptr = external_call["__error", Int]()
-    var ebuf = alloc[Int32](1)
-    _ = external_call["memcpy", Int](Int(ebuf), ptr, Int(4))
-    var val = ebuf[]
-    ebuf.unsafe_free()
-    return val
+    """Current errno."""
+    return Int32(get_errno().value)
 
 
 def tls_prepare_fd(fd: Int32):
@@ -185,7 +180,8 @@ def tls_read_some(fd: Int32, max_bytes: Int) raises -> List[UInt8]:
     var buf = alloc[UInt8](max_bytes)
     var got: Int
     while True:
-        got = external_call["read", Int](fd, buf, max_bytes)
+        # Same argument types as the tcp package's recv()
+        got = external_call["recv", Int](fd, Int(buf), max_bytes, Int32(0))
         if got >= 0:
             break
         var err = _errno()
@@ -229,23 +225,16 @@ def _tcp_write(fd: Int32, data: List[UInt8]) raises:
     for i in range(n):
         buf[unsafe_offset=i] = data[i]
     var total = 0
-    var use_send = CompilationTarget.is_linux()
+    # MSG_NOSIGNAL on Linux; on macOS tls_prepare_fd set SO_NOSIGPIPE
+    comptime FLAGS = _MSG_NOSIGNAL if CompilationTarget.is_linux() else Int32(0)
     while total < n:
-        var sent: Int
-        if use_send:
-            # Same argument types as the tcp package's send(): one program
-            # cannot declare a C function with two signatures.
-            sent = external_call["send", Int](
-                fd, Int(buf.unsafe_offset(total)), n - total, _MSG_NOSIGNAL
-            )
-        else:
-            sent = external_call["write", Int](Int(fd), buf.unsafe_offset(total), n - total)
+        # Same argument types as the tcp package's send()
+        var sent = external_call["send", Int](
+            fd, Int(buf.unsafe_offset(total)), n - total, FLAGS
+        )
         if sent < 0:
             var err = _errno()
             if err == _EINTR:
-                continue
-            if err == _ENOTSOCK and use_send:
-                use_send = False  # a pipe or file (tests): plain write()
                 continue
             buf.unsafe_free()
             if err == _EAGAIN:

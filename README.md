@@ -17,7 +17,7 @@ With [mojo-pkg](https://github.com/Mosaad-M/mojo-pkg), add the dependency to
 
 ```toml
 [dependencies]
-tls = { git = "Mosaad-M/tls", version = ">=1.6.1" }
+tls = { git = "Mosaad-M/tls", version = ">=1.7.0" }
 tcp = { git = "Mosaad-M/tcp", version = ">=1.1.0" }   # optional: DNS + connect helper
 ```
 
@@ -29,6 +29,17 @@ mojo build app.mojo $(cat .mojo_flags)
 Or clone the repository and build with `-I path/to/tls`.
 
 **Requirements:** Mojo >= 1.0.0, on linux-64 or osx-arm64.
+
+**Using tls with other code.** A Mojo program may declare each C function with
+only one signature. Since 1.7.0, tls declares none of the C functions that Mojo's
+standard library declares (file I/O, errno, `getenv`, clocks), so it works next to
+`open()`, `std.os` and `std.time`. Before 1.7.0, a program that used tls and also
+called `open()` failed to compile with "existing function with conflicting
+signature". Its socket calls (`recv`, `send`, `setsockopt`, `close`) use the same
+signatures as the [tcp](https://github.com/Mosaad-M/tcp) package. If your own code
+calls these C functions, declare them the same way: see `tests/test_ffi_compat.mojo`.
+Use websocket >= 1.2.0, requests >= 1.3.0 and pg >= 1.6.0 with tls 1.7.0: older
+releases declare errno access themselves and clash with it.
 
 ## Usage
 
@@ -188,6 +199,11 @@ messages, alerts, record reassembly) is fuzzed on each pull request and nightly;
 crash below within seconds. 1.6.1 also adds SHA-512 signatures and expands each
 AES-GCM key once per connection rather than once per record (a 64-byte record went
 from 4.9 to 2.9 µs, bulk transfer from 41 to 52 MB/s on an Apple M1 Pro).
+
+1.7.0 makes tls usable alongside Mojo's standard library (see
+[Install](#install)). Sockets use `recv`/`send` on every platform. The system CA
+bundle is no longer cut off at 2 MB: larger bundles used to lose their last
+certificates silently.
 
 Fixed in 1.6.0 (second review, three independent reviewers):
 - **Crash:** a certificate with an empty EC public key aborted the process; it could be

@@ -23,8 +23,8 @@ test-asn1 = "mojo run -I . tests/test_asn1.mojo"
 test-cert = "mojo run -I . tests/test_cert.mojo"
 test-cert-sha384 = "mojo run -I . tests/test_cert_sha384.mojo"
 test-record = "mojo run -I . tests/test_record.mojo"
-test-record-eof = "mojo run -I . tests/test_record_eof.mojo"
-test-socket-io = "mojo run -I . tests/test_socket_io.mojo"
+test-record-eof = "mojo run -I . -I tests tests/test_record_eof.mojo"
+test-socket-io = "mojo run -I . -I tests tests/test_socket_io.mojo"
 test-ffi-compat = "mojo run -I . tests/test_ffi_compat.mojo"
 test-ct-crypto = "mojo run -I . -I tests tests/test_ct_crypto.mojo"
 test-protocol = "mojo run -I . tests/test_protocol.mojo"
@@ -54,6 +54,7 @@ test-session-ticket = "mojo run -I . tests/test_session_ticket.mojo"
 test-p256-sign = "mojo run -I . tests/test_p256_sign.mojo"
 test-message12-mtls = "mojo run -I . tests/test_message12_mtls.mojo"
 test-sha512-sigs = "mojo run -I . -I tests tests/test_sha512_sigs.mojo"
+test-std-compat = "mojo run -I . tests/test_std_compat.mojo"
 # Fuzzing (tests/fuzz/run_fuzz.sh): `pixi run fuzz <iterations> [seed ...]`
 fuzz = "bash tests/fuzz/run_fuzz.sh"
 test-fuzz-regressions = "bash tests/fuzz/run_fuzz.sh replay"
@@ -71,7 +72,7 @@ test = { depends-on = [
   "test-record", "test-record-eof", "test-socket-io", "test-ffi-compat", "test-ct-crypto", "test-protocol", "test-review-fixes", "test-record12", "test-handshake",
   "test-message", "test-message12", "test-prf", "test-alert",
   "test-psk-handshake", "test-session-ticket", "test-p256-sign",
-  "test-message12-mtls", "test-rsa4096", "test-sha512-vec", "test-sha512-sigs",
+  "test-message12-mtls", "test-rsa4096", "test-sha512-vec", "test-sha512-sigs", "test-std-compat",
   "test-fuzz-regressions"
 ] }
 
