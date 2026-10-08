@@ -19,6 +19,26 @@
 
 from crypto.gcm import gcm_encrypt, gcm_decrypt, GcmKey
 from crypto.poly1305 import chacha20_poly1305_encrypt, chacha20_poly1305_decrypt
+from std.ffi import external_call
+
+
+# Byte copies with memcpy (records are up to 16 KiB; byte loops were a
+# large part of the per-record cost once AES-GCM ran in hardware)
+def _put(mut out: List[UInt8], src: List[UInt8], start: Int, n: Int):
+    """Append src[start:start+n] to out."""
+    if n <= 0:
+        return
+    var have = len(out)
+    if have + n > out.capacity():
+        out.reserve(max(have + n, out.capacity() * 2))
+    out.resize(unsafe_uninit_length=have + n)
+    _ = external_call["memcpy", Int](Int(out.unsafe_ptr()) + have, Int(src.unsafe_ptr()) + start, n)
+
+
+def _slice(src: List[UInt8], start: Int, n: Int) -> List[UInt8]:
+    var out = List[UInt8](capacity=n)
+    _put(out, src, start, n)
+    return out^
 
 
 # Cipher suite identifiers
@@ -131,8 +151,7 @@ def record_seal_k(
 
     # Inner plaintext = plaintext || content_type (TLS 1.3 §5.2)
     var inner = List[UInt8](capacity=len(plaintext) + 1)
-    for i in range(len(plaintext)):
-        inner.append(plaintext[i])
+    _put(inner, plaintext, 0, len(plaintext))
     inner.append(content_type)
 
     var aad   = _make_aad(len(inner))
@@ -152,12 +171,9 @@ def record_seal_k(
 
     # Build record: header (5 bytes) || ciphertext || tag (16 bytes)
     var record = List[UInt8](capacity=5 + len(ct) + 16)
-    for i in range(5):
-        record.append(aad[i])
-    for i in range(len(ct)):
-        record.append(ct[i])
-    for i in range(16):
-        record.append(tag[i])
+    _put(record, aad, 0, 5)
+    _put(record, ct, 0, len(ct))
+    _put(record, tag, 0, 16)
     return record^
 
 
@@ -190,17 +206,11 @@ def record_open_k(
     var ct_len = ct_tag_len - 16
 
     # Slice ciphertext and tag out of record
-    var ciphertext = List[UInt8](capacity=ct_len)
-    for i in range(ct_len):
-        ciphertext.append(record[5 + i])
-    var tag = List[UInt8](capacity=16)
-    for i in range(16):
-        tag.append(record[5 + ct_len + i])
+    var ciphertext = _slice(record, 5, ct_len)
+    var tag = _slice(record, 5 + ct_len, 16)
 
     # AAD = the record header (first 5 bytes)
-    var aad = List[UInt8](capacity=5)
-    for i in range(5):
-        aad.append(record[i])
+    var aad = _slice(record, 0, 5)
 
     var nonce = _make_nonce(iv, seqno)
 
@@ -223,11 +233,8 @@ def record_open_k(
         raise Error("record_open: no content type in inner plaintext (unexpected_message)")
     var content_type = inner[ct_pos]
     var pt_len = ct_pos
-    var pt = List[UInt8](capacity=pt_len)
-    for i in range(pt_len):
-        pt.append(inner[i])
-
-    return (content_type, pt^)
+    inner.resize(unsafe_uninit_length=pt_len)  # drop type byte and padding in place
+    return (content_type, inner^)
 
 
 # ============================================================================
@@ -307,12 +314,9 @@ def record_seal_12_k(
 
     # Output: explicit_nonce || ciphertext || tag
     var out = List[UInt8](capacity=8 + len(ct) + 16)
-    for i in range(8):
-        out.append(explicit_nonce[i])
-    for i in range(len(ct)):
-        out.append(ct[i])
-    for i in range(16):
-        out.append(tag[i])
+    _put(out, explicit_nonce, 0, 8)
+    _put(out, ct, 0, len(ct))
+    _put(out, tag, 0, 16)
     return out^
 
 
@@ -345,12 +349,8 @@ def record_open_12_k(
     var ct_tag_len = len(payload) - 8
     var ct_len = ct_tag_len - 16
 
-    var ciphertext = List[UInt8](capacity=ct_len)
-    for i in range(ct_len):
-        ciphertext.append(payload[8 + i])
-    var tag = List[UInt8](capacity=16)
-    for i in range(16):
-        tag.append(payload[8 + ct_len + i])
+    var ciphertext = _slice(payload, 8, ct_len)
+    var tag = _slice(payload, 8 + ct_len, 16)
 
     var aad = _make_aad_12(seqno, content_type, ct_len)
 

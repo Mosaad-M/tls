@@ -9,8 +9,12 @@
 
 from std.ffi import external_call
 from std.memory import alloc
+from std.sys.info import CompilationTarget
 
 comptime _SHUT_WR: Int32 = 1
+comptime _SOL_SOCKET: Int32 = 0xFFFF if CompilationTarget.is_macos() else 1
+comptime _SO_SNDBUF: Int32 = 0x1001 if CompilationTarget.is_macos() else 7
+comptime _SO_RCVBUF: Int32 = 0x1002 if CompilationTarget.is_macos() else 8
 
 
 struct Pair(Movable):
@@ -28,6 +32,16 @@ struct Pair(Movable):
         self.mine = fds[unsafe_offset=0]
         self.peer = fds[unsafe_offset=1]
         fds.unsafe_free()
+
+    def grow_buffers(self, n: Int):
+        """Ask for n-byte socket buffers so a test can write n bytes before
+        reading (macOS defaults to ~8 KB; Linux caps at net.core.wmem_max)."""
+        var v = alloc[Int32](1)
+        v[unsafe_offset=0] = Int32(n)
+        for fd in [self.mine, self.peer]:
+            _ = external_call["setsockopt", Int32](fd, _SOL_SOCKET, _SO_SNDBUF, Int(v), Int32(4))
+            _ = external_call["setsockopt", Int32](fd, _SOL_SOCKET, _SO_RCVBUF, Int(v), Int32(4))
+        v.unsafe_free()
 
     def end_peer_output(self):
         """The peer stops sending: mine reads end of stream after the data

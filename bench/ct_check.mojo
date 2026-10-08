@@ -16,6 +16,7 @@ from std.time import perf_counter_ns
 from std.math import sqrt
 from crypto.aes import AES
 from crypto.gcm import gcm_encrypt
+from crypto.aes_hw import GCM_HW
 from crypto.p256 import p256_ecdh, p256_public_key
 from crypto.random import csprng_bytes
 from ref_aes_table import RefAES
@@ -131,7 +132,10 @@ def check_gcm(n: Int) raises:
             b_old.append(Float64(t2 - t1))
     print("AES-GCM 64 bytes, fixed vs random key (" + String(n) + " runs):")
     _report("table GCM (1.4.5)     ", _welch_t(a_old, b_old))
-    _report("constant-time (1.4.6) ", _welch_t(a_new, b_new))
+    comptime if GCM_HW:
+        _report("hardware AES-GCM (1.8)", _welch_t(a_new, b_new))
+    else:
+        _report("constant-time (1.4.6) ", _welch_t(a_new, b_new))
 
 
 def check_p256(n: Int) raises:

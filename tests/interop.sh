@@ -121,6 +121,35 @@ CERT="$WORK/rsa.pem" KEY="$WORK/rsa.key" scenario "TLS 1.2 rsa_pss_rsae_sha512 S
     "New, TLSv1.2, Cipher is ECDHE-RSA" \
     -- -tls1_2 -sigalgs rsa_pss_rsae_sha512
 
+# ── Receive path (1.8.0): 32 MiB from s_server -WWW, three receive styles ─────
+# Every byte is checked; the time limits catch quadratic copying (1.7.0's
+# recv_all ran at ~1 MB/s, small reads at ~22 us per message).
+BULK_SIZE=$((32 * 1024 * 1024))
+mkdir -p "$WORK/www"
+python3 -c "
+import sys
+block = bytes(i % 251 for i in range(251))
+n = $BULK_SIZE
+sys.stdout.buffer.write((block * (n // 251 + 1))[:n])" > "$WORK/www/bulk.bin"
+bulk() {  # bulk <mode> <max seconds>
+    PORT=$((PORT + 1))
+    (cd "$WORK/www" && exec openssl s_server -accept "$PORT" -cert "$WORK/server.pem" -key "$WORK/server.key" \
+        -WWW -quiet) > "$WORK/bulk_server.log" 2>&1 &
+    local server=$!
+    sleep 1
+    if "$WORK/client" "$PORT" "$CA_HEX" --bulk /bulk.bin "$BULK_SIZE" "$1" "$2" > "$WORK/bulk.txt" 2>&1; then
+        echo "PASS: 32 MiB download, $1 ($(grep -o '[0-9]* MB/s' "$WORK/bulk.txt"))"
+    else
+        echo "FAIL: 32 MiB download, $1"
+        tail -3 "$WORK/bulk.txt" | sed 's/^/    client: /'
+        FAILURES=$((FAILURES + 1))
+    fi
+    kill "$server" 2>/dev/null; wait "$server" 2>/dev/null
+}
+bulk recv_all 2
+bulk recv 2
+bulk small 4
+
 # hostile <name> <mode> <expect> [upstream s_server args...]
 # expect: "ok:<page check>" (handshake must succeed) or "fail:<error text>"
 # (the client must exit with a clean error: status 1, not an abort).
