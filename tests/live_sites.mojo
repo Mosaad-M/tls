@@ -35,7 +35,7 @@ def main() raises:
         try:
             var tcp = TcpSocket()
             tcp.connect(host, 443)
-            var tls = TlsSocket(tcp.fd)
+            var tls = TlsSocket(tcp.detach())
             tls.connect(host, anchors)
             print("  OK  ", host)
             try:
@@ -58,7 +58,7 @@ def main() raises:
         try:
             var tcp = TcpSocket()
             tcp.connect(host, 443)
-            var tls = TlsSocket(tcp.fd)
+            var tls = TlsSocket(tcp.detach())
             tls.connect(host, anchors)
             failures += 1
             print("  FAIL", host, "- accepted")
