@@ -233,19 +233,19 @@ struct HwGcmKey(Copyable, Movable):
             var hi = U64x2(0)
             var mid = U64x2(0)
             comptime for i in range(8):
-                var x = _to_field((src + off + 16 * i).load[width=16]())
+                var x = _to_field(src.unsafe_offset(off + 16 * i).unsafe_load[width=16]())
                 comptime if i == 0:
                     x ^= y
                 _acc_mul(lo, hi, mid, x, self.hp[7 - i], self.hk[7 - i])
             y = _acc_reduce(lo, hi, mid)
             off += 128
         while off + 16 <= n:
-            y = self._mul1(y ^ _to_field((src + off).load[width=16]()))
+            y = self._mul1(y ^ _to_field(src.unsafe_offset(off).unsafe_load[width=16]()))
             off += 16
         if off < n:
             var last = V16(0)
             for i in range(n - off):
-                last[i] = src[off + i]
+                last[i] = src[unsafe_offset=off + i]
             y = self._mul1(y ^ _to_field(last))
 
     def _crypt[DECRYPT: Bool](self, j0: V16, mut y: U64x2, src_addr: Int, dst_addr: Int, n: Int):
@@ -276,8 +276,8 @@ struct HwGcmKey(Copyable, Movable):
                 var hi = U64x2(0)
                 var mid = U64x2(0)
                 comptime for i in range(8):
-                    var inb = (src + off + 16 * i).load[width=16]()
-                    (dst + off + 16 * i).store(0, inb ^ ks[i])
+                    var inb = src.unsafe_offset(off + 16 * i).unsafe_load[width=16]()
+                    dst.unsafe_offset(off + 16 * i).unsafe_store(0, inb ^ ks[i])
                     var x = _to_field(inb)
                     comptime if i == 0:
                         x ^= y
@@ -287,8 +287,8 @@ struct HwGcmKey(Copyable, Movable):
                 if have_prev:
                     y = self._absorb8(y, prev)
                 comptime for i in range(8):
-                    var outb = (src + off + 16 * i).load[width=16]() ^ ks[i]
-                    (dst + off + 16 * i).store(0, outb)
+                    var outb = src.unsafe_offset(off + 16 * i).unsafe_load[width=16]() ^ ks[i]
+                    dst.unsafe_offset(off + 16 * i).unsafe_store(0, outb)
                     prev[i] = _to_field(outb)
                 have_prev = True
             ctr += 8
@@ -297,9 +297,9 @@ struct HwGcmKey(Copyable, Movable):
             if have_prev:
                 y = self._absorb8(y, prev)
         while off + 16 <= n:
-            var inb = (src + off).load[width=16]()
+            var inb = src.unsafe_offset(off).unsafe_load[width=16]()
             var outb = inb ^ _encrypt_block(self.k, _counter_block(j0, ctr))
-            (dst + off).store(0, outb)
+            dst.unsafe_offset(off).unsafe_store(0, outb)
             comptime if DECRYPT:
                 y = self._mul1(y ^ _to_field(inb))
             else:
@@ -310,9 +310,9 @@ struct HwGcmKey(Copyable, Movable):
             var ksb = _encrypt_block(self.k, _counter_block(j0, ctr))
             var ct = V16(0)
             for i in range(n - off):
-                var b = src[off + i]
+                var b = src[unsafe_offset=off + i]
                 var o = b ^ ksb[i]
-                dst[off + i] = o
+                dst[unsafe_offset=off + i] = o
                 comptime if DECRYPT:
                     ct[i] = b
                 else:
@@ -352,16 +352,16 @@ struct HwGcmKey(Copyable, Movable):
         self._crypt[True](j0, y, src, dst, n)
         y = self._mul1(y ^ _to_field(_len_block(aad_len, n)))
         var expect = _from_field(y) ^ _encrypt_block(self.k, j0)
-        var given = Pointer[UInt8, MutAnyOrigin](unsafe_from_address=tag_addr).load[width=16]()
+        var given = Pointer[UInt8, MutAnyOrigin](unsafe_from_address=tag_addr).unsafe_load[width=16]()
         if (expect ^ given).reduce_or() == 0:
             return True
         var out = Pointer[UInt8, MutAnyOrigin](unsafe_from_address=dst)
         var off = 0
         while off + 16 <= n:
-            (out + off).store(0, V16(0))
+            out.unsafe_offset(off).unsafe_store(0, V16(0))
             off += 16
         while off < n:
-            out[off] = 0
+            out[unsafe_offset=off] = 0
             off += 1
         return False
 

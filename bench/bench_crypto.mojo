@@ -12,6 +12,7 @@ from crypto.p256 import p256_ecdh, p256_public_key, p256_ecdsa_sign
 from crypto.gcm import gcm_encrypt, GcmKey
 from crypto.poly1305 import chacha20_poly1305_encrypt
 from crypto.hash import sha256
+from crypto.record import AeadKey, record_seal_k, record_open_into, CIPHER_AES_256_GCM
 
 
 def _bytes(n: Int, seed: Int) -> List[UInt8]:
@@ -76,6 +77,33 @@ def bench_aead() raises:
     for _ in range(200):
         _ = gk.seal(nonce, big, aad)
     _throughput("AES-128-GCM encrypt 16 KiB records, prepared key", 16384 * 200, Int(perf_counter_ns() - start))
+
+    # AES-256-GCM (what TLS 1.3 servers usually pick), seal and open, and the
+    # whole record layer around them (1.8.1: fused AES-CTR + GHASH, in place)
+    var gk256 = GcmKey(key256)
+    var reps = 2000
+    start = perf_counter_ns()
+    for _ in range(reps):
+        _ = gk256.seal(nonce, big, aad)
+    _throughput("AES-256-GCM seal 16 KiB, prepared key", 16384 * reps, Int(perf_counter_ns() - start))
+    var sealed = gk256.seal(nonce, big, aad)
+    start = perf_counter_ns()
+    for _ in range(reps):
+        _ = gk256.open(nonce, sealed[0], sealed[1], aad)
+    _throughput("AES-256-GCM open 16 KiB, prepared key", 16384 * reps, Int(perf_counter_ns() - start))
+
+    var ak = AeadKey()
+    start = perf_counter_ns()
+    for i in range(reps):
+        _ = record_seal_k(ak, CIPHER_AES_256_GCM, key256, nonce, UInt64(i), 0x17, big)
+    _throughput("TLS 1.3 record seal, 16 KiB (AES-256-GCM)", 16384 * reps, Int(perf_counter_ns() - start))
+    var rec = record_seal_k(ak, CIPHER_AES_256_GCM, key256, nonce, 0, 0x17, big)
+    var out = List[UInt8](capacity=16384 + 16)
+    start = perf_counter_ns()
+    for _ in range(reps):
+        out.resize(unsafe_uninit_length=0)
+        _ = record_open_into(ak, CIPHER_AES_256_GCM, key256, nonce, 0, Int(rec.unsafe_ptr()), len(rec), out)
+    _throughput("TLS 1.3 record open in place, 16 KiB (AES-256-GCM)", 16384 * reps, Int(perf_counter_ns() - start))
 
 
 def bench_x25519() raises:

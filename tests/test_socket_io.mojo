@@ -396,6 +396,37 @@ def _send_stream(fd: Int32, data: List[UInt8], sizes: List[Int]) raises -> UInt6
     return seq
 
 
+def test_tampered_record_mid_stream() raises:
+    # Good records, then a tampered 16 KiB one, then another good one, all
+    # arriving in one burst (several records per socket read): recv returns
+    # exactly the bytes before the bad record and none from it or after it
+    var p = Pair()
+    p.grow_buffers(1 << 20)
+    var s = _sock(p.mine)
+    var k = Keys(_server_secret())
+    var good = _pattern(3000, 0)
+    var seq = _send_stream(p.peer, good, [1000])
+    var bad = record_seal(CIPHER_AES_128_GCM, k.key, k.iv, seq, CTYPE_APPLICATION_DATA, _filled(16384, 0xEE))
+    bad[200] ^= 0x01  # ciphertext, not the tag: decryption runs to the end
+    _write(p.peer, bad)
+    _write(p.peer, record_seal(CIPHER_AES_128_GCM, k.key, k.iv, seq + 1, CTYPE_APPLICATION_DATA, _filled(10, 0xEE)))
+    var got = List[UInt8]()
+    var message = String()
+    try:
+        while True:
+            var chunk = s.recv(65536)
+            for b in chunk:
+                got.append(b)
+    except e:
+        message = String(e)
+    if message.find("authentication failed") < 0:
+        raise Error("wrong error: " + message)
+    if got != good:
+        raise Error("got " + String(len(got)) + " bytes; expected exactly the 3000 before the bad record")
+    _expect_error(s, "failed earlier")
+    p.close()
+
+
 def test_small_reads_across_records() raises:
     # pg-style messages (5-byte header + 59-byte body) spread over records of
     # odd sizes: every read must see the right bytes in the right order
@@ -476,6 +507,7 @@ def main() raises:
     run_test[test_recv_one_byte_loop]("recv(1) loop across records", passed, failed)
     run_test[test_recv_exact_huge_n_bounded]("recv_exact(1 TiB) does not reserve", passed, failed)
     run_test[test_client_key_update_before_limit]("client KeyUpdate before the record limit", passed, failed)
+    run_test[test_tampered_record_mid_stream]("tampered record mid-stream: no bytes from it reach recv", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

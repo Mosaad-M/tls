@@ -171,26 +171,30 @@ def tls_set_timeout(fd: Int32, seconds: Int) raises:
         raise Error("tls: setsockopt timeout failed (errno=" + String(_errno()) + ")")
 
 
-def tls_read_some(fd: Int32, max_bytes: Int) raises -> List[UInt8]:
-    """Read up to max_bytes; an empty result means EOF.
+def tls_read_into(fd: Int32, addr: Int, max_bytes: Int) raises -> Int:
+    """Read up to max_bytes into memory at addr; returns the count, 0 at EOF.
 
     Retries EINTR. A receive timeout (SO_RCVTIMEO) raises "tls: read timed
     out"; any other failure raises "tls: tcp read failed (errno=N)".
     """
-    # Receive straight into the result's storage (no copy)
-    var out = List[UInt8](unsafe_uninit_length=max(max_bytes, 0))
-    var got: Int
     while True:
         # Same argument types as the tcp package's recv()
-        got = external_call["recv", Int](fd, Int(out.unsafe_ptr()), max_bytes, Int32(0))
+        var got = external_call["recv", Int](fd, addr, max_bytes, Int32(0))
         if got >= 0:
-            break
+            return got
         var err = _errno()
         if err == _EINTR:
             continue
         if err == _EAGAIN:
             raise Error("tls: read timed out")
         raise Error("tls: tcp read failed (errno=" + String(err) + ")")
+
+
+def tls_read_some(fd: Int32, max_bytes: Int) raises -> List[UInt8]:
+    """Read up to max_bytes; an empty result means EOF (see tls_read_into)."""
+    # Receive straight into the result's storage (no copy)
+    var out = List[UInt8](unsafe_uninit_length=max(max_bytes, 0))
+    var got = tls_read_into(fd, Int(out.unsafe_ptr()), max_bytes)
     out.resize(unsafe_uninit_length=got)
     return out^
 
@@ -216,34 +220,25 @@ def _tcp_write(fd: Int32, data: List[UInt8]) raises:
     SO_SNDTIMEO expires.
     """
     var n = len(data)
-    if n == 0:
-        return
-    var buf = alloc[UInt8](n)
-    for i in range(n):
-        buf[unsafe_offset=i] = data[i]
+    var base = Int(data.unsafe_ptr())  # data is borrowed: alive for the whole call
     var total = 0
     # MSG_NOSIGNAL on Linux; on macOS tls_prepare_fd set SO_NOSIGPIPE
     comptime FLAGS = _MSG_NOSIGNAL if CompilationTarget.is_linux() else Int32(0)
     while total < n:
         # Same argument types as the tcp package's send()
-        var sent = external_call["send", Int](
-            fd, Int(buf.unsafe_offset(total)), n - total, FLAGS
-        )
+        var sent = external_call["send", Int](fd, base + total, n - total, FLAGS)
         if sent < 0:
             var err = _errno()
             if err == _EINTR:
                 continue
-            buf.unsafe_free()
             if err == _EAGAIN:
                 raise Error("tls: write timed out")
             if err == _EPIPE or err == _ECONNRESET:
                 raise Error("tls: connection closed by peer (write failed)")
             raise Error("tls: tcp write failed (errno=" + String(err) + ")")
         if sent == 0:
-            buf.unsafe_free()
             raise Error("tls: tcp write failed (wrote 0 bytes)")
         total += sent
-    buf.unsafe_free()
 
 
 # ============================================================================

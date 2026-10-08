@@ -225,6 +225,26 @@ rebuilds its buffer on every read. Measured against `openssl s_server` on loopba
 `recv_exact(n)` no longer reserves `n` bytes before the data arrives (a length taken
 from a peer could reserve gigabytes).
 
+1.8.1 closes the gap to OpenSSL. AES-GCM runs AES-CTR and GHASH in one pass over each
+128-byte group, so the AES and carry-less-multiply units work at the same time, and
+GHASH folds eight blocks per reduction (it ran at 3.2 GB/s alone; now 11 GB/s).
+Records are decrypted where they arrive, from the receive buffer straight into the
+read buffer, and sealed in place; `send` no longer copies each record byte by byte
+before writing it. A record that fails authentication leaves nothing behind: its
+plaintext is zeroed and never reaches `recv`. Same benchmark, Python measured
+alongside (Apple M1 Pro):
+
+| | 1.8.1 | 1.8.0 | Python (OpenSSL) |
+|---|---|---|---|
+| AES-256-GCM, 16 KiB, seal / open | 4.8 / 4.5 GB/s | 1.8 / 1.9 GB/s | |
+| `recv(64 KiB)` loop | 1,230 MB/s | 1,007 MB/s | 1,160–1,260 MB/s |
+| `recv_all` | 1,140 MB/s | 719 MB/s | |
+| `send(16 KiB)` loop | 1,790 MB/s | 446 MB/s | 1,340 MB/s |
+| `recv_exact(5)` + `recv_exact(59)` | 0.16 us | 0.21 us | |
+
+On receive, tls and Python's client now run at the same speed against this server and
+use about the same CPU time per megabyte.
+
 Fixed in 1.6.0 (second review, three independent reviewers):
 - **Crash:** a certificate with an empty EC public key aborted the process; it could be
   sent by any server, or an attacker on the path, before authentication.
@@ -328,7 +348,7 @@ pixi run test-connection12  # TLS 1.2 against a local Python server
 pixi run test-socket        # TlsSocket against a local Python server
 pixi run test-interop       # handshakes against openssl s_server (also run in CI)
 pixi run bench              # primitive benchmarks
-pixi run bench-io           # TLS receive throughput against openssl s_server (both AES paths)
+pixi run bench-io           # TLS send/receive throughput against openssl s_server (both AES paths)
 pixi run test-soft-aes      # tests on the software AES-GCM path (also in CI)
 pixi run fuzz 20000 1 2     # fuzz every parser: <inputs per target> <seeds...>
 pixi run ct-check           # dudect-style timing-leak check (manual; noisy)

@@ -34,13 +34,13 @@ from crypto.curve25519 import x25519_public_key
 from crypto.record import (
     record_seal, record_open,
     record_seal_12, record_open_12,
-    AeadKey, record_seal_k, record_open_k, record_seal_12_k, record_open_12_k,
+    AeadKey, record_seal_k, record_open_into, record_seal_12_k, record_open_12_into,
     CIPHER_AES_128_GCM, CIPHER_AES_256_GCM,
     CTYPE_APPLICATION_DATA, CTYPE_CHANGE_CIPHER_SPEC, CTYPE_ALERT, CTYPE_HANDSHAKE,
 )
 from tls.connection import (
     tls13_after_server_hello, tls_cipher_from_suite, TlsKeys,
-    tls_tcp_read, tls_tcp_write, tls_read_some, tls_prepare_fd, tls_set_timeout,
+    tls_tcp_read, tls_tcp_write, tls_read_into, tls_prepare_fd, tls_set_timeout,
     tls_handle_incoming_alert, tls_send_plaintext_alert, tls_ec_keypair, HandshakeReader,
     ALERT_LEVEL_WARNING, ALERT_LEVEL_FATAL, ALERT_CLOSE_NOTIFY,
 )
@@ -64,7 +64,7 @@ from tls.message12 import (
 comptime _ALERT_UNEXPECTED_MESSAGE : UInt8 = 10
 comptime _HS_KEY_UPDATE : UInt8 = 24
 comptime _MAX_TICKETS = 8
-comptime _RX_CHUNK = 18432  # > one maximal record (5 + 16640)
+comptime _RX_CHUNK = 65536  # one recv() covers several maximal records (5 + 16640)
 comptime _ALERT_ILLEGAL_PARAMETER  : UInt8 = 47
 
 # ── Internal helpers ────────────────────────────────────────────────────────────
@@ -454,8 +454,10 @@ struct TlsSocket(Movable):
             self._broken = True
             raise e^
 
-    def _read_record(mut self) raises -> Tuple[List[UInt8], List[UInt8]]:
-        """Return the next record as (5-byte header, body).
+    def _next_record(mut self) raises -> Int:
+        """Wait until _rx holds a whole record at _rx_pos; return its length
+        (5-byte header + body). The caller decrypts it where it lies and
+        advances _rx_pos past it: records are never copied out of _rx.
 
         Bytes are buffered in _rx, so a read timeout part-way through a
         record loses nothing and the call can simply be repeated. TCP EOF
@@ -469,29 +471,24 @@ struct TlsSocket(Movable):
                 var rlen = (Int(self._rx[p + 3]) << 8) | Int(self._rx[p + 4])
                 if rlen > 16640:  # 2^14 + 256 (RFC 8446 §5.2)
                     raise Error("tls: record too large: " + String(rlen))
-                var total = 5 + rlen
-                if avail >= total:
-                    var base = Int(self._rx.unsafe_ptr()) + p
-                    var header = List[UInt8](capacity=5)
-                    _append_ptr(header, base, 5)
-                    var body = List[UInt8](capacity=rlen)
-                    _append_ptr(body, base + 5, rlen)
-                    self._rx_pos += total
-                    if self._rx_pos == len(self._rx):
-                        self._rx.resize(unsafe_uninit_length=0)
-                        self._rx_pos = 0
-                    return (header^, body^)
-            if p > 0:  # keep only the unconsumed tail before reading more
-                var rest = List[UInt8](capacity=max(avail, _RX_CHUNK))
-                _append_ptr(rest, Int(self._rx.unsafe_ptr()) + p, avail)
-                self._rx = rest^
+                if avail >= 5 + rlen:
+                    return 5 + rlen
+            if p > 0:  # move the unconsumed tail to the front
+                if avail > 0:
+                    var base = Int(self._rx.unsafe_ptr())
+                    _ = external_call["memmove", Int](base, base + p, avail)
+                self._rx.resize(unsafe_uninit_length=avail)
                 self._rx_pos = 0
-            var chunk = tls_read_some(self._fd, _RX_CHUNK)
-            if len(chunk) == 0:
-                if len(self._rx) == 0:
+            # receive straight into _rx's spare capacity
+            var have = len(self._rx)
+            if have + _RX_CHUNK > self._rx.capacity():
+                self._rx.reserve(have + _RX_CHUNK)
+            var got = tls_read_into(self._fd, Int(self._rx.unsafe_ptr()) + have, _RX_CHUNK)
+            if got == 0:
+                if have == 0:
                     raise Error("tls: connection closed without close_notify")
                 raise Error("tls: truncated record")
-            _sock_append_bytes(self._rx, chunk)
+            self._rx.resize(unsafe_uninit_length=have + got)
 
     def _key_update(mut self, update_requested: Bool) raises:
         """Apply a server KeyUpdate (RFC 8446 §4.6.3); answer if requested."""
@@ -593,10 +590,12 @@ struct TlsSocket(Movable):
         undecryptable alert is an attack, never a shutdown.
         """
         while True:
-            var rec = self._read_record()
-            var rtype = rec[0][0]
-            var rbody = rec[1].copy()
-            var rlen = len(rbody)
+            var total = self._next_record()
+            var p = self._rx_pos
+            self._rx_pos += total
+            var rtype = self._rx[p]
+            var payload = Int(self._rx.unsafe_ptr()) + p + 5
+            var rlen = total - 5
 
             if rtype == CTYPE_CHANGE_CIPHER_SPEC:
                 # renegotiation is not supported: no CCS after the handshake
@@ -605,15 +604,15 @@ struct TlsSocket(Movable):
             if rtype == CTYPE_ALERT:
                 if rlen < 8 + 16:
                     raise Error("tls: unexpected plaintext alert after handshake (unexpected_message)")
-                var alert_plain: List[UInt8]
+                var alert_plain = List[UInt8]()
                 try:
-                    alert_plain = record_open_12_k(
-                self._open_ak,
+                    record_open_12_into(
+                        self._open_ak,
                         UInt8(self._keys12.cipher),
                         self._keys12.server_write_key,
                         self._keys12.server_write_iv,
                         self._keys12.server_seqno,
-                        rtype, rbody,
+                        rtype, payload, rlen, alert_plain,
                     )
                 except:
                     raise Error("tls: bad_record_mac (alert failed to decrypt)")
@@ -628,22 +627,26 @@ struct TlsSocket(Movable):
             if rlen < 8 + 16:  # must have at least explicit_nonce + tag
                 raise Error("tls12_socket: record too short: " + String(rlen))
 
-            var plain = record_open_12_k(
+            # decrypt from _rx straight onto the end of _buf; on any error
+            # _buf is left as it was
+            var base = len(self._buf)
+            record_open_12_into(
                 self._open_ak,
                 UInt8(self._keys12.cipher),
                 self._keys12.server_write_key,
                 self._keys12.server_write_iv,
                 self._keys12.server_seqno,
-                rtype, rbody,
+                rtype, payload, rlen, self._buf,
             )
             if self._keys12.server_seqno >= UInt64(4611686018427387904):
+                self._buf.resize(unsafe_uninit_length=base)
                 raise Error("tls: server sequence number overflow")
             self._keys12.server_seqno += 1
-            if len(plain) > 16384:
+            if len(self._buf) - base > 16384:
+                self._buf.resize(unsafe_uninit_length=base)
                 raise Error("tls: record plaintext too long (record_overflow)")
-            if len(plain) == 0:
+            if len(self._buf) == base:
                 continue  # empty records are legal; never report them as EOF
-            _sock_append_bytes(self._buf, plain)
             return  # one record successfully decrypted
 
     def _fill_buf(mut self) raises:
@@ -658,10 +661,10 @@ struct TlsSocket(Movable):
             return
 
         while True:
-            var rec = self._read_record()
-            var header = rec[0].copy()
-            var rbody = rec[1].copy()
-            var rtype = header[0]
+            var total = self._next_record()
+            var p = self._rx_pos
+            self._rx_pos += total
+            var rtype = self._rx[p]
 
             if rtype == CTYPE_CHANGE_CIPHER_SPEC:
                 # only allowed before the peer's Finished (RFC 8446 §5)
@@ -677,24 +680,33 @@ struct TlsSocket(Movable):
                     + " after handshake (unexpected_message)"
                 )
 
-            # Reconstruct full record for record_open
-            var full_record = header^
-            _sock_append_bytes(full_record, rbody)
-
-            var decrypted = record_open_k(
+            # decrypt from _rx straight onto the end of _buf; on any error
+            # _buf is left as it was
+            var base = len(self._buf)
+            var inner_type = record_open_into(
                 self._open_ak,
                 self._keys.cipher,
                 self._keys.server_write_key,
                 self._keys.server_write_iv,
                 self._keys.server_seqno,
-                full_record,
+                Int(self._rx.unsafe_ptr()) + p,
+                total,
+                self._buf,
             )
             if self._keys.server_seqno >= (UInt64(1) << 62):
+                self._buf.resize(unsafe_uninit_length=base)
                 raise Error("tls: server sequence number overflow")
             self._keys.server_seqno += 1
 
-            var inner_type = decrypted[0]
-            var plaintext  = decrypted[1].copy()
+            if inner_type == CTYPE_APPLICATION_DATA:
+                if len(self._buf) == base:
+                    continue  # empty records are legal; never report them as EOF
+                return  # one record successfully read
+
+            # Rare inner types: move their bytes out of _buf
+            var plaintext = List[UInt8](capacity=len(self._buf) - base)
+            _append_ptr(plaintext, Int(self._buf.unsafe_ptr()) + base, len(self._buf) - base)
+            self._buf.resize(unsafe_uninit_length=base)
 
             if inner_type == CTYPE_ALERT:
                 self._handle_alert(plaintext)
@@ -708,16 +720,10 @@ struct TlsSocket(Movable):
                 self._process_post_handshake()
                 continue
 
-            if inner_type != CTYPE_APPLICATION_DATA:
-                raise Error(
-                    "tls: unexpected inner content type " + String(Int(inner_type))
-                    + " (unexpected_message)"
-                )
-
-            if len(plaintext) == 0:
-                continue  # empty records are legal; never report them as EOF
-            _sock_append_bytes(self._buf, plaintext)
-            return  # one record successfully read
+            raise Error(
+                "tls: unexpected inner content type " + String(Int(inner_type))
+                + " (unexpected_message)"
+            )
 
     def _process_post_handshake(mut self) raises:
         """Handle every complete message in _hs_rx; keep a partial one."""
@@ -888,27 +894,35 @@ struct TlsSocket(Movable):
         skip close_notify). A record cut mid-way always raises, as does
         exceeding max_size.
         """
-        var result = List[UInt8]()
-        # Drain any already-buffered bytes first
-        self._buf_take(result, self._buf_avail())
+        # Records decrypt straight onto the end of _buf, so _buf itself
+        # collects the result: first move any unread bytes to its front
+        if self._buf_pos > 0:
+            var rest = List[UInt8](capacity=self._buf_avail())
+            self._buf_take(rest, self._buf_avail())
+            self._buf = rest^
+            self._buf_pos = 0
         while True:
             try:
-                self._refill()
+                self._fill_checked()
             except e:
                 if self._close_notify:
                     break
                 var err_str = String(e)
+                if allow_truncation and _sock_contains(err_str, "connection closed without close_notify"):
+                    break
+                self._buf_reset()  # an error drops what was collected, as before
                 if _sock_contains(err_str, "connection closed without close_notify"):
-                    if allow_truncation:
-                        break
                     raise Error(
                         "tls: truncated: connection closed without close_notify"
                         + " (pass allow_truncation=True to accept)"
                     )
                 raise Error(err_str)
-            self._buf_take(result, self._buf_avail())
-            if len(result) > max_size:
+            if len(self._buf) > max_size:
+                self._buf_reset()
                 raise Error("tls: recv_all exceeded max_size")
+        var result = self._buf^
+        self._buf = List[UInt8]()
+        self._buf_pos = 0
         return result^
 
     def close_notify_received(self) -> Bool:

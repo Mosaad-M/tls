@@ -5,10 +5,11 @@
 # ============================================================================
 
 from crypto.record import (
-    record_seal, record_open,
+    record_seal, record_open, record_open_into, AeadKey,
     CIPHER_AES_128_GCM, CIPHER_AES_256_GCM, CIPHER_CHACHA20_POLY1305,
-    CTYPE_HANDSHAKE, CTYPE_APPLICATION_DATA,
+    CTYPE_HANDSHAKE, CTYPE_APPLICATION_DATA, CTYPE_ALERT,
 )
+from crypto.random import csprng_bytes
 
 
 def _hex_nibble(b: UInt8) raises -> UInt8:
@@ -210,6 +211,95 @@ def test_reject_wrong_seqno() raises:
         raise Error("reject_wrong_seqno: wrong seqno should fail")
 
 
+# ============================================================================
+# record_open_into: decrypts onto the end of an existing list
+# ============================================================================
+
+def _prefix() -> List[UInt8]:
+    var out = List[UInt8]()
+    for i in range(7):
+        out.append(UInt8(0xC0 + i))
+    return out^
+
+
+def _padded_record(cipher: UInt8, key: List[UInt8], iv: List[UInt8], seq: UInt64,
+                   ctype: UInt8, pt: List[UInt8], pad: Int) raises -> List[UInt8]:
+    """A record whose inner plaintext is pt || ctype || pad zero bytes
+    (record_seal appends its content_type last, so pass 0 when padding)."""
+    if pad == 0:
+        return record_seal(cipher, key, iv, seq, ctype, pt)
+    var body = pt.copy()
+    body.append(ctype)
+    for _ in range(pad - 1):
+        body.append(0)
+    return record_seal(cipher, key, iv, seq, 0, body)
+
+
+def test_open_into_appends() raises:
+    """Every cipher, inner type, length and padding: the plaintext lands after
+    the existing bytes, which stay untouched, and matches record_open."""
+    var ciphers: List[UInt8] = [CIPHER_AES_128_GCM, CIPHER_AES_256_GCM, CIPHER_CHACHA20_POLY1305]
+    var types: List[UInt8] = [CTYPE_APPLICATION_DATA, CTYPE_HANDSHAKE, CTYPE_ALERT]
+    var lens: List[Int] = [0, 1, 127, 128, 129, 1000, 16383]
+    var pads: List[Int] = [0, 1, 16, 255]
+    var idx = 0
+    for c in ciphers:
+        var key = csprng_bytes(16 if c == CIPHER_AES_128_GCM else 32)
+        var iv = csprng_bytes(12)
+        var ak = AeadKey()
+        for t in types:
+            for n in lens:
+                for pad in pads:
+                    idx += 1
+                    if n + 1 + pad > 16385:
+                        continue
+                    var pt = csprng_bytes(n) if n > 0 else List[UInt8]()
+                    var seq = UInt64(idx)
+                    var rec = _padded_record(c, key, iv, seq, t, pt, pad)
+                    var out = _prefix()
+                    var got_t = record_open_into(ak, c, key, iv, seq, Int(rec.unsafe_ptr()), len(rec), out)
+                    var oracle = record_open(c, key, iv, seq, rec)
+                    var want = _prefix()
+                    for b in pt:
+                        want.append(b)
+                    if got_t != t or oracle[0] != t or out != want or oracle[1] != pt:
+                        raise Error("cipher " + String(Int(c)) + " type " + String(Int(t)) + " len " + String(n) + " pad " + String(pad))
+
+
+def _open_into_fails(rec: List[UInt8], cipher: UInt8, key: List[UInt8], iv: List[UInt8], seq: UInt64, want_msg: String) raises:
+    var ak = AeadKey()
+    var out = _prefix()
+    try:
+        _ = record_open_into(ak, cipher, key, iv, seq, Int(rec.unsafe_ptr()), len(rec), out)
+    except e:
+        if String(e).find(want_msg) < 0:
+            raise Error("wrong error: " + String(e))
+        if out != _prefix():
+            raise Error("out changed by a failed open (" + want_msg + ")")
+        return
+    raise Error("accepted a bad record (" + want_msg + ")")
+
+
+def test_open_into_failures_leave_out_unchanged() raises:
+    var ciphers: List[UInt8] = [CIPHER_AES_256_GCM, CIPHER_CHACHA20_POLY1305]
+    for c in ciphers:
+        var key = csprng_bytes(32)
+        var iv = csprng_bytes(12)
+        var rec = record_seal(c, key, iv, 5, CTYPE_APPLICATION_DATA, csprng_bytes(300))
+        var bad = rec.copy()
+        bad[len(bad) - 1] ^= 1
+        _open_into_fails(bad, c, key, iv, 5, "authentication failed")
+        _open_into_fails(rec, c, key, iv, 6, "authentication failed")
+        # inner plaintext of zeros only: no content type
+        var zeros = record_seal(c, key, iv, 5, 0, List[UInt8](length=20, fill=0))
+        _open_into_fails(zeros, c, key, iv, 5, "no content type")
+        var short = List[UInt8](length=21, fill=0)
+        short[0] = 0x17
+        short[1] = 3
+        short[2] = 3
+        _open_into_fails(short, c, key, iv, 5, "too short")
+
+
 def main() raises:
     var passed = 0
     var failed = 0
@@ -222,6 +312,8 @@ def main() raises:
     run_test[test_chacha20_round_trip]("ChaCha20-Poly1305 round-trip", passed, failed)
     run_test[test_reject_tampered]("reject tampered record", passed, failed)
     run_test[test_reject_wrong_seqno]("reject wrong seqno", passed, failed)
+    run_test[test_open_into_appends]("record_open_into: every cipher, inner type, length, padding; appends", passed, failed)
+    run_test[test_open_into_failures_leave_out_unchanged]("record_open_into: failures leave out unchanged", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:
