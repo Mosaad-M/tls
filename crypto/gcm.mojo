@@ -24,6 +24,7 @@ from crypto.aes import AES
 # must not wrap back to J0). Unreachable through TLS records; a guard.
 comptime _GCM_MAX_BYTES = (4294967296 - 2) * 16
 from crypto.hmac import hmac_equal
+from crypto.aes_hw import GCM_HW, HwGcmKey
 
 
 # ============================================================================
@@ -188,9 +189,51 @@ def _aes_ctr(aes: AES, j0: List[UInt8], data: List[UInt8]) raises -> Tuple[List[
 # ============================================================================
 
 struct GcmKey(Copyable, Movable):
-    """An AES-GCM key prepared once: the AES key schedule and the GHASH key
-    H = E(K, 0^128). Reuse it for every record under the same key (TLS
-    record keys live for a whole connection or until KeyUpdate)."""
+    """An AES-GCM key prepared once. Reuse it for every record under the
+    same key (TLS record keys live for a whole connection or until
+    KeyUpdate). Uses the CPU's AES and carry-less-multiply instructions when
+    the build target has them (crypto/aes_hw.mojo, GCM_HW), otherwise the
+    constant-time software implementation (SoftGcmKey)."""
+    var _soft: List[SoftGcmKey]
+    var _hw: List[HwGcmKey]
+
+    def __init__(out self, key: List[UInt8]) raises:
+        self._soft = List[SoftGcmKey]()
+        self._hw = List[HwGcmKey]()
+        comptime if GCM_HW:
+            self._hw.append(HwGcmKey(key))
+        else:
+            self._soft.append(SoftGcmKey(key))
+
+    def seal(self, iv: List[UInt8], plaintext: List[UInt8], aad: List[UInt8]) raises -> Tuple[List[UInt8], List[UInt8]]:
+        """Encrypt; returns (ciphertext, 16-byte tag)."""
+        if len(iv) != 12:
+            raise Error("GCM IV must be 12 bytes")
+        if len(plaintext) > _GCM_MAX_BYTES:
+            raise Error("GCM plaintext too long for one nonce")
+        comptime if GCM_HW:
+            return self._hw[0].seal(iv, plaintext, aad)
+        else:
+            return self._soft[0].seal(iv, plaintext, aad)
+
+    def open(self, iv: List[UInt8], ciphertext: List[UInt8], tag: List[UInt8], aad: List[UInt8]) raises -> List[UInt8]:
+        """Verify the tag (constant time), then decrypt; raises
+        "authentication failed" without releasing any plaintext."""
+        if len(iv) != 12:
+            raise Error("GCM IV must be 12 bytes")
+        if len(ciphertext) > _GCM_MAX_BYTES:
+            raise Error("GCM ciphertext too long for one nonce")
+        if len(tag) != 16:
+            raise Error("GCM tag must be 16 bytes")
+        comptime if GCM_HW:
+            return self._hw[0].open(iv, ciphertext, tag, aad)
+        else:
+            return self._soft[0].open(iv, ciphertext, tag, aad)
+
+
+struct SoftGcmKey(Copyable, Movable):
+    """Constant-time software AES-GCM: the bitsliced AES key schedule and
+    the GHASH key H = E(K, 0^128)."""
     var aes: AES
     var hkey: _GHashKey
 

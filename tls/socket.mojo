@@ -69,10 +69,20 @@ comptime _ALERT_ILLEGAL_PARAMETER  : UInt8 = 47
 
 # ── Internal helpers ────────────────────────────────────────────────────────────
 
+def _append_ptr(mut out: List[UInt8], src: Int, n: Int):
+    """Append n bytes from address src with memcpy. Capacity grows by
+    doubling: an exact reserve per append made recv_all quadratic."""
+    if n <= 0:
+        return
+    var have = len(out)
+    if have + n > out.capacity():
+        out.reserve(max(have + n, out.capacity() * 2))
+    out.resize(unsafe_uninit_length=have + n)
+    _ = external_call["memcpy", Int](Int(out.unsafe_ptr()) + have, src, n)
+
+
 def _sock_append_bytes(mut out: List[UInt8], src: List[UInt8]):
-    out.reserve(len(out) + len(src))
-    for i in range(len(src)):
-        out.append(src[i])
+    _append_ptr(out, Int(src.unsafe_ptr()), len(src))
 
 
 def _sock_contains(haystack: String, needle: String) -> Bool:
@@ -159,9 +169,11 @@ struct TlsSocket(Movable):
     var _keys:   TlsKeys    # TLS 1.3 keying material (used when _is12=False)
     var _keys12: TlsKeys12  # TLS 1.2 keying material (used when _is12=True)
     var _buf:    List[UInt8] # buffered decrypted application bytes
+    var _buf_pos: Int        # bytes of _buf already returned
     var _is12:   Bool        # True if TLS 1.2 was negotiated
     var _close_notify: Bool  # True once an authenticated close_notify arrived
     var _rx:     List[UInt8] # raw bytes received but not yet a whole record
+    var _rx_pos: Int         # bytes of _rx already handed out as records
     var _broken: Bool        # a record write failed part-way; no more sends
     var _failed: String      # first fatal receive error; later calls re-raise it
     var _hs_rx:  List[UInt8] # post-handshake handshake bytes awaiting reassembly
@@ -174,9 +186,11 @@ struct TlsSocket(Movable):
         self._keys   = TlsKeys()
         self._keys12 = TlsKeys12()
         self._buf    = List[UInt8]()
+        self._buf_pos = 0
         self._is12   = False
         self._close_notify = False
         self._rx     = List[UInt8]()
+        self._rx_pos = 0
         self._broken = False
         self._failed = String("")
         self._hs_rx  = List[UInt8]()
@@ -192,9 +206,11 @@ struct TlsSocket(Movable):
         self._keys   = take._keys^
         self._keys12 = take._keys12^
         self._buf    = take._buf^
+        self._buf_pos = take._buf_pos
         self._is12   = take._is12
         self._close_notify = take._close_notify
         self._rx     = take._rx^
+        self._rx_pos = take._rx_pos
         self._broken = take._broken
         self._failed = take._failed^
         self._hs_rx  = take._hs_rx^
@@ -447,23 +463,29 @@ struct TlsSocket(Movable):
         close_notify"; EOF inside one raises "tls: truncated record".
         """
         while True:
-            if len(self._rx) >= 5:
-                var rlen = (Int(self._rx[3]) << 8) | Int(self._rx[4])
+            var p = self._rx_pos
+            var avail = len(self._rx) - p
+            if avail >= 5:
+                var rlen = (Int(self._rx[p + 3]) << 8) | Int(self._rx[p + 4])
                 if rlen > 16640:  # 2^14 + 256 (RFC 8446 §5.2)
                     raise Error("tls: record too large: " + String(rlen))
                 var total = 5 + rlen
-                if len(self._rx) >= total:
+                if avail >= total:
+                    var base = Int(self._rx.unsafe_ptr()) + p
                     var header = List[UInt8](capacity=5)
-                    for i in range(5):
-                        header.append(self._rx[i])
+                    _append_ptr(header, base, 5)
                     var body = List[UInt8](capacity=rlen)
-                    for i in range(5, total):
-                        body.append(self._rx[i])
-                    var rest = List[UInt8](capacity=len(self._rx) - total)
-                    for i in range(total, len(self._rx)):
-                        rest.append(self._rx[i])
-                    self._rx = rest^
+                    _append_ptr(body, base + 5, rlen)
+                    self._rx_pos += total
+                    if self._rx_pos == len(self._rx):
+                        self._rx.resize(unsafe_uninit_length=0)
+                        self._rx_pos = 0
                     return (header^, body^)
+            if p > 0:  # keep only the unconsumed tail before reading more
+                var rest = List[UInt8](capacity=max(avail, _RX_CHUNK))
+                _append_ptr(rest, Int(self._rx.unsafe_ptr()) + p, avail)
+                self._rx = rest^
+                self._rx_pos = 0
             var chunk = tls_read_some(self._fd, _RX_CHUNK)
             if len(chunk) == 0:
                 if len(self._rx) == 0:
@@ -800,51 +822,59 @@ struct TlsSocket(Movable):
                 self._send_alert(50)
             raise Error(msg)
 
+    def _buf_avail(self) -> Int:
+        return len(self._buf) - self._buf_pos
+
+    def _buf_reset(mut self):
+        self._buf.resize(unsafe_uninit_length=0)
+        self._buf_pos = 0
+
+    def _buf_take(mut self, mut out: List[UInt8], n: Int):
+        """Move n buffered bytes to out (memcpy; the rest is not rebuilt)."""
+        _append_ptr(out, Int(self._buf.unsafe_ptr()) + self._buf_pos, n)
+        self._buf_pos += n
+        if self._buf_pos == len(self._buf):
+            self._buf_reset()
+
+    def _refill(mut self) raises:
+        """Read the next record into the (fully consumed) buffer."""
+        self._buf_reset()
+        self._fill_checked()
+
     def recv(mut self, max_bytes: Int) raises -> List[UInt8]:
         """Read up to max_bytes of decrypted application data.
 
         Buffers data across TLS records so multiple small reads work correctly.
         If buffer is empty, reads the next TLS record to refill it.
         """
-        if len(self._buf) == 0:
-            self._fill_checked()
-        var give = len(self._buf)
-        if give > max_bytes:
-            give = max_bytes
+        if self._buf_avail() == 0:
+            self._refill()
+        var give = min(self._buf_avail(), max(max_bytes, 0))
         var out = List[UInt8](capacity=give)
-        for i in range(give):
-            out.append(self._buf[i])
-        # Consume give bytes from front of buffer
-        var remaining = len(self._buf) - give
-        if remaining == 0:
-            self._buf = List[UInt8]()
-        else:
-            var new_buf = List[UInt8](capacity=remaining)
-            for i in range(give, len(self._buf)):
-                new_buf.append(self._buf[i])
-            self._buf = new_buf^
+        self._buf_take(out, give)
         return out^
 
     def recv_exact(mut self, n: Int) raises -> List[UInt8]:
-        """Read exactly n decrypted bytes, looping recv() until done.
+        """Read exactly n decrypted bytes, looping until done. Memory grows
+        with the data that arrives, not with n (which may come from a peer).
 
         Raises:
             Error if connection closes before n bytes are received.
         """
-        var result = List[UInt8](capacity=n)
-        while len(result) < n:
-            var chunk = self.recv(n - len(result))
-            if len(chunk) == 0:
-                raise Error(
-                    "tls: connection closed after "
-                    + String(len(result))
-                    + " of "
-                    + String(n)
-                    + " bytes"
-                )
-            for i in range(len(chunk)):
-                result.append(chunk[i])
-        return result^
+        var out = List[UInt8](capacity=min(max(n, 0), 16384))
+        while len(out) < n:
+            if self._buf_avail() == 0:
+                self._refill()
+                if self._buf_avail() == 0:
+                    raise Error(
+                        "tls: connection closed after "
+                        + String(len(out))
+                        + " of "
+                        + String(n)
+                        + " bytes"
+                    )
+            self._buf_take(out, min(self._buf_avail(), n - len(out)))
+        return out^
 
     def recv_all(
         mut self, max_size: Int = 16777216, allow_truncation: Bool = False
@@ -860,11 +890,10 @@ struct TlsSocket(Movable):
         """
         var result = List[UInt8]()
         # Drain any already-buffered bytes first
-        _sock_append_bytes(result, self._buf)
-        self._buf = List[UInt8]()
+        self._buf_take(result, self._buf_avail())
         while True:
             try:
-                self._fill_checked()
+                self._refill()
             except e:
                 if self._close_notify:
                     break
@@ -877,8 +906,7 @@ struct TlsSocket(Movable):
                         + " (pass allow_truncation=True to accept)"
                     )
                 raise Error(err_str)
-            _sock_append_bytes(result, self._buf)
-            self._buf = List[UInt8]()
+            self._buf_take(result, self._buf_avail())
             if len(result) > max_size:
                 raise Error("tls: recv_all exceeded max_size")
         return result^

@@ -177,24 +177,21 @@ def tls_read_some(fd: Int32, max_bytes: Int) raises -> List[UInt8]:
     Retries EINTR. A receive timeout (SO_RCVTIMEO) raises "tls: read timed
     out"; any other failure raises "tls: tcp read failed (errno=N)".
     """
-    var buf = alloc[UInt8](max_bytes)
+    # Receive straight into the result's storage (no copy)
+    var out = List[UInt8](unsafe_uninit_length=max(max_bytes, 0))
     var got: Int
     while True:
         # Same argument types as the tcp package's recv()
-        got = external_call["recv", Int](fd, Int(buf), max_bytes, Int32(0))
+        got = external_call["recv", Int](fd, Int(out.unsafe_ptr()), max_bytes, Int32(0))
         if got >= 0:
             break
         var err = _errno()
         if err == _EINTR:
             continue
-        buf.unsafe_free()
         if err == _EAGAIN:
             raise Error("tls: read timed out")
         raise Error("tls: tcp read failed (errno=" + String(err) + ")")
-    var out = List[UInt8](capacity=got)
-    for i in range(got):
-        out.append(buf[unsafe_offset=i])
-    buf.unsafe_free()
+    out.resize(unsafe_uninit_length=got)
     return out^
 
 

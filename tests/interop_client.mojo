@@ -11,6 +11,7 @@
 from std.ffi import external_call
 from std.memory import alloc
 from std.sys import argv
+from std.time import perf_counter_ns
 from crypto.cert import X509Cert, cert_parse
 from tls.socket import TlsSocket
 
@@ -46,11 +47,70 @@ def _unhex(h: String) -> List[UInt8]:
     return out^
 
 
+def _bulk(port: Int, anchors: List[X509Cert], path: String, size: Int, mode: String, max_secs: Int) raises:
+    """Download path (size bytes of the pattern i % 251) from s_server -WWW
+    with one receive style; check every byte and the time bound."""
+    var tls = TlsSocket(_tcp_connect(port))
+    tls.connect("localhost", anchors)
+    tls.set_timeout(30)
+    var req = "GET " + path + " HTTP/1.0\r\n\r\n"
+    var b = List[UInt8]()
+    for c in req.as_bytes():
+        b.append(c)
+    _ = tls.send(b)
+    # headers: read until \r\n\r\n one byte at a time (exercises recv(1))
+    var tail = 0
+    while tail < 4:
+        var c = tls.recv(1)
+        if len(c) == 0:
+            raise Error("bulk: no response headers")
+        var want = UInt8(13) if tail % 2 == 0 else UInt8(10)
+        tail = tail + 1 if c[0] == want else (1 if c[0] == 13 else 0)
+    var t = perf_counter_ns()
+    var got = 0
+    var bad = -1
+    if mode == "recv_all":
+        var body = tls.recv_all(max_size=size + 1024, allow_truncation=True)
+        got = len(body)
+        for i in range(len(body)):
+            if body[i] != UInt8(i % 251):
+                bad = i
+                break
+    elif mode == "recv":
+        while got < size:
+            var chunk = tls.recv(65536)
+            if len(chunk) == 0:
+                break
+            for i in range(len(chunk)):
+                if bad < 0 and chunk[i] != UInt8((got + i) % 251):
+                    bad = got + i
+            got += len(chunk)
+    else:  # small: pg-style 5 + 59 byte reads
+        while got + 64 <= size:
+            var h = tls.recv_exact(5)
+            var m = tls.recv_exact(59)
+            if bad < 0 and (h[0] != UInt8(got % 251) or m[58] != UInt8((got + 63) % 251)):
+                bad = got
+            got += 64
+    var secs = Float64(perf_counter_ns() - t) / 1e9
+    print("bulk", mode, ":", got, "bytes in", secs, "s =", Int(Float64(got) / secs / 1e6), "MB/s")
+    if got != size:
+        raise Error("bulk " + mode + ": got " + String(got) + " of " + String(size) + " bytes")
+    if bad >= 0:
+        raise Error("bulk " + mode + ": wrong byte at " + String(bad))
+    if secs > Float64(max_secs):
+        raise Error("bulk " + mode + ": took " + String(secs) + " s (limit " + String(max_secs) + ")")
+
+
 def main() raises:
     var args = argv()
     var port = Int(String(args[1]))
     var anchors = List[X509Cert]()
     anchors.append(cert_parse(_unhex(String(args[2]))))
+    if len(args) >= 8 and String(args[3]) == "--bulk":
+        # interop_client PORT CA --bulk PATH SIZE MODE MAX_SECS
+        _bulk(port, anchors, String(args[4]), Int(String(args[5])), String(args[6]), Int(String(args[7])))
+        return
 
     var tls = TlsSocket(_tcp_connect(port))
     if len(args) >= 5:

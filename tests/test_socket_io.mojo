@@ -368,6 +368,89 @@ def test_client_key_update_before_limit() raises:
     p.close()
 
 
+# ── 1.8.0: receive path (offsets and bulk copies instead of byte loops) ─────
+
+def _pattern(n: Int, start: Int) -> List[UInt8]:
+    var out = List[UInt8](capacity=n)
+    for i in range(n):
+        out.append(UInt8((start + i) % 251))
+    return out^
+
+
+def _send_stream(fd: Int32, data: List[UInt8], sizes: List[Int]) raises -> UInt64:
+    """Seal data as TLS 1.3 records of the given sizes (cycled); returns the
+    next sequence number."""
+    var k = Keys(_server_secret())
+    var seq = UInt64(0)
+    var off = 0
+    var i = 0
+    while off < len(data):
+        var n = min(sizes[i % len(sizes)], len(data) - off)
+        var chunk = List[UInt8](capacity=n)
+        for j in range(n):
+            chunk.append(data[off + j])
+        _write(fd, record_seal(CIPHER_AES_128_GCM, k.key, k.iv, seq, CTYPE_APPLICATION_DATA, chunk))
+        seq += 1
+        off += n
+        i += 1
+    return seq
+
+
+def test_small_reads_across_records() raises:
+    # pg-style messages (5-byte header + 59-byte body) spread over records of
+    # odd sizes: every read must see the right bytes in the right order
+    var msgs = 1000   # 64 KB: fits Linux's default socket buffer limits
+    var p = Pair()
+    p.grow_buffers(1 << 20)
+    var s = _sock(p.mine)
+    var data = _pattern(msgs * 64, 0)
+    var sizes: List[Int] = [1000, 16384, 7, 333, 4096, 1]
+    _ = _send_stream(p.peer, data, sizes)
+    for m in range(msgs):
+        var h = s.recv_exact(5)
+        var b = s.recv_exact(59)
+        for j in range(5):
+            if h[j] != UInt8((m * 64 + j) % 251):
+                raise Error("header byte " + String(j) + " of message " + String(m))
+        for j in range(59):
+            if b[j] != UInt8((m * 64 + 5 + j) % 251):
+                raise Error("body byte " + String(j) + " of message " + String(m))
+    p.close()
+
+
+def test_recv_one_byte_loop() raises:
+    var p = Pair()
+    p.grow_buffers(1 << 20)
+    var s = _sock(p.mine)
+    var data = _pattern(3000, 7)
+    var sizes: List[Int] = [1000]
+    _ = _send_stream(p.peer, data, sizes)
+    for i in range(3000):
+        var b = s.recv(1)
+        if len(b) != 1 or b[0] != data[i]:
+            raise Error("recv(1) wrong at byte " + String(i))
+    p.close()
+
+
+def test_recv_exact_huge_n_bounded() raises:
+    # 1.7.0 reserved all n bytes before reading (n can come from a peer)
+    var p = Pair()
+    var s = _sock(p.mine)
+    var sizes: List[Int] = [10]
+    var seq = _send_stream(p.peer, _pattern(10, 0), sizes)
+    var k = Keys(_server_secret())
+    var close_notify: List[UInt8] = [1, 0]
+    _write(p.peer, record_seal(CIPHER_AES_128_GCM, k.key, k.iv, seq, CTYPE_ALERT, close_notify))
+    var err = String("")
+    try:
+        _ = s.recv_exact(1 << 40)
+    except e:
+        err = String(e)
+    if err == "":
+        raise Error("recv_exact(1 TiB) returned")
+    p.close()
+
+
 def main() raises:
     var passed = 0
     var failed = 0
@@ -389,6 +472,9 @@ def main() raises:
     run_test[test_ticket_count_capped]("session tickets capped at 8", passed, failed)
     run_test[test_unknown_post_handshake_message]("unknown post-handshake message rejected", passed, failed)
     run_test[test_close_twice]("close() twice is harmless", passed, failed)
+    run_test[test_small_reads_across_records]("small reads across odd-sized records", passed, failed)
+    run_test[test_recv_one_byte_loop]("recv(1) loop across records", passed, failed)
+    run_test[test_recv_exact_huge_n_bounded]("recv_exact(1 TiB) does not reserve", passed, failed)
     run_test[test_client_key_update_before_limit]("client KeyUpdate before the record limit", passed, failed)
 
     print()

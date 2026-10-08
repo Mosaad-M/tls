@@ -26,6 +26,20 @@ jobs:
         # from the composite task — they require local cert files and a
         # running Python TLS server. Run them manually with gen_test_certs.sh.
 
+  test-soft-aes:
+    # The software AES-GCM path (-D TLS_SOFT_AES=true): what builds for
+    # targets without AES instructions use. The other jobs run on CPUs
+    # with AES-NI / ARMv8 crypto, so they take the hardware path.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pixi
+        uses: prefix-dev/setup-pixi@v0.8.1
+
+      - name: Software AES-GCM tests
+        run: pixi run test-soft-aes
+
   test-macos:
     runs-on: macos-14
     steps:

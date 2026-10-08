@@ -321,6 +321,37 @@ def _load32le(b: List[UInt8], off: Int) -> UInt32:
     )
 
 
+def expand_key_words(key: List[UInt8]) raises -> List[UInt32]:
+    """FIPS 197 key expansion on little-endian words (BearSSL convention):
+    4 * (Nr + 1) words; round key r is words 4r..4r+3, whose little-endian
+    bytes are the round key's bytes in order. SubWord goes through the
+    bitsliced S-box, so the secret key never indexes a table."""
+    if len(key) != 16 and len(key) != 32:
+        raise Error("AES key must be 16 or 32 bytes")
+    var nk = len(key) // 4
+    var nkf = (6 + nk + 1) * 4
+    var w = List[UInt32](capacity=nkf)
+    for i in range(nk):
+        w.append(_load32le(key, i * 4))
+    var rcon: List[UInt32] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36]
+    var tmp = w[nk - 1]
+    var j = 0
+    var k = 0
+    for i in range(nk, nkf):
+        if j == 0:
+            tmp = (tmp << 24) | (tmp >> 8)
+            tmp = _sub_word(tmp) ^ rcon[k]
+        elif nk > 6 and j == 4:
+            tmp = _sub_word(tmp)
+        tmp ^= w[i - nk]
+        w.append(tmp)
+        j += 1
+        if j == nk:
+            j = 0
+            k += 1
+    return w^
+
+
 # ============================================================================
 # AES struct — supports 128-bit (Nr=10) and 256-bit (Nr=14)
 # ============================================================================
@@ -337,32 +368,9 @@ struct AES(Copyable, Movable):
     var _sk: List[UInt64]    # bitsliced round keys, 8 words per round
 
     def __init__(out self, key: List[UInt8]) raises:
-        if len(key) != 16 and len(key) != 32:
-            raise Error("AES key must be 16 or 32 bytes")
-        var nk = len(key) // 4
-        self._nr = 6 + nk
-        var nkf = (self._nr + 1) * 4
-
-        # FIPS 197 key expansion on little-endian words (BearSSL convention)
-        var w = List[UInt32](capacity=nkf)
-        for i in range(nk):
-            w.append(_load32le(key, i * 4))
-        var rcon: List[UInt32] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36]
-        var tmp = w[nk - 1]
-        var j = 0
-        var k = 0
-        for i in range(nk, nkf):
-            if j == 0:
-                tmp = (tmp << 24) | (tmp >> 8)
-                tmp = _sub_word(tmp) ^ rcon[k]
-            elif nk > 6 and j == 4:
-                tmp = _sub_word(tmp)
-            tmp ^= w[i - nk]
-            w.append(tmp)
-            j += 1
-            if j == nk:
-                j = 0
-                k += 1
+        var w = expand_key_words(key)
+        self._nr = len(w) // 4 - 1
+        var nkf = len(w)
 
         # Bitslice each round key, replicated for the four parallel blocks
         self._sk = List[UInt64](capacity=nkf * 2)
