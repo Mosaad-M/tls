@@ -146,9 +146,9 @@ bulk() {  # bulk <mode> <max seconds>
     fi
     kill "$server" 2>/dev/null; wait "$server" 2>/dev/null
 }
-bulk recv_all 2
-bulk recv 2
-bulk small 4
+bulk recv_all 1
+bulk recv 1
+bulk small 2
 
 # hostile <name> <mode> <expect> [upstream s_server args...]
 # expect: "ok:<page check>" (handshake must succeed) or "fail:<error text>"

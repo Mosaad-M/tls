@@ -25,6 +25,22 @@ from crypto.aes import AES
 comptime _GCM_MAX_BYTES = (4294967296 - 2) * 16
 from crypto.hmac import hmac_equal
 from crypto.aes_hw import GCM_HW, HwGcmKey
+from std.ffi import external_call
+
+
+def _copy_to(dst: Int, src: List[UInt8], n: Int):
+    """Copy the first n bytes of src to address dst. src is an argument, so
+    it stays alive for the whole copy (a bare Int(x.unsafe_ptr()) does not
+    keep x alive)."""
+    if n > 0:
+        _ = external_call["memcpy", Int](dst, Int(src.unsafe_ptr()), n)
+
+
+def _list_at(addr: Int, n: Int) -> List[UInt8]:
+    var out = List[UInt8](unsafe_uninit_length=n)
+    if n > 0:
+        _ = external_call["memcpy", Int](Int(out.unsafe_ptr()), addr, n)
+    return out^
 
 
 # ============================================================================
@@ -229,6 +245,47 @@ struct GcmKey(Copyable, Movable):
             return self._hw[0].open(iv, ciphertext, tag, aad)
         else:
             return self._soft[0].open(iv, ciphertext, tag, aad)
+
+    # Address-based forms for the record layer: no List copies on the
+    # hardware path. The software path copies through its List API.
+
+    def seal_into(self, iv: List[UInt8], aad_addr: Int, aad_len: Int, src: Int, dst: Int, n: Int) raises:
+        """Encrypt n bytes at src into dst (dst may equal src) and write the
+        16-byte tag at dst + n."""
+        if len(iv) != 12:
+            raise Error("GCM IV must be 12 bytes")
+        if n > _GCM_MAX_BYTES:
+            raise Error("GCM plaintext too long for one nonce")
+        comptime if GCM_HW:
+            var t = self._hw[0].seal_into(iv, aad_addr, aad_len, src, dst, n)
+            Pointer[UInt8, MutAnyOrigin](unsafe_from_address=dst + n).unsafe_store(0, t)
+        else:
+            var r = self._soft[0].seal(iv, _list_at(src, n), _list_at(aad_addr, aad_len))
+            _copy_to(dst, r[0], n)
+            _copy_to(dst + n, r[1], 16)
+
+    def open_into(
+        self, iv: List[UInt8], aad_addr: Int, aad_len: Int, src: Int, dst: Int, n: Int, tag_addr: Int
+    ) raises -> Bool:
+        """Decrypt n bytes at src into dst (dst may equal src) and check the
+        16-byte tag at tag_addr. False on a mismatch, with nothing but
+        zeros written to dst."""
+        if len(iv) != 12:
+            raise Error("GCM IV must be 12 bytes")
+        if n > _GCM_MAX_BYTES:
+            raise Error("GCM ciphertext too long for one nonce")
+        comptime if GCM_HW:
+            return self._hw[0].open_into(iv, aad_addr, aad_len, src, dst, n, tag_addr)
+        else:
+            var pt: List[UInt8]
+            try:
+                pt = self._soft[0].open(iv, _list_at(src, n), _list_at(tag_addr, 16), _list_at(aad_addr, aad_len))
+            except:
+                for i in range(n):
+                    Pointer[UInt8, MutAnyOrigin](unsafe_from_address=dst)[unsafe_offset=i] = 0
+                return False
+            _copy_to(dst, pt, n)
+            return True
 
 
 struct SoftGcmKey(Copyable, Movable):

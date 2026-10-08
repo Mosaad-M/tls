@@ -2,8 +2,9 @@
 # bench_tls_io.mojo — TLS receive throughput against openssl s_server -WWW
 # ============================================================================
 # Run through bench/bench_tls_io.sh (pixi run bench-io), which serves a
-# 256 MiB file and runs this once per AES-GCM path:
-#   bench_tls_io PORT CA_DER_HEX
+# 256 MiB file, runs a second s_server that discards what it receives, and
+# runs this once per AES-GCM path:
+#   bench_tls_io PORT CA_DER_HEX SINK_PORT
 # ============================================================================
 
 from std.ffi import external_call
@@ -44,6 +45,12 @@ def _unhex(h: String) -> List[UInt8]:
         var lo: UInt8 = (c - 48) if c <= 57 else (c - 87)
         out.append((hi << 4) | lo)
     return out^
+
+
+def _connect(port: Int, anchors: List[X509Cert]) raises -> TlsSocket:
+    var tls = TlsSocket(_tcp_connect(port))
+    tls.connect("localhost", anchors)
+    return tls^
 
 
 def _open(port: Int, anchors: List[X509Cert]) raises -> TlsSocket:
@@ -95,3 +102,12 @@ def main() raises:
     var ns = perf_counter_ns() - t0
     print("  recv_exact(5) + recv_exact(59): ", Float64(Int(Float64(ns) / Float64(msgs) / 10.0)) / 100.0, "us/message")
     s3.close()
+
+    var s4 = _connect(Int(String(args[3])), anchors)
+    var chunk = List[UInt8](length=16384, fill=0x61)
+    var sent = 0
+    t0 = perf_counter_ns()
+    while sent < 128 * 1024 * 1024:
+        sent += s4.send(chunk)
+    print("  send(16 KiB) loop, 128 MiB:     ", _rate(sent, t0), "MB/s")
+    s4.close()

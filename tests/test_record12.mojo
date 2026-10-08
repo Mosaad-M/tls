@@ -20,7 +20,7 @@
 # ============================================================================
 
 from crypto.record import (
-    record_seal_12, record_open_12,
+    record_seal_12, record_open_12, record_open_12_into, AeadKey,
     CIPHER_AES_128_GCM, CIPHER_AES_256_GCM,
 )
 
@@ -165,6 +165,34 @@ def test_open_12_wrong_seqno_raises() raises:
         raise Error("expected raise for wrong seqno")
 
 
+def test_open_12_into_appends_and_fails_cleanly() raises:
+    """record_open_12_into appends after existing bytes; a bad tag leaves
+    the list exactly as it was."""
+    var key  = make_bytes(0x01, 32)
+    var iv4  = make_bytes(0x02, 4)
+    var ak = AeadKey()
+    var lens: List[Int] = [0, 1, 128, 129, 16384]
+    for n in lens:
+        var pt = make_bytes(0x5A, n)
+        var sealed = record_seal_12(CIPHER_AES_256_GCM, key, iv4, UInt64(n), 0x17, pt)
+        var out = make_bytes(0xEE, 3)
+        record_open_12_into(ak, CIPHER_AES_256_GCM, key, iv4, UInt64(n), 0x17, Int(sealed.unsafe_ptr()), len(sealed), out)
+        var want = make_bytes(0xEE, 3)
+        for b in pt:
+            want.append(b)
+        if not bytes_equal(out, want):
+            raise Error("len " + String(n) + ": appended plaintext mismatch")
+        var bad = sealed.copy()
+        bad[len(bad) - 1] ^= 1
+        var raised = False
+        try:
+            record_open_12_into(ak, CIPHER_AES_256_GCM, key, iv4, UInt64(n), 0x17, Int(bad.unsafe_ptr()), len(bad), out)
+        except:
+            raised = True
+        if not raised or not bytes_equal(out, want):
+            raise Error("len " + String(n) + ": bad tag accepted or out changed")
+
+
 def main() raises:
     var passed = 0
     var failed = 0
@@ -178,6 +206,7 @@ def main() raises:
     run_test[test_open_12_roundtrip]("record_open_12 roundtrip", passed, failed)
     run_test[test_open_12_tampered_tag_raises]("record_open_12 tampered tag raises", passed, failed)
     run_test[test_open_12_wrong_seqno_raises]("record_open_12 wrong seqno raises", passed, failed)
+    run_test[test_open_12_into_appends_and_fails_cleanly]("record_open_12_into appends; bad tag leaves out unchanged", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

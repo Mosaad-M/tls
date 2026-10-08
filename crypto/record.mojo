@@ -41,6 +41,35 @@ def _slice(src: List[UInt8], start: Int, n: Int) -> List[UInt8]:
     return out^
 
 
+def _at(addr: Int, n: Int) -> List[UInt8]:
+    """Copy n bytes at addr into a new list."""
+    var out = List[UInt8](unsafe_uninit_length=n)
+    if n > 0:
+        _ = external_call["memcpy", Int](Int(out.unsafe_ptr()), addr, n)
+    return out^
+
+
+def _copy_to(dst: Int, src: List[UInt8], n: Int):
+    """Copy the first n bytes of src to address dst. src is an argument, so
+    it stays alive for the whole copy (a bare Int(x.unsafe_ptr()) does not
+    keep x alive)."""
+    if n > 0:
+        _ = external_call["memcpy", Int](dst, Int(src.unsafe_ptr()), n)
+
+
+def _grow(mut out: List[UInt8], n: Int) -> Int:
+    """Extend out by n uninitialized bytes; return their address."""
+    var have = len(out)
+    if have + n > out.capacity():
+        out.reserve(max(have + n, out.capacity() * 2))
+    out.resize(unsafe_uninit_length=have + n)
+    return Int(out.unsafe_ptr()) + have
+
+
+def _is_gcm(cipher: UInt8) -> Bool:
+    return cipher == CIPHER_AES_128_GCM or cipher == CIPHER_AES_256_GCM
+
+
 # Cipher suite identifiers
 comptime CIPHER_AES_128_GCM       : UInt8 = 0
 comptime CIPHER_AES_256_GCM       : UInt8 = 1
@@ -131,6 +160,40 @@ struct AeadKey(Movable):
         self._ensure(cipher, key)
         return self._gcm[0].open(nonce, ct, tag, aad)
 
+    def seal_into(
+        mut self, cipher: UInt8, key: List[UInt8], nonce: List[UInt8],
+        aad_addr: Int, aad_len: Int, src: Int, dst: Int, n: Int,
+    ) raises:
+        """Encrypt n bytes at src into dst (may equal src); the 16-byte tag
+        goes to dst + n. Any cipher."""
+        if _is_gcm(cipher):
+            self._ensure(cipher, key)
+            self._gcm[0].seal_into(nonce, aad_addr, aad_len, src, dst, n)
+        else:
+            var enc = chacha20_poly1305_encrypt(key, nonce, _at(aad_addr, aad_len), _at(src, n))
+            _copy_to(dst, enc[0], n)
+            _copy_to(dst + n, enc[1], 16)
+
+    def open_into(
+        mut self, cipher: UInt8, key: List[UInt8], nonce: List[UInt8],
+        aad_addr: Int, aad_len: Int, src: Int, dst: Int, n: Int, tag_addr: Int,
+    ) raises -> Bool:
+        """Decrypt n bytes at src into dst (may equal src) and check the tag
+        at tag_addr. Any cipher. False on a mismatch; dst then holds no
+        plaintext."""
+        if _is_gcm(cipher):
+            self._ensure(cipher, key)
+            return self._gcm[0].open_into(nonce, aad_addr, aad_len, src, dst, n, tag_addr)
+        var pt: List[UInt8]
+        try:
+            pt = chacha20_poly1305_decrypt(key, nonce, _at(aad_addr, aad_len), _at(src, n), _at(tag_addr, 16))
+        except e:
+            if String(e) == "authentication failed":
+                return False
+            raise Error(String(e))
+        _copy_to(dst, pt, n)
+        return True
+
 
 # ============================================================================
 # record_seal — encrypt and authenticate a TLS 1.3 record
@@ -149,37 +212,82 @@ def record_seal_k(
     if len(iv) != 12:
         raise Error("record_seal: IV must be 12 bytes")
 
-    # Inner plaintext = plaintext || content_type (TLS 1.3 §5.2)
-    var inner = List[UInt8](capacity=len(plaintext) + 1)
-    _put(inner, plaintext, 0, len(plaintext))
-    inner.append(content_type)
-
-    var aad   = _make_aad(len(inner))
-    var nonce = _make_nonce(iv, seqno)
-
-    # Encrypt
-    var ct: List[UInt8]
-    var tag: List[UInt8]
-    if cipher == CIPHER_AES_128_GCM or cipher == CIPHER_AES_256_GCM:
-        var enc = ak.gcm_seal(cipher, key, nonce, inner, aad)
-        ct  = enc[0].copy()
-        tag = enc[1].copy()
-    else:  # CIPHER_CHACHA20_POLY1305
-        var enc = chacha20_poly1305_encrypt(key, nonce, aad, inner)
-        ct  = enc[0].copy()
-        tag = enc[1].copy()
-
-    # Build record: header (5 bytes) || ciphertext || tag (16 bytes)
-    var record = List[UInt8](capacity=5 + len(ct) + 16)
+    # Inner plaintext = plaintext || content_type (TLS 1.3 §5.2), written
+    # after the header and encrypted in place; the tag follows it
+    var n = len(plaintext) + 1
+    var aad = _make_aad(n)
+    var record = List[UInt8](capacity=5 + n + 16)
     _put(record, aad, 0, 5)
-    _put(record, ct, 0, len(ct))
-    _put(record, tag, 0, 16)
+    _put(record, plaintext, 0, len(plaintext))
+    record.append(content_type)
+    _ = _grow(record, 16)
+    var base = Int(record.unsafe_ptr())
+    ak.seal_into(cipher, key, _make_nonce(iv, seqno), base, 5, base + 5, base + 5, n)
     return record^
 
 
 # ============================================================================
 # record_open — decrypt and verify a TLS 1.3 record
 # ============================================================================
+
+def record_open_into(
+    mut ak:   AeadKey,
+    cipher:   UInt8,
+    key:      List[UInt8],
+    iv:       List[UInt8],
+    seqno:    UInt64,
+    rec_addr: Int,
+    rec_len:  Int,
+    mut out:  List[UInt8],
+) raises -> UInt8:
+    """AEAD-decrypt the TLS 1.3 record (header included) at rec_addr and
+    append its plaintext to out, decrypting directly into out's storage.
+    Returns the inner content type. Raises on any failure, leaving out as
+    it was: plaintext of a record that fails authentication is never
+    visible."""
+    if len(iv) != 12:
+        raise Error("record_open: IV must be 12 bytes")
+    # Minimum: 5-byte header + 1-byte inner (ctype) + 16-byte tag = 22 bytes
+    if rec_len < 22:
+        raise Error("record_open: record too short")
+    var rec = Pointer[UInt8, MutAnyOrigin](unsafe_from_address=rec_addr)
+    if rec[unsafe_offset=0] != 0x17:
+        raise Error("record_open: opaque_type must be 0x17")
+    if rec[unsafe_offset=1] != 0x03 or rec[unsafe_offset=2] != 0x03:
+        raise Error("record_open: legacy version must be 0x0303")
+    var ct_len = rec_len - 5 - 16
+    # TLSInnerPlaintext may not exceed 2^14 + 1 bytes (RFC 8446 §5.4)
+    if ct_len > 16385:
+        raise Error("record_open: inner plaintext too long (record_overflow)")
+
+    # AAD = the record header (first 5 bytes)
+    var base = len(out)
+    var ok: Bool
+    try:
+        var dst = _grow(out, ct_len)
+        ok = ak.open_into(
+            cipher, key, _make_nonce(iv, seqno),
+            rec_addr, 5, rec_addr + 5, dst, ct_len, rec_addr + 5 + ct_len,
+        )
+    except e:
+        out.resize(unsafe_uninit_length=base)
+        raise Error(String(e))
+    if not ok:
+        out.resize(unsafe_uninit_length=base)
+        raise Error("authentication failed")
+
+    # Inner = actual_plaintext || content_type || zeros (RFC 8446 §5.4): the
+    # content type is the last non-zero byte.
+    var ct_pos = len(out) - 1
+    while ct_pos >= base and out[ct_pos] == 0:
+        ct_pos -= 1
+    if ct_pos < base:
+        out.resize(unsafe_uninit_length=base)
+        raise Error("record_open: no content type in inner plaintext (unexpected_message)")
+    var content_type = out[ct_pos]
+    out.resize(unsafe_uninit_length=ct_pos)  # drop type byte and padding in place
+    return content_type
+
 
 def record_open_k(
     mut ak: AeadKey,
@@ -190,50 +298,10 @@ def record_open_k(
     record: List[UInt8],
 ) raises -> Tuple[UInt8, List[UInt8]]:
     """AEAD-decrypt a TLS 1.3 record. Returns (content_type, plaintext). Raises on auth failure."""
-    if len(iv) != 12:
-        raise Error("record_open: IV must be 12 bytes")
-    # Minimum: 5-byte header + 1-byte inner (ctype) + 16-byte tag = 22 bytes
-    if len(record) < 22:
-        raise Error("record_open: record too short")
-    if record[0] != 0x17:
-        raise Error("record_open: opaque_type must be 0x17")
-    if record[1] != 0x03 or record[2] != 0x03:
-        raise Error("record_open: legacy version must be 0x0303")
-
-    var ct_tag_len = len(record) - 5
-    if ct_tag_len < 17:  # 1 byte ciphertext + 16 byte tag minimum
-        raise Error("record_open: ciphertext+tag too short")
-    var ct_len = ct_tag_len - 16
-
-    # Slice ciphertext and tag out of record
-    var ciphertext = _slice(record, 5, ct_len)
-    var tag = _slice(record, 5 + ct_len, 16)
-
-    # AAD = the record header (first 5 bytes)
-    var aad = _slice(record, 0, 5)
-
-    var nonce = _make_nonce(iv, seqno)
-
-    # Decrypt and verify
-    var inner: List[UInt8]
-    if cipher == CIPHER_AES_128_GCM or cipher == CIPHER_AES_256_GCM:
-        inner = ak.gcm_open(cipher, key, nonce, ciphertext, tag, aad)
-    else:  # CIPHER_CHACHA20_POLY1305
-        inner = chacha20_poly1305_decrypt(key, nonce, aad, ciphertext, tag)
-
-    # TLSInnerPlaintext may not exceed 2^14 + 1 bytes (RFC 8446 §5.4)
-    if len(inner) > 16385:
-        raise Error("record_open: inner plaintext too long (record_overflow)")
-    # Inner = actual_plaintext || content_type || zeros (RFC 8446 §5.4): the
-    # content type is the last non-zero byte.
-    var ct_pos = len(inner) - 1
-    while ct_pos >= 0 and inner[ct_pos] == 0:
-        ct_pos -= 1
-    if ct_pos < 0:
-        raise Error("record_open: no content type in inner plaintext (unexpected_message)")
-    var content_type = inner[ct_pos]
-    var pt_len = ct_pos
-    inner.resize(unsafe_uninit_length=pt_len)  # drop type byte and padding in place
+    var inner = List[UInt8](capacity=max(len(record) - 21, 0))
+    var content_type = record_open_into(
+        ak, cipher, key, iv, seqno, Int(record.unsafe_ptr()), len(record), inner
+    )
     return (content_type, inner^)
 
 
@@ -299,25 +367,67 @@ def record_seal_12_k(
     if len(iv_implicit) != 4:
         raise Error("record_seal_12: iv_implicit must be 4 bytes")
 
-    var explicit_nonce = _make_explicit_nonce(seqno)
-    var nonce = _make_nonce_12(iv_implicit, seqno)
-    var aad   = _make_aad_12(seqno, content_type, len(plaintext))
-
-    var ct: List[UInt8]
-    var tag: List[UInt8]
-    if cipher == CIPHER_AES_128_GCM or cipher == CIPHER_AES_256_GCM:
-        var enc = ak.gcm_seal(cipher, key, nonce, plaintext, aad)
-        ct  = enc[0].copy()
-        tag = enc[1].copy()
-    else:
+    if not _is_gcm(cipher):
         raise Error("record_seal_12: only AES-GCM supported")
 
-    # Output: explicit_nonce || ciphertext || tag
-    var out = List[UInt8](capacity=8 + len(ct) + 16)
+    # Output: explicit_nonce || ciphertext || tag, sealed in place
+    var n = len(plaintext)
+    var aad = _make_aad_12(seqno, content_type, n)
+    var out = List[UInt8](capacity=8 + n + 16)
+    var explicit_nonce = _make_explicit_nonce(seqno)
     _put(out, explicit_nonce, 0, 8)
-    _put(out, ct, 0, len(ct))
-    _put(out, tag, 0, 16)
+    _put(out, plaintext, 0, n)
+    _ = _grow(out, 16)
+    var base = Int(out.unsafe_ptr())
+    ak.seal_into(cipher, key, _make_nonce_12(iv_implicit, seqno), Int(aad.unsafe_ptr()), 13, base + 8, base + 8, n)
+    _ = len(aad)  # aad is read through its address: keep it alive until here
     return out^
+
+
+def record_open_12_into(
+    mut ak:      AeadKey,
+    cipher:      UInt8,
+    key:         List[UInt8],
+    iv_implicit: List[UInt8],   # 4-byte implicit IV from key_block
+    seqno:       UInt64,
+    content_type: UInt8,
+    payload_addr: Int,          # explicit_nonce(8) || ciphertext || tag(16)
+    payload_len: Int,
+    mut out:     List[UInt8],
+) raises:
+    """AEAD-decrypt a TLS 1.2 record payload, appending the plaintext to out
+    (decrypted directly into out's storage). Raises on any failure, leaving
+    out as it was."""
+    if len(iv_implicit) != 4:
+        raise Error("record_open_12: iv_implicit must be 4 bytes")
+    if payload_len < 8 + 16:
+        raise Error("record_open_12: payload too short (need at least 24 bytes)")
+    if not _is_gcm(cipher):
+        raise Error("record_open_12: only AES-GCM supported")
+
+    # Full 12-byte nonce = implicit IV || explicit nonce (from the wire)
+    var nonce = List[UInt8](capacity=12)
+    _put(nonce, iv_implicit, 0, 4)
+    var explicit_nonce = _at(payload_addr, 8)
+    _put(nonce, explicit_nonce, 0, 8)
+
+    var ct_len = payload_len - 8 - 16
+    var aad = _make_aad_12(seqno, content_type, ct_len)
+    var base = len(out)
+    var ok: Bool
+    try:
+        var dst = _grow(out, ct_len)
+        ok = ak.open_into(
+            cipher, key, nonce, Int(aad.unsafe_ptr()), 13,
+            payload_addr + 8, dst, ct_len, payload_addr + 8 + ct_len,
+        )
+    except e:
+        out.resize(unsafe_uninit_length=base)
+        raise Error(String(e))
+    _ = len(aad)  # aad is read through its address: keep it alive until here
+    if not ok:
+        out.resize(unsafe_uninit_length=base)
+        raise Error("authentication failed")
 
 
 def record_open_12_k(
@@ -334,30 +444,12 @@ def record_open_12_k(
     Input: explicit_nonce(8) || ciphertext || tag(16)
     Returns: plaintext
     """
-    if len(iv_implicit) != 4:
-        raise Error("record_open_12: iv_implicit must be 4 bytes")
-    if len(payload) < 8 + 16:
-        raise Error("record_open_12: payload too short (need at least 24 bytes)")
-
-    # Build full 12-byte nonce from implicit IV + explicit nonce (from wire)
-    var nonce = List[UInt8](capacity=12)
-    for i in range(4):
-        nonce.append(iv_implicit[i])
-    for i in range(8):
-        nonce.append(payload[i])
-
-    var ct_tag_len = len(payload) - 8
-    var ct_len = ct_tag_len - 16
-
-    var ciphertext = _slice(payload, 8, ct_len)
-    var tag = _slice(payload, 8 + ct_len, 16)
-
-    var aad = _make_aad_12(seqno, content_type, ct_len)
-
-    if cipher == CIPHER_AES_128_GCM or cipher == CIPHER_AES_256_GCM:
-        return ak.gcm_open(cipher, key, nonce, ciphertext, tag, aad)
-    else:
-        raise Error("record_open_12: only AES-GCM supported")
+    var out = List[UInt8](capacity=max(len(payload) - 24, 0))
+    record_open_12_into(
+        ak, cipher, key, iv_implicit, seqno, content_type,
+        Int(payload.unsafe_ptr()), len(payload), out,
+    )
+    return out^
 
 
 # ============================================================================
