@@ -207,6 +207,24 @@ from 4.9 to 2.9 µs, bulk transfer from 41 to 52 MB/s on an Apple M1 Pro).
 bundle is no longer cut off at 2 MB: larger bundles used to lose their last
 certificates silently.
 
+1.8.0 makes receiving fast. AES-GCM runs on the CPU's AES and carry-less-multiply
+instructions where the build target has them (ARMv8 crypto extension, x86 AES-NI with
+PCLMULQDQ); these instructions take the same time whatever the key and data, so this
+path is constant time like the software one, which builds for other targets still use
+(`-D TLS_SOFT_AES=true` forces it). The receive path no longer copies byte by byte or
+rebuilds its buffer on every read. Measured against `openssl s_server` on loopback
+(Apple M1 Pro, TLS 1.3 AES-256-GCM, `pixi run bench-io`):
+
+| | 1.8.0, hardware AES | 1.8.0, software AES | 1.7.0 | Python (OpenSSL) |
+|---|---|---|---|---|
+| `recv(64 KiB)` loop | 1,007 MB/s | 50 MB/s | 34 MB/s | 1,277 MB/s |
+| `recv_all` | 719 MB/s | 49 MB/s | 1 MB/s | |
+| `recv_exact(5)` + `recv_exact(59)` | 0.21 us | 1.4 us | 22 us | |
+
+`recv_all` was quadratic before (it reallocated its result for every record), and
+`recv_exact(n)` no longer reserves `n` bytes before the data arrives (a length taken
+from a peer could reserve gigabytes).
+
 Fixed in 1.6.0 (second review, three independent reviewers):
 - **Crash:** a certificate with an empty EC public key aborted the process; it could be
   sent by any server, or an attacker on the path, before authentication.
@@ -289,6 +307,7 @@ before the path is anchored.
 ```
 crypto/  primitives and X.509
   aes, gcm, chacha20, poly1305           AEAD ciphers (constant time)
+  aes_hw                                 AES-GCM on AES-NI/PCLMULQDQ or ARMv8 AES/PMULL
   hash (SHA-256/384/512), sha1, hmac, hkdf, prf (TLS 1.2 PRF)
   curve25519, p256, p384, ec_ct (constant-time P-256/P-384), rsa, bigint, ed25519 (not used by TLS)
   asn1, pem, base64, cert                X.509 parsing and path validation
@@ -309,6 +328,8 @@ pixi run test-connection12  # TLS 1.2 against a local Python server
 pixi run test-socket        # TlsSocket against a local Python server
 pixi run test-interop       # handshakes against openssl s_server (also run in CI)
 pixi run bench              # primitive benchmarks
+pixi run bench-io           # TLS receive throughput against openssl s_server (both AES paths)
+pixi run test-soft-aes      # tests on the software AES-GCM path (also in CI)
 pixi run fuzz 20000 1 2     # fuzz every parser: <inputs per target> <seeds...>
 pixi run ct-check           # dudect-style timing-leak check (manual; noisy)
 mojo run -I . -I <path to tcp> tests/live_sites.mojo   # real sites + badssl.com (network)
