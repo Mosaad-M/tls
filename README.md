@@ -18,7 +18,7 @@ With [mojo-pkg](https://github.com/Mosaad-M/mojo-pkg), add the dependency to
 ```toml
 [dependencies]
 tls = { git = "Mosaad-M/tls", version = ">=1.7.0" }
-tcp = { git = "Mosaad-M/tcp", version = ">=1.1.0" }   # optional: DNS + connect helper
+tcp = { git = "Mosaad-M/tcp", version = ">=2.0.0" }   # optional: DNS + connect helper
 ```
 
 ```bash
@@ -56,8 +56,10 @@ def main() raises:
     tcp.connect("example.com", 443)
 
     # Handshake: negotiates TLS 1.3 or 1.2 and validates the certificate
-    # chain and hostname; raises if anything fails
-    var tls = TlsSocket(tcp.fd)
+    # chain and hostname; raises if anything fails. detach() hands the
+    # socket over: since tcp 2.0.0 a TcpSocket closes its fd when destroyed,
+    # and the TlsSocket now owns and closes it.
+    var tls = TlsSocket(tcp.detach())
     tls.connect("example.com", trust_anchors)
 
     var request = String(
