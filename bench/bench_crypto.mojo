@@ -10,7 +10,8 @@ from std.time import perf_counter_ns
 from crypto.curve25519 import x25519, x25519_public_key
 from crypto.p256 import p256_ecdh, p256_public_key, p256_ecdsa_sign
 from crypto.gcm import gcm_encrypt, GcmKey
-from crypto.poly1305 import chacha20_poly1305_encrypt
+from crypto.poly1305 import chacha20_poly1305_encrypt, chacha20_poly1305_decrypt, poly1305_mac
+from crypto.chacha20 import chacha20_encrypt
 from crypto.hash import sha256
 from crypto.record import AeadKey, record_seal_k, record_open_into, CIPHER_AES_256_GCM
 
@@ -104,6 +105,25 @@ def bench_aead() raises:
         out.resize(unsafe_uninit_length=0)
         _ = record_open_into(ak, CIPHER_AES_256_GCM, key256, nonce, 0, Int(rec.unsafe_ptr()), len(rec), out)
     _throughput("TLS 1.3 record open in place, 16 KiB (AES-256-GCM)", 16384 * reps, Int(perf_counter_ns() - start))
+
+    # ChaCha20-Poly1305 (1.8.2: 16 blocks per SIMD step, radix-2^44 Poly1305)
+    start = perf_counter_ns()
+    for _ in range(reps):
+        _ = chacha20_encrypt(key256, nonce, 1, big)
+    _throughput("ChaCha20 alone, 16 KiB", 16384 * reps, Int(perf_counter_ns() - start))
+    start = perf_counter_ns()
+    for _ in range(reps):
+        _ = poly1305_mac(key256, big)
+    _throughput("Poly1305 alone, 16 KiB", 16384 * reps, Int(perf_counter_ns() - start))
+    start = perf_counter_ns()
+    for _ in range(reps):
+        _ = chacha20_poly1305_encrypt(key256, nonce, aad, big)
+    _throughput("ChaCha20-Poly1305 seal 16 KiB", 16384 * reps, Int(perf_counter_ns() - start))
+    var csealed = chacha20_poly1305_encrypt(key256, nonce, aad, big)
+    start = perf_counter_ns()
+    for _ in range(reps):
+        _ = chacha20_poly1305_decrypt(key256, nonce, aad, csealed[0], csealed[1])
+    _throughput("ChaCha20-Poly1305 open 16 KiB", 16384 * reps, Int(perf_counter_ns() - start))
 
 
 def bench_x25519() raises:

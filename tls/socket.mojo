@@ -34,7 +34,7 @@ from crypto.curve25519 import x25519_public_key
 from crypto.record import (
     record_seal, record_open,
     record_seal_12, record_open_12,
-    AeadKey, record_seal_k, record_open_into, record_seal_12_k, record_open_12_into,
+    AeadKey, record_seal_k, record_open_into, record_seal_12_record_k, record_open_12_into,
     CIPHER_AES_128_GCM, CIPHER_AES_256_GCM,
     CTYPE_APPLICATION_DATA, CTYPE_CHANGE_CIPHER_SPEC, CTYPE_ALERT, CTYPE_HANDSHAKE,
 )
@@ -537,7 +537,7 @@ struct TlsSocket(Movable):
         if len(data) > 16384:
             raise Error("tls: send: plaintext exceeds TLS record limit (16384 bytes)")
         if self._is12:
-            var payload = record_seal_12_k(
+            var record = record_seal_12_record_k(
                 self._seal_ak,
                 UInt8(self._keys12.cipher),
                 self._keys12.client_write_key,
@@ -546,14 +546,6 @@ struct TlsSocket(Movable):
                 CTYPE_APPLICATION_DATA,
                 data,
             )
-            # Build full TLS 1.2 record: 5-byte header + payload
-            var record = List[UInt8](capacity=5 + len(payload))
-            record.append(CTYPE_APPLICATION_DATA)
-            record.append(0x03)
-            record.append(0x03)
-            record.append(UInt8((len(payload) >> 8) & 0xFF))
-            record.append(UInt8(len(payload) & 0xFF))
-            _sock_append_bytes(record, payload)
             self._write_record(record)
             if self._keys12.client_seqno >= UInt64(4611686018427387904):
                 raise Error("tls: client sequence number overflow")
@@ -778,19 +770,11 @@ struct TlsSocket(Movable):
             if self._is12:
                 if len(self._keys12.client_write_key) == 0:
                     return
-                var payload = record_seal_12_k(
-                self._seal_ak,
+                self._write_record(record_seal_12_record_k(
+                    self._seal_ak,
                     UInt8(self._keys12.cipher), self._keys12.client_write_key,
                     self._keys12.client_write_iv, self._keys12.client_seqno, CTYPE_ALERT, body,
-                )
-                var record = List[UInt8](capacity=5 + len(payload))
-                record.append(CTYPE_ALERT)
-                record.append(0x03)
-                record.append(0x03)
-                record.append(UInt8((len(payload) >> 8) & 0xFF))
-                record.append(UInt8(len(payload) & 0xFF))
-                _sock_append_bytes(record, payload)
-                self._write_record(record)
+                ))
             else:
                 if len(self._keys.client_write_key) == 0:
                     return
@@ -945,8 +929,8 @@ struct TlsSocket(Movable):
                 var alert_body = List[UInt8](capacity=2)
                 alert_body.append(ALERT_LEVEL_WARNING)
                 alert_body.append(ALERT_CLOSE_NOTIFY)
-                var payload = record_seal_12_k(
-                self._seal_ak,
+                var record = record_seal_12_record_k(
+                    self._seal_ak,
                     UInt8(self._keys12.cipher),
                     self._keys12.client_write_key,
                     self._keys12.client_write_iv,
@@ -954,13 +938,6 @@ struct TlsSocket(Movable):
                     CTYPE_ALERT,
                     alert_body,
                 )
-                var record = List[UInt8](capacity=5 + len(payload))
-                record.append(CTYPE_ALERT)
-                record.append(0x03)
-                record.append(0x03)
-                record.append(UInt8((len(payload) >> 8) & 0xFF))
-                record.append(UInt8(len(payload) & 0xFF))
-                _sock_append_bytes(record, payload)
                 try:
                     tls_tcp_write(self._fd, record)
                 except:

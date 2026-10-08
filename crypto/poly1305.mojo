@@ -6,29 +6,277 @@
 #   MAC = ((accumulate message blocks with r) + s) mod 2^128
 #   where r, s are derived from the 32-byte one-time key
 #
-# Uses 5 × 26-bit limbs for arithmetic in GF(2^130 - 5).
+# Arithmetic in GF(2^130 - 5) uses 3 limbs of 44/44/42 bits with 64x64->128
+# multiplies (poly1305-donna-64); the AEAD streams AAD, ciphertext, padding
+# and lengths into it without building the MAC input.
 #
 # Security:
+#   - Constant time: fixed multiplies, adds and masks; no secret branches
 #   - Tag comparison is constant-time (via OR-accumulation)
 #   - Poly1305 key is derived from ChaCha20 block at counter=0
-#   - Plaintext returned only after tag verification
+#   - Decryption runs only after the tag verified: a forged record never
+#     produces any plaintext
 # ============================================================================
 
-from crypto.chacha20 import chacha20_block, chacha20_encrypt
-from crypto.hmac import hmac_equal
+from std.collections import InlineArray
+from std.memory import bitcast
+from crypto.chacha20 import chacha20_block, chacha20_xor_into
+
+comptime _M44: UInt64 = 0xFFFFFFFFFFF
+comptime _M42: UInt64 = 0x3FFFFFFFFFF
 
 
-# ============================================================================
-# 26-bit limb helpers
-# ============================================================================
+@always_inline
+def _le128(addr: Int) -> SIMD[DType.uint64, 2]:
+    return bitcast[DType.uint64, 2](Pointer[UInt8, MutAnyOrigin](unsafe_from_address=addr).unsafe_load[width=16]())
 
-def _load_le32_p(data: List[UInt8], off: Int) -> UInt32:
-    return (
-        UInt32(data[off]) |
-        (UInt32(data[off + 1]) << 8) |
-        (UInt32(data[off + 2]) << 16) |
-        (UInt32(data[off + 3]) << 24)
-    )
+
+@always_inline
+def _mul(a: UInt64, b: UInt64) -> UInt128:
+    return UInt128(a) * UInt128(b)
+
+
+struct _Poly1305(Movable):
+    """Streaming Poly1305 state (radix 2^44)."""
+    var r0: UInt64
+    var r1: UInt64
+    var r2: UInt64
+    var s1: UInt64
+    var s2: UInt64
+    var h0: UInt64
+    var h1: UInt64
+    var h2: UInt64
+    var q0: UInt64  # r^2 (two blocks per step: h = (h + m1) r^2 + m2 r)
+    var q1: UInt64
+    var q2: UInt64
+    var t1: UInt64
+    var t2: UInt64
+    var pad: SIMD[DType.uint64, 2]
+    var buf: InlineArray[UInt8, 16]
+    var buf_len: Int
+
+    def __init__(out self, key_addr: Int):
+        """key_addr: 32 bytes, r = key[0:16] (clamped), s = key[16:32]."""
+        var t = _le128(key_addr)
+        self.r0 = t[0] & 0xFFC0FFFFFFF
+        self.r1 = ((t[0] >> 44) | (t[1] << 20)) & 0xFFFFFC0FFFF
+        self.r2 = (t[1] >> 24) & 0x00FFFFFFC0F
+        self.s1 = self.r1 * (5 << 2)
+        self.s2 = self.r2 * (5 << 2)
+        self.h0 = 0
+        self.h1 = 0
+        self.h2 = 0
+        # r^2 = r * r, carried like a block result (limbs ~44 bits)
+        var d0 = _mul(self.r0, self.r0) + _mul(self.r1, self.s2) + _mul(self.r2, self.s1)
+        var d1 = _mul(self.r0, self.r1) + _mul(self.r1, self.r0) + _mul(self.r2, self.s2)
+        var d2 = _mul(self.r0, self.r2) + _mul(self.r1, self.r1) + _mul(self.r2, self.r0)
+        var c = UInt64(d0 >> 44)
+        var q0 = UInt64(d0) & _M44
+        d1 += UInt128(c)
+        c = UInt64(d1 >> 44)
+        var q1 = UInt64(d1) & _M44
+        d2 += UInt128(c)
+        c = UInt64(d2 >> 42)
+        var q2 = UInt64(d2) & _M42
+        q0 += c * 5
+        c = q0 >> 44
+        q0 &= _M44
+        q1 += c
+        self.q0 = q0
+        self.q1 = q1
+        self.q2 = q2
+        self.t1 = q1 * (5 << 2)
+        self.t2 = q2 * (5 << 2)
+        self.pad = _le128(key_addr + 16)
+        self.buf = InlineArray[UInt8, 16](fill=0)
+        self.buf_len = 0
+
+    @always_inline
+    def _blocks(mut self, addr: Int, nblocks: Int, hibit: UInt64):
+        var pairs = nblocks // 2
+        if pairs > 0:
+            self._pairs(addr, pairs, hibit)
+        if nblocks % 2 == 1:
+            self._run[True](addr + 32 * pairs, 1, hibit, SIMD[DType.uint64, 2](0))
+
+    @always_inline
+    def _pairs(mut self, addr: Int, npairs: Int, hibit: UInt64):
+        """Two blocks per step: h = (h + m1) * r^2 + m2 * r, one reduction.
+        The two products are independent, so the multiplies overlap."""
+        var r0 = self.r0
+        var r1 = self.r1
+        var r2 = self.r2
+        var s1 = self.s1
+        var s2 = self.s2
+        var q0 = self.q0
+        var q1 = self.q1
+        var q2 = self.q2
+        var t1 = self.t1
+        var t2 = self.t2
+        var h0 = self.h0
+        var h1 = self.h1
+        var h2 = self.h2
+        for i in range(npairs):
+            var a = _le128(addr + 32 * i)
+            var b = _le128(addr + 32 * i + 16)
+            h0 += a[0] & _M44
+            h1 += ((a[0] >> 44) | (a[1] << 20)) & _M44
+            h2 += ((a[1] >> 24) & _M42) | hibit
+            var m0 = b[0] & _M44
+            var m1 = ((b[0] >> 44) | (b[1] << 20)) & _M44
+            var m2 = ((b[1] >> 24) & _M42) | hibit
+            var d0 = _mul(h0, q0) + _mul(h1, t2) + _mul(h2, t1) + _mul(m0, r0) + _mul(m1, s2) + _mul(m2, s1)
+            var d1 = _mul(h0, q1) + _mul(h1, q0) + _mul(h2, t2) + _mul(m0, r1) + _mul(m1, r0) + _mul(m2, s2)
+            var d2 = _mul(h0, q2) + _mul(h1, q1) + _mul(h2, q0) + _mul(m0, r2) + _mul(m1, r1) + _mul(m2, r0)
+            var c = UInt64(d0 >> 44)
+            h0 = UInt64(d0) & _M44
+            d1 += UInt128(c)
+            c = UInt64(d1 >> 44)
+            h1 = UInt64(d1) & _M44
+            d2 += UInt128(c)
+            c = UInt64(d2 >> 42)
+            h2 = UInt64(d2) & _M42
+            h0 += c * 5
+            c = h0 >> 44
+            h0 &= _M44
+            h1 += c
+        self.h0 = h0
+        self.h1 = h1
+        self.h2 = h2
+
+    @always_inline
+    def _run[FROM_MEMORY: Bool](mut self, addr: Int, nblocks: Int, hibit: UInt64, word: SIMD[DType.uint64, 2]):
+        """Absorb nblocks 16-byte blocks from addr, or (FROM_MEMORY False)
+        the single block `word`."""
+        var r0 = self.r0
+        var r1 = self.r1
+        var r2 = self.r2
+        var s1 = self.s1
+        var s2 = self.s2
+        var h0 = self.h0
+        var h1 = self.h1
+        var h2 = self.h2
+        for i in range(nblocks):
+            var t: SIMD[DType.uint64, 2]
+            comptime if FROM_MEMORY:
+                t = _le128(addr + 16 * i)
+            else:
+                t = word
+            h0 += t[0] & _M44
+            h1 += ((t[0] >> 44) | (t[1] << 20)) & _M44
+            h2 += ((t[1] >> 24) & _M42) | hibit
+            var d0 = _mul(h0, r0) + _mul(h1, s2) + _mul(h2, s1)
+            var d1 = _mul(h0, r1) + _mul(h1, r0) + _mul(h2, s2)
+            var d2 = _mul(h0, r2) + _mul(h1, r1) + _mul(h2, r0)
+            var c = UInt64(d0 >> 44)
+            h0 = UInt64(d0) & _M44
+            d1 += UInt128(c)
+            c = UInt64(d1 >> 44)
+            h1 = UInt64(d1) & _M44
+            d2 += UInt128(c)
+            c = UInt64(d2 >> 42)
+            h2 = UInt64(d2) & _M42
+            h0 += c * 5
+            c = h0 >> 44
+            h0 &= _M44
+            h1 += c
+        self.h0 = h0
+        self.h1 = h1
+        self.h2 = h2
+
+    def update(mut self, addr: Int, n: Int):
+        """Absorb n bytes; a partial block waits in the buffer."""
+        var src = Pointer[UInt8, MutAnyOrigin](unsafe_from_address=addr)
+        var off = 0
+        if self.buf_len > 0:
+            var take = min(16 - self.buf_len, n)
+            for i in range(take):
+                self.buf[self.buf_len + i] = src[unsafe_offset=i]
+            self.buf_len += take
+            off = take
+            if self.buf_len < 16:
+                return
+            self._blocks(Int(self.buf.unsafe_ptr()), 1, UInt64(1) << 40)
+            self.buf_len = 0
+        var full = (n - off) // 16
+        if full > 0:
+            self._blocks(addr + off, full, UInt64(1) << 40)
+            off += 16 * full
+        for i in range(n - off):
+            self.buf[i] = src[unsafe_offset=off + i]
+        self.buf_len = n - off
+
+    def lengths(mut self, a: Int, b: Int):
+        """Absorb le64(a) || le64(b) as one block (buffer must be empty)."""
+        self._run[False](0, 1, UInt64(1) << 40, SIMD[DType.uint64, 2](UInt64(a), UInt64(b)))
+
+    def pad16(mut self):
+        """Zero-pad the pending partial block to 16 bytes (RFC 8439 §2.8)."""
+        if self.buf_len > 0:
+            for i in range(self.buf_len, 16):
+                self.buf[i] = 0
+            self._blocks(Int(self.buf.unsafe_ptr()), 1, UInt64(1) << 40)
+            self.buf_len = 0
+
+    def finish(mut self) -> SIMD[DType.uint8, 16]:
+        if self.buf_len > 0:
+            # final partial block: append 0x01, zero-fill, no 2^128 bit
+            self.buf[self.buf_len] = 1
+            for i in range(self.buf_len + 1, 16):
+                self.buf[i] = 0
+            self._blocks(Int(self.buf.unsafe_ptr()), 1, 0)
+            self.buf_len = 0
+        var h0 = self.h0
+        var h1 = self.h1
+        var h2 = self.h2
+        # fully carry h (twice: the first pass can leave a carry into h1)
+        var c: UInt64
+        for _ in range(2):
+            c = h1 >> 44
+            h1 &= _M44
+            h2 += c
+            c = h2 >> 42
+            h2 &= _M42
+            h0 += c * 5
+            c = h0 >> 44
+            h0 &= _M44
+            h1 += c
+        # g = h - p = h + 5 - 2^130; use g when it does not underflow (h >= p)
+        var g0 = h0 + 5
+        c = g0 >> 44
+        g0 &= _M44
+        var g1 = h1 + c
+        c = g1 >> 44
+        g1 &= _M44
+        var g2 = h2 + c - (UInt64(1) << 42)
+        var mask = (g2 >> 63) - 1  # all ones when h >= p
+        g0 &= mask
+        g1 &= mask
+        g2 &= mask
+        mask = ~mask
+        h0 = (h0 & mask) | g0
+        h1 = (h1 & mask) | g1
+        h2 = (h2 & mask) | g2
+        # h + s mod 2^128
+        var t0 = self.pad[0]
+        var t1 = self.pad[1]
+        h0 += t0 & _M44
+        c = h0 >> 44
+        h0 &= _M44
+        h1 += (((t0 >> 44) | (t1 << 20)) & _M44) + c
+        c = h1 >> 44
+        h1 &= _M44
+        h2 += ((t1 >> 24) & _M42) + c
+        h2 &= _M42
+        var out = SIMD[DType.uint64, 2](h0 | (h1 << 44), (h1 >> 20) | (h2 << 24))
+        return bitcast[DType.uint8, 16](out)
+
+
+def _tag_list(t: SIMD[DType.uint8, 16]) -> List[UInt8]:
+    var out = List[UInt8](capacity=16)
+    for i in range(16):
+        out.append(t[i])
+    return out^
 
 
 # ============================================================================
@@ -46,219 +294,68 @@ def poly1305_mac(key: List[UInt8], msg: List[UInt8]) raises -> List[UInt8]:
     """
     if len(key) != 32:
         raise Error("Poly1305 key must be 32 bytes")
-
-    # Load and clamp r (bytes 0..15 of key, little-endian)
-    var r0 = _load_le32_p(key, 0)  & UInt32(0x0FFFFFFF)
-    var r1 = _load_le32_p(key, 4)  & UInt32(0x0FFFFFFC)
-    var r2 = _load_le32_p(key, 8)  & UInt32(0x0FFFFFFC)
-    var r3 = _load_le32_p(key, 12) & UInt32(0x0FFFFFFC)
-
-    # Split r into 5 × 26-bit limbs from the 128-bit clamped value
-    # 128-bit r value (LE): r0 | r1<<32 | r2<<64 | r3<<96
-    var rr0 = UInt64(r0) & 0x3FFFFFF
-    var rr1 = ((UInt64(r0) >> 26) | (UInt64(r1) << 6)) & 0x3FFFFFF
-    var rr2 = ((UInt64(r1) >> 20) | (UInt64(r2) << 12)) & 0x3FFFFFF
-    var rr3 = ((UInt64(r2) >> 14) | (UInt64(r3) << 18)) & 0x3FFFFFF
-    var rr4 = UInt64(r3) >> 8
-
-    # Pre-compute 5 * r[1..4] (for modular reduction: x * 2^130 ≡ 5x mod 2^130-5)
-    var s1 = rr1 * 5
-    var s2 = rr2 * 5
-    var s3 = rr3 * 5
-    var s4 = rr4 * 5
-
-    # Accumulator h (5 × 26-bit limbs)
-    var h0: UInt64 = 0
-    var h1: UInt64 = 0
-    var h2: UInt64 = 0
-    var h3: UInt64 = 0
-    var h4: UInt64 = 0
-
-    # Process each 16-byte block
-    var n_full = len(msg) // 16
-    var n_tail = len(msg) % 16
-    var idx = 0
-
-    for _ in range(n_full):
-        # Load 16 bytes as 4 × LE uint32
-        var m0 = _load_le32_p(msg, idx)
-        var m1 = _load_le32_p(msg, idx + 4)
-        var m2 = _load_le32_p(msg, idx + 8)
-        var m3 = _load_le32_p(msg, idx + 12)
-        idx += 16
-
-        # Split into 5 × 26-bit limbs and add 2^128 (hibit)
-        var t0 = UInt64(m0) & 0x3FFFFFF
-        var t1 = ((UInt64(m0) >> 26) | (UInt64(m1) << 6)) & 0x3FFFFFF
-        var t2 = ((UInt64(m1) >> 20) | (UInt64(m2) << 12)) & 0x3FFFFFF
-        var t3 = ((UInt64(m2) >> 14) | (UInt64(m3) << 18)) & 0x3FFFFFF
-        var t4 = (UInt64(m3) >> 8) | UInt64(1 << 24)  # hibit = 2^128 in limb 4
-
-        h0 += t0; h1 += t1; h2 += t2; h3 += t3; h4 += t4
-
-        # Multiply h × r in GF(2^130 - 5)
-        var d0 = h0*rr0 + h1*s4 + h2*s3 + h3*s2 + h4*s1
-        var d1 = h0*rr1 + h1*rr0 + h2*s4 + h3*s3 + h4*s2
-        var d2 = h0*rr2 + h1*rr1 + h2*rr0 + h3*s4 + h4*s3
-        var d3 = h0*rr3 + h1*rr2 + h2*rr1 + h3*rr0 + h4*s4
-        var d4 = h0*rr4 + h1*rr3 + h2*rr2 + h3*rr1 + h4*rr0
-
-        # Carry propagation (reduce mod 2^130 - 5)
-        var c: UInt64
-        c = d0 >> 26; h0 = d0 & 0x3FFFFFF; d1 += c
-        c = d1 >> 26; h1 = d1 & 0x3FFFFFF; d2 += c
-        c = d2 >> 26; h2 = d2 & 0x3FFFFFF; d3 += c
-        c = d3 >> 26; h3 = d3 & 0x3FFFFFF; d4 += c
-        c = d4 >> 26; h4 = d4 & 0x3FFFFFF; h0 += c * 5
-        c = h0 >> 26; h0 = h0 & 0x3FFFFFF; h1 += c
-
-    # Process partial last block (if any)
-    if n_tail > 0:
-        var tmp = List[UInt8](capacity=16)
-        for i in range(n_tail):
-            tmp.append(msg[idx + i])
-        tmp.append(0x01)  # hibit (at position n_tail, not at 16)
-        while len(tmp) < 16:
-            tmp.append(0x00)
-
-        var m0 = _load_le32_p(tmp, 0)
-        var m1 = _load_le32_p(tmp, 4)
-        var m2 = _load_le32_p(tmp, 8)
-        var m3 = _load_le32_p(tmp, 12)
-
-        var t0 = UInt64(m0) & 0x3FFFFFF
-        var t1 = ((UInt64(m0) >> 26) | (UInt64(m1) << 6)) & 0x3FFFFFF
-        var t2 = ((UInt64(m1) >> 20) | (UInt64(m2) << 12)) & 0x3FFFFFF
-        var t3 = ((UInt64(m2) >> 14) | (UInt64(m3) << 18)) & 0x3FFFFFF
-        var t4 = UInt64(m3) >> 8  # no hibit added here (already in byte stream)
-
-        h0 += t0; h1 += t1; h2 += t2; h3 += t3; h4 += t4
-
-        var d0 = h0*rr0 + h1*s4 + h2*s3 + h3*s2 + h4*s1
-        var d1 = h0*rr1 + h1*rr0 + h2*s4 + h3*s3 + h4*s2
-        var d2 = h0*rr2 + h1*rr1 + h2*rr0 + h3*s4 + h4*s3
-        var d3 = h0*rr3 + h1*rr2 + h2*rr1 + h3*rr0 + h4*s4
-        var d4 = h0*rr4 + h1*rr3 + h2*rr2 + h3*rr1 + h4*rr0
-
-        var c: UInt64
-        c = d0 >> 26; h0 = d0 & 0x3FFFFFF; d1 += c
-        c = d1 >> 26; h1 = d1 & 0x3FFFFFF; d2 += c
-        c = d2 >> 26; h2 = d2 & 0x3FFFFFF; d3 += c
-        c = d3 >> 26; h3 = d3 & 0x3FFFFFF; d4 += c
-        c = d4 >> 26; h4 = d4 & 0x3FFFFFF; h0 += c * 5
-        c = h0 >> 26; h0 = h0 & 0x3FFFFFF; h1 += c
-
-    # Full carry propagation
-    var c: UInt64
-    c = h1 >> 26; h1 &= 0x3FFFFFF; h2 += c
-    c = h2 >> 26; h2 &= 0x3FFFFFF; h3 += c
-    c = h3 >> 26; h3 &= 0x3FFFFFF; h4 += c
-    c = h4 >> 26; h4 &= 0x3FFFFFF; h0 += c * 5
-    c = h0 >> 26; h0 &= 0x3FFFFFF; h1 += c
-
-    # Compute h - p where p = 2^130 - 5
-    # If h >= p, use h - p; otherwise use h
-    var g0 = h0 + 5
-    c = g0 >> 26; g0 &= 0x3FFFFFF
-    var g1 = h1 + c
-    c = g1 >> 26; g1 &= 0x3FFFFFF
-    var g2 = h2 + c
-    c = g2 >> 26; g2 &= 0x3FFFFFF
-    var g3 = h3 + c
-    c = g3 >> 26; g3 &= 0x3FFFFFF
-    var g4 = h4 + c - (UInt64(1) << 26)
-
-    # Select h or g based on top bit of g4
-    var mask = (g4 >> 63) - 1  # all 1s if g4 < 2^63 (i.e., no underflow → h >= p)
-    g0 &= mask; g1 &= mask; g2 &= mask; g3 &= mask; g4 &= mask
-    mask = ~mask
-    h0 = (h0 & mask) | g0
-    h1 = (h1 & mask) | g1
-    h2 = (h2 & mask) | g2
-    h3 = (h3 & mask) | g3
-    h4 = (h4 & mask) | g4
-
-    # Reconstruct 128-bit h from 5 limbs.
-    # Each fi must only include the bits of the NEXT limb that fall within the
-    # 32-bit word boundary — using full-width 64-bit shifts would double-count
-    # the upper bits via the carry propagation below.
-    var f0 = h0 | ((h1 & 0x3F) << 26)            # h0[0..25] + h1[0..5]
-    var f1 = (h1 >> 6) | ((h2 & 0xFFF) << 20)    # h1[6..25] + h2[0..11]
-    var f2 = (h2 >> 12) | ((h3 & 0x3FFFF) << 14) # h2[12..25] + h3[0..17]
-    var f3 = (h3 >> 18) | (h4 << 8)              # h3[18..25] + h4 (upper bits truncated below)
-
-    # Add s (key[16:32], little-endian)
-    var s0 = UInt64(_load_le32_p(key, 16))
-    var s_1 = UInt64(_load_le32_p(key, 20))
-    var s_2 = UInt64(_load_le32_p(key, 24))
-    var s_3 = UInt64(_load_le32_p(key, 28))
-
-    f0 += s0;    c = f0 >> 32; f0 &= 0xFFFFFFFF
-    f1 += s_1 + c; c = f1 >> 32; f1 &= 0xFFFFFFFF
-    f2 += s_2 + c; c = f2 >> 32; f2 &= 0xFFFFFFFF
-    f3 += s_3 + c; f3 &= 0xFFFFFFFF
-
-    # Serialize as 16-byte LE
-    var tag = List[UInt8](capacity=16)
-    tag.append(UInt8(f0 & 0xFF));        tag.append(UInt8((f0 >> 8) & 0xFF))
-    tag.append(UInt8((f0 >> 16) & 0xFF)); tag.append(UInt8((f0 >> 24) & 0xFF))
-    tag.append(UInt8(f1 & 0xFF));        tag.append(UInt8((f1 >> 8) & 0xFF))
-    tag.append(UInt8((f1 >> 16) & 0xFF)); tag.append(UInt8((f1 >> 24) & 0xFF))
-    tag.append(UInt8(f2 & 0xFF));        tag.append(UInt8((f2 >> 8) & 0xFF))
-    tag.append(UInt8((f2 >> 16) & 0xFF)); tag.append(UInt8((f2 >> 24) & 0xFF))
-    tag.append(UInt8(f3 & 0xFF));        tag.append(UInt8((f3 >> 8) & 0xFF))
-    tag.append(UInt8((f3 >> 16) & 0xFF)); tag.append(UInt8((f3 >> 24) & 0xFF))
-    return tag^
+    var p = _Poly1305(Int(key.unsafe_ptr()))
+    p.update(Int(msg.unsafe_ptr()), len(msg))
+    return _tag_list(p.finish())
 
 
 # ============================================================================
-# ChaCha20-Poly1305 AEAD helpers
+# ChaCha20-Poly1305 AEAD, address based (the record layer's path)
 # ============================================================================
 
-def _pad16_poly(data: List[UInt8]) -> List[UInt8]:
-    """Zero-pad data to 16-byte boundary."""
-    var n = len(data)
-    var padded = ((n + 15) // 16) * 16
-    var out = List[UInt8](capacity=padded)
-    for b in data:
-        out.append(b)
-    while len(out) < padded:
-        out.append(0x00)
-    return out^
+def _aead_check(key: List[UInt8], nonce: List[UInt8], n: Int) raises:
+    if len(key) != 32:
+        raise Error("ChaCha20-Poly1305 key must be 32 bytes")
+    if len(nonce) != 12:
+        raise Error("ChaCha20-Poly1305 nonce must be 12 bytes")
+    # RFC 8439: a 32-bit block counter starting at 1 covers 2^38 - 64 bytes
+    if n > 274877906880:
+        raise Error("ChaCha20-Poly1305: message too long for one nonce")
 
 
-def _le64(n: Int) -> List[UInt8]:
-    """Encode n as 8-byte little-endian."""
-    var out = List[UInt8](capacity=8)
-    var v = UInt64(n)
-    for _ in range(8):
-        out.append(UInt8(v & 0xFF))
-        v >>= 8
-    return out^
+def _aead_tag(
+    key: List[UInt8], nonce: List[UInt8], aad_addr: Int, aad_len: Int, ct_addr: Int, n: Int
+) raises -> SIMD[DType.uint8, 16]:
+    """Poly1305 over pad16(AAD) || pad16(CT) || le64(len AAD) || le64(len CT),
+    keyed with the first 32 bytes of ChaCha20 block 0."""
+    var otk = chacha20_block(key, 0, nonce)
+    var p = _Poly1305(Int(otk.unsafe_ptr()))
+    _ = len(otk)  # read through its address above: keep alive until here
+    p.update(aad_addr, aad_len)
+    p.pad16()
+    p.update(ct_addr, n)
+    p.pad16()
+    p.lengths(aad_len, n)
+    return p.finish()
 
 
-def _build_poly1305_input(aad: List[UInt8], ct: List[UInt8]) -> List[UInt8]:
-    """Build the Poly1305 MAC input for ChaCha20-Poly1305:
-       pad(AAD) || pad(CT) || len(AAD) LE64 || len(CT) LE64
-    """
-    var aad_pad = _pad16_poly(aad)
-    var ct_pad  = _pad16_poly(ct)
-    var out = List[UInt8](capacity=len(aad_pad) + len(ct_pad) + 16)
-    for b in aad_pad:
-        out.append(b)
-    for b in ct_pad:
-        out.append(b)
-    var la = _le64(len(aad))
-    var lc = _le64(len(ct))
-    for b in la:
-        out.append(b)
-    for b in lc:
-        out.append(b)
-    return out^
+def chacha20_poly1305_seal_into(
+    key: List[UInt8], nonce: List[UInt8], aad_addr: Int, aad_len: Int, src: Int, dst: Int, n: Int
+) raises -> SIMD[DType.uint8, 16]:
+    """Encrypt n bytes at src into dst (dst may equal src); returns the tag."""
+    _aead_check(key, nonce, n)
+    chacha20_xor_into(key, nonce, 1, src, dst, n)
+    return _aead_tag(key, nonce, aad_addr, aad_len, dst, n)
+
+
+def chacha20_poly1305_open_into(
+    key: List[UInt8], nonce: List[UInt8], aad_addr: Int, aad_len: Int,
+    src: Int, dst: Int, n: Int, tag_addr: Int,
+) raises -> Bool:
+    """Check the tag at tag_addr over the n ciphertext bytes at src, in
+    constant time; only if it matches, decrypt into dst (dst may equal src).
+    False on a mismatch, with nothing written to dst."""
+    _aead_check(key, nonce, n)
+    var expect = _aead_tag(key, nonce, aad_addr, aad_len, src, n)
+    var given = Pointer[UInt8, MutAnyOrigin](unsafe_from_address=tag_addr).unsafe_load[width=16]()
+    if (expect ^ given).reduce_or() != 0:
+        return False
+    chacha20_xor_into(key, nonce, 1, src, dst, n)
+    return True
 
 
 # ============================================================================
-# Public AEAD API
+# Public AEAD API (Lists)
 # ============================================================================
 
 def chacha20_poly1305_encrypt(
@@ -277,28 +374,12 @@ def chacha20_poly1305_encrypt(
     Returns:
         Tuple of (ciphertext, tag)
     """
-    if len(key) != 32:
-        raise Error("ChaCha20-Poly1305 key must be 32 bytes")
-    if len(nonce) != 12:
-        raise Error("ChaCha20-Poly1305 nonce must be 12 bytes")
-    # RFC 8439: a 32-bit block counter starting at 1 covers 2^38 - 64 bytes
-    if len(plaintext) > 274877906880:
-        raise Error("ChaCha20-Poly1305: message too long for one nonce")
-
-    # Derive Poly1305 one-time key (counter=0)
-    var otk = chacha20_block(key, 0, nonce)
-    var poly_key = List[UInt8](capacity=32)
-    for i in range(32):
-        poly_key.append(otk[i])
-
-    # Encrypt plaintext (counter=1)
-    var ciphertext = chacha20_encrypt(key, nonce, 1, plaintext)
-
-    # Compute MAC over constructed input
-    var mac_input = _build_poly1305_input(aad, ciphertext)
-    var tag = poly1305_mac(poly_key, mac_input)
-
-    return ciphertext^, tag^
+    var n = len(plaintext)
+    var ct = List[UInt8](unsafe_uninit_length=n)
+    var t = chacha20_poly1305_seal_into(
+        key, nonce, Int(aad.unsafe_ptr()), len(aad), Int(plaintext.unsafe_ptr()), Int(ct.unsafe_ptr()), n
+    )
+    return ct^, _tag_list(t)
 
 
 def chacha20_poly1305_decrypt(
@@ -313,29 +394,14 @@ def chacha20_poly1305_decrypt(
     Verifies tag before returning plaintext (constant-time comparison).
     Raises Error("authentication failed") if tag does not match.
     """
-    if len(key) != 32:
-        raise Error("ChaCha20-Poly1305 key must be 32 bytes")
-    if len(nonce) != 12:
-        raise Error("ChaCha20-Poly1305 nonce must be 12 bytes")
-    # RFC 8439: a 32-bit block counter starting at 1 covers 2^38 - 64 bytes
-    if len(ciphertext) > 274877906880:
-        raise Error("ChaCha20-Poly1305: message too long for one nonce")
+    _aead_check(key, nonce, len(ciphertext))
     if len(tag) != 16:
         raise Error("ChaCha20-Poly1305 tag must be 16 bytes")
-
-    # Derive Poly1305 one-time key
-    var otk = chacha20_block(key, 0, nonce)
-    var poly_key = List[UInt8](capacity=32)
-    for i in range(32):
-        poly_key.append(otk[i])
-
-    # Recompute expected tag
-    var mac_input = _build_poly1305_input(aad, ciphertext)
-    var expected_tag = poly1305_mac(poly_key, mac_input)
-
-    # Constant-time comparison
-    if not hmac_equal(tag, expected_tag):
+    var n = len(ciphertext)
+    var pt = List[UInt8](unsafe_uninit_length=n)
+    if not chacha20_poly1305_open_into(
+        key, nonce, Int(aad.unsafe_ptr()), len(aad), Int(ciphertext.unsafe_ptr()), Int(pt.unsafe_ptr()), n,
+        Int(tag.unsafe_ptr()),
+    ):
         raise Error("authentication failed")
-
-    # Decrypt only after tag is verified
-    return chacha20_encrypt(key, nonce, 1, ciphertext)
+    return pt^

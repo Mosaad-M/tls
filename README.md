@@ -245,6 +245,20 @@ alongside (Apple M1 Pro):
 On receive, tls and Python's client now run at the same speed against this server and
 use about the same CPU time per megabyte.
 
+1.8.2 does the same for ChaCha20-Poly1305, the TLS 1.3 suite servers choose for clients
+without AES hardware. ChaCha20 computes 16 blocks per step on SIMD vectors (lane *i*
+holds block *i*, so the rounds are the scalar code on vectors: add, rotate, xor);
+Poly1305 uses 44-bit limbs with 64×64→128-bit multiplies and absorbs two blocks per
+step; the AEAD streams AAD, ciphertext and lengths into Poly1305 instead of building
+its input, and seals and opens records in place. All of it is portable Mojo with no
+intrinsics, constant time, and the same on ARM and x86. TLS 1.2 records are now built
+whole in one buffer (one copy less per `send`).
+
+| | 1.8.2 | 1.8.1 | Python (OpenSSL) |
+|---|---|---|---|
+| ChaCha20-Poly1305, 16 KiB, seal / open | 930 / 935 MB/s | 37 / 37 MB/s | |
+| `recv` loop over ChaCha20-Poly1305 | 735–746 MB/s | ~37 MB/s | 695–732 MB/s |
+
 Fixed in 1.6.0 (second review, three independent reviewers):
 - **Crash:** a certificate with an empty EC public key aborted the process; it could be
   sent by any server, or an attacker on the path, before authentication.
@@ -348,7 +362,7 @@ pixi run test-connection12  # TLS 1.2 against a local Python server
 pixi run test-socket        # TlsSocket against a local Python server
 pixi run test-interop       # handshakes against openssl s_server (also run in CI)
 pixi run bench              # primitive benchmarks
-pixi run bench-io           # TLS send/receive throughput against openssl s_server (both AES paths)
+pixi run bench-io           # TLS send/receive throughput against openssl s_server (AES-GCM paths + ChaCha20)
 pixi run test-soft-aes      # tests on the software AES-GCM path (also in CI)
 pixi run fuzz 20000 1 2     # fuzz every parser: <inputs per target> <seeds...>
 pixi run ct-check           # dudect-style timing-leak check (manual; noisy)
