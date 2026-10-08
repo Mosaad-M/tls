@@ -17,12 +17,12 @@
 # plain carry-less product reduced by x^128 + x^7 + x^2 + x + 1.
 # ============================================================================
 
+from std.bit import byte_swap
 from std.memory import bitcast
 from std.sys import get_defined_bool
 from std.sys.info import CompilationTarget
 from std.sys.intrinsics import llvm_intrinsic
 from crypto.aes import expand_key_words
-from crypto.hmac import hmac_equal
 
 comptime V16 = SIMD[DType.uint8, 16]
 comptime U64x2 = SIMD[DType.uint64, 2]
@@ -95,35 +95,49 @@ def _encrypt_block(k: _RoundKeys, block: V16) -> V16:
 
 
 @always_inline
-def _encrypt8(k: _RoundKeys, mut b: InlineArray[V16, 8]):
-    """Eight blocks with the rounds interleaved, so the AES units pipeline."""
+def _enc8_rounds[NR: Int](rk: InlineArray[V16, 15], mut b: InlineArray[V16, 8]):
+    """Eight blocks, rounds fully unrolled for NR (10 or 14): the round keys
+    stay in registers and the AES units pipeline across the blocks."""
     comptime if _HW_X86:
         var s = InlineArray[U64x2, 8](fill=U64x2(0))
         comptime for i in range(8):
-            s[i] = bitcast[DType.uint64, 2](b[i] ^ k.rk[0])
-        for r in range(1, k.nr):
-            var rk = bitcast[DType.uint64, 2](k.rk[r])
+            s[i] = bitcast[DType.uint64, 2](b[i] ^ rk[0])
+        comptime for r in range(1, NR):
             comptime for i in range(8):
-                s[i] = llvm_intrinsic["llvm.x86.aesni.aesenc", U64x2, has_side_effect=False](s[i], rk)
-        var last = bitcast[DType.uint64, 2](k.rk[k.nr])
+                s[i] = llvm_intrinsic["llvm.x86.aesni.aesenc", U64x2, has_side_effect=False](
+                    s[i], bitcast[DType.uint64, 2](rk[r])
+                )
         comptime for i in range(8):
             b[i] = bitcast[DType.uint8, 16](
-                llvm_intrinsic["llvm.x86.aesni.aesenclast", U64x2, has_side_effect=False](s[i], last)
+                llvm_intrinsic["llvm.x86.aesni.aesenclast", U64x2, has_side_effect=False](
+                    s[i], bitcast[DType.uint64, 2](rk[NR])
+                )
             )
     else:
-        for r in range(k.nr - 1):
-            var rk = k.rk[r]
+        comptime for r in range(NR - 1):
             comptime for i in range(8):
                 b[i] = llvm_intrinsic["llvm.aarch64.crypto.aesmc", V16, has_side_effect=False](
-                    llvm_intrinsic["llvm.aarch64.crypto.aese", V16, has_side_effect=False](b[i], rk)
+                    llvm_intrinsic["llvm.aarch64.crypto.aese", V16, has_side_effect=False](b[i], rk[r])
                 )
-        var pen = k.rk[k.nr - 1]
-        var last = k.rk[k.nr]
         comptime for i in range(8):
-            b[i] = llvm_intrinsic["llvm.aarch64.crypto.aese", V16, has_side_effect=False](b[i], pen) ^ last
+            b[i] = llvm_intrinsic["llvm.aarch64.crypto.aese", V16, has_side_effect=False](b[i], rk[NR - 1]) ^ rk[NR]
+
+
+@always_inline
+def _encrypt8(rk: InlineArray[V16, 15], nr: Int, mut b: InlineArray[V16, 8]):
+    if nr == 14:
+        _enc8_rounds[14](rk, b)
+    else:
+        _enc8_rounds[10](rk, b)
 
 
 # ── GF(2^128) in bit-reversed (ordinary polynomial) form ────────────────────
+#
+# Products use deferred Karatsuba: per block, three carry-less multiplies
+# into separate low / high / middle accumulators (all in vector registers;
+# the middle operand x0^x1 comes from one lane rotation, and h0^h1 is
+# precomputed per power of H), then one combine and reduction per group of
+# eight blocks multiplied by H^8..H^1.
 
 @always_inline
 def _to_field(block: V16) -> U64x2:
@@ -136,73 +150,174 @@ def _from_field(x: U64x2) -> V16:
 
 
 @always_inline
-def _mul_wide(x: U64x2, h: U64x2) -> SIMD[DType.uint64, 4]:
-    """Unreduced 256-bit product (Karatsuba: three carry-less multiplies)."""
-    var lo = _clmul(x[0], h[0])
-    var hi = _clmul(x[1], h[1])
-    var mid = _clmul(x[0] ^ x[1], h[0] ^ h[1]) ^ lo ^ hi
-    return SIMD[DType.uint64, 4](lo[0], lo[1] ^ mid[0], hi[0] ^ mid[1], hi[1])
+def _acc_mul(mut lo: U64x2, mut hi: U64x2, mut mid: U64x2, x: U64x2, h: U64x2, hk: UInt64):
+    """Accumulate x * h (unreduced): lo += x0*h0, hi += x1*h1,
+    mid += (x0^x1)*(h0^h1)."""
+    lo ^= _clmul(x[0], h[0])
+    hi ^= _clmul(x[1], h[1])
+    var t = x ^ x.rotate_left[1]()
+    mid ^= _clmul(t[0], hk)
 
 
 @always_inline
-def _reduce(w: SIMD[DType.uint64, 4]) -> U64x2:
-    """Reduce modulo x^128 + x^7 + x^2 + x + 1 (x^128 = 0x87)."""
-    var a = _clmul(w[3], 0x87)          # w3 * x^192 = w3 * x^64 * 0x87
-    var w1 = w[1] ^ a[0]
-    var w2 = w[2] ^ a[1]
-    var b = _clmul(w2, 0x87)            # w2 * x^128 = w2 * 0x87
-    return U64x2(w[0] ^ b[0], w1 ^ b[1])
+def _acc_reduce(lo: U64x2, hi: U64x2, mid: U64x2) -> U64x2:
+    """Combine the Karatsuba terms into the 256-bit product w3:w2:w1:w0 and
+    reduce modulo x^128 + x^7 + x^2 + x + 1 (x^128 = 0x87)."""
+    var m = U64x2(lo[1], hi[0]) ^ mid ^ lo ^ hi   # (w1, w2)
+    m ^= _clmul(hi[1], 0x87)                      # w3 * x^192 = w3 * x^64 * 0x87
+    var b = _clmul(m[1], 0x87)                    # w2 * x^128 = w2 * 0x87
+    return U64x2(lo[0] ^ b[0], m[0] ^ b[1])
 
 
 @always_inline
 def _gmul(x: U64x2, h: U64x2) -> U64x2:
-    return _reduce(_mul_wide(x, h))
+    var lo = U64x2(0)
+    var hi = U64x2(0)
+    var mid = U64x2(0)
+    _acc_mul(lo, hi, mid, x, h, h[0] ^ h[1])
+    return _acc_reduce(lo, hi, mid)
 
 
 # ── GCM ─────────────────────────────────────────────────────────────────────
 
 struct HwGcmKey(Copyable, Movable):
-    """An AES key prepared for hardware GCM: round keys and H, H^2, H^3, H^4."""
+    """An AES key prepared for hardware GCM: round keys and H^1..H^8 (with
+    each power's h0^h1 for Karatsuba)."""
     var k: _RoundKeys
-    var h1: U64x2
-    var h2: U64x2
-    var h3: U64x2
-    var h4: U64x2
+    var hp: InlineArray[U64x2, 8]     # hp[i] = H^(i+1)
+    var hk: InlineArray[UInt64, 8]    # hk[i] = hp[i][0] ^ hp[i][1]
 
     def __init__(out self, key: List[UInt8]) raises:
         self.k = _RoundKeys(key)
-        self.h1 = _to_field(_encrypt_block(self.k, V16(0)))
-        self.h2 = _gmul(self.h1, self.h1)
-        self.h3 = _gmul(self.h2, self.h1)
-        self.h4 = _gmul(self.h3, self.h1)
+        self.hp = InlineArray[U64x2, 8](fill=U64x2(0))
+        self.hk = InlineArray[UInt64, 8](fill=0)
+        var h = _to_field(_encrypt_block(self.k, V16(0)))
+        self.hp[0] = h
+        for i in range(1, 8):
+            self.hp[i] = _gmul(self.hp[i - 1], h)
+        for i in range(8):
+            self.hk[i] = self.hp[i][0] ^ self.hp[i][1]
 
     def __init__(out self, *, copy: Self):
         self.k = _RoundKeys(copy=copy.k)
-        self.h1 = copy.h1
-        self.h2 = copy.h2
-        self.h3 = copy.h3
-        self.h4 = copy.h4
+        self.hp = copy.hp.copy()
+        self.hk = copy.hk.copy()
+
+    @always_inline
+    def _mul1(self, x: U64x2) -> U64x2:
+        var lo = U64x2(0)
+        var hi = U64x2(0)
+        var mid = U64x2(0)
+        _acc_mul(lo, hi, mid, x, self.hp[0], self.hk[0])
+        return _acc_reduce(lo, hi, mid)
+
+    @always_inline
+    def _absorb8(self, y: U64x2, x: InlineArray[U64x2, 8]) -> U64x2:
+        """y = (y ^ x0)*H^8 ^ x1*H^7 ^ ... ^ x7*H, one reduction."""
+        var lo = U64x2(0)
+        var hi = U64x2(0)
+        var mid = U64x2(0)
+        comptime for i in range(8):
+            var xi = x[i]
+            comptime if i == 0:
+                xi ^= y
+            _acc_mul(lo, hi, mid, xi, self.hp[7 - i], self.hk[7 - i])
+        return _acc_reduce(lo, hi, mid)
 
     def _ghash(self, mut y: U64x2, p: Int, n: Int):
         """Absorb n bytes at address p (the last block zero-padded)."""
         var src = Pointer[UInt8, MutAnyOrigin](unsafe_from_address=p)
         var off = 0
-        while off + 64 <= n:
-            var x0 = _to_field((src + off).load[width=16]()) ^ y
-            var acc = _mul_wide(x0, self.h4)
-            acc ^= _mul_wide(_to_field((src + off + 16).load[width=16]()), self.h3)
-            acc ^= _mul_wide(_to_field((src + off + 32).load[width=16]()), self.h2)
-            acc ^= _mul_wide(_to_field((src + off + 48).load[width=16]()), self.h1)
-            y = _reduce(acc)
-            off += 64
+        while off + 128 <= n:
+            var lo = U64x2(0)
+            var hi = U64x2(0)
+            var mid = U64x2(0)
+            comptime for i in range(8):
+                var x = _to_field((src + off + 16 * i).load[width=16]())
+                comptime if i == 0:
+                    x ^= y
+                _acc_mul(lo, hi, mid, x, self.hp[7 - i], self.hk[7 - i])
+            y = _acc_reduce(lo, hi, mid)
+            off += 128
         while off + 16 <= n:
-            y = _gmul(y ^ _to_field((src + off).load[width=16]()), self.h1)
+            y = self._mul1(y ^ _to_field((src + off).load[width=16]()))
             off += 16
         if off < n:
             var last = V16(0)
             for i in range(n - off):
                 last[i] = src[off + i]
-            y = _gmul(y ^ _to_field(last), self.h1)
+            y = self._mul1(y ^ _to_field(last))
+
+    def _crypt[DECRYPT: Bool](self, j0: V16, mut y: U64x2, src_addr: Int, dst_addr: Int, n: Int):
+        """CTR mode and GHASH in one pass: dst = src XOR keystream (counters
+        inc32(J0), ...), and the ciphertext (src when decrypting, dst when
+        encrypting) is absorbed into y. Eight blocks per group, so the AES
+        and carry-less-multiply instructions run side by side. dst may equal
+        src: each block is read before it is written."""
+        var src = Pointer[UInt8, MutAnyOrigin](unsafe_from_address=src_addr)
+        var dst = Pointer[UInt8, MutAnyOrigin](unsafe_from_address=dst_addr)
+        var c0 = (UInt32(j0[12]) << 24) | (UInt32(j0[13]) << 16) | (UInt32(j0[14]) << 8) | UInt32(j0[15])
+        var ctr = c0 + 1
+        var off = 0
+        var ks = InlineArray[V16, 8](fill=V16(0))
+        var rk = self.k.rk.copy()   # local copy: no aliasing with dst, so kept in registers
+        var nr = self.k.nr
+        # Encrypting: the GHASH of each group depends on that group's AES
+        # output, so it is deferred one group (software pipelining) and runs
+        # while the next group's AES does. Decrypting needs no deferral.
+        var prev = InlineArray[U64x2, 8](fill=U64x2(0))
+        var have_prev = False
+        while off + 128 <= n:
+            comptime for i in range(8):
+                ks[i] = _counter_block(j0, ctr + UInt32(i))
+            _encrypt8(rk, nr, ks)
+            comptime if DECRYPT:
+                var lo = U64x2(0)
+                var hi = U64x2(0)
+                var mid = U64x2(0)
+                comptime for i in range(8):
+                    var inb = (src + off + 16 * i).load[width=16]()
+                    (dst + off + 16 * i).store(0, inb ^ ks[i])
+                    var x = _to_field(inb)
+                    comptime if i == 0:
+                        x ^= y
+                    _acc_mul(lo, hi, mid, x, self.hp[7 - i], self.hk[7 - i])
+                y = _acc_reduce(lo, hi, mid)
+            else:
+                if have_prev:
+                    y = self._absorb8(y, prev)
+                comptime for i in range(8):
+                    var outb = (src + off + 16 * i).load[width=16]() ^ ks[i]
+                    (dst + off + 16 * i).store(0, outb)
+                    prev[i] = _to_field(outb)
+                have_prev = True
+            ctr += 8
+            off += 128
+        comptime if not DECRYPT:
+            if have_prev:
+                y = self._absorb8(y, prev)
+        while off + 16 <= n:
+            var inb = (src + off).load[width=16]()
+            var outb = inb ^ _encrypt_block(self.k, _counter_block(j0, ctr))
+            (dst + off).store(0, outb)
+            comptime if DECRYPT:
+                y = self._mul1(y ^ _to_field(inb))
+            else:
+                y = self._mul1(y ^ _to_field(outb))
+            ctr += 1
+            off += 16
+        if off < n:
+            var ksb = _encrypt_block(self.k, _counter_block(j0, ctr))
+            var ct = V16(0)
+            for i in range(n - off):
+                var b = src[off + i]
+                var o = b ^ ksb[i]
+                dst[off + i] = o
+                comptime if DECRYPT:
+                    ct[i] = b
+                else:
+                    ct[i] = o
+            y = self._mul1(y ^ _to_field(ct))
 
     def _j0(self, iv: List[UInt8]) -> V16:
         var j0 = V16(0)
@@ -213,78 +328,72 @@ struct HwGcmKey(Copyable, Movable):
             return j0
         var y = U64x2(0)
         self._ghash(y, Int(iv.unsafe_ptr()), len(iv))
-        y = _gmul(y ^ _to_field(_len_block(0, len(iv))), self.h1)
+        y = self._mul1(y ^ _to_field(_len_block(0, len(iv))))
         return _from_field(y)
 
-    def _ctr(self, j0: V16, src_addr: Int, dst_addr: Int, n: Int):
-        """dst = src XOR keystream, counters inc32(J0), inc32^2(J0), ..."""
-        var src = Pointer[UInt8, MutAnyOrigin](unsafe_from_address=src_addr)
-        var dst = Pointer[UInt8, MutAnyOrigin](unsafe_from_address=dst_addr)
-        var c0 = (UInt32(j0[12]) << 24) | (UInt32(j0[13]) << 16) | (UInt32(j0[14]) << 8) | UInt32(j0[15])
-        var ctr = c0 + 1
-        var off = 0
-        var blocks = InlineArray[V16, 8](fill=V16(0))
-        while off + 128 <= n:
-            comptime for i in range(8):
-                blocks[i] = _counter_block(j0, ctr + UInt32(i))
-            _encrypt8(self.k, blocks)
-            comptime for i in range(8):
-                (dst + off + 16 * i).store(0, (src + off + 16 * i).load[width=16]() ^ blocks[i])
-            ctr += 8
-            off += 128
-        while off + 16 <= n:
-            var ks = _encrypt_block(self.k, _counter_block(j0, ctr))
-            (dst + off).store(0, (src + off).load[width=16]() ^ ks)
-            ctr += 1
-            off += 16
-        if off < n:
-            var ks = _encrypt_block(self.k, _counter_block(j0, ctr))
-            for i in range(n - off):
-                dst[off + i] = src[off + i] ^ ks[i]
-
-    def _tag(self, j0: V16, aad: List[UInt8], ct_addr: Int, ct_len: Int) -> List[UInt8]:
+    def seal_into(self, iv: List[UInt8], aad_addr: Int, aad_len: Int, src: Int, dst: Int, n: Int) -> V16:
+        """Encrypt n bytes from src to dst (may be equal); returns the tag."""
+        var j0 = self._j0(iv)
         var y = U64x2(0)
-        self._ghash(y, Int(aad.unsafe_ptr()), len(aad))
-        self._ghash(y, ct_addr, ct_len)
-        y = _gmul(y ^ _to_field(_len_block(len(aad), ct_len)), self.h1)
-        var t = _from_field(y) ^ _encrypt_block(self.k, j0)
-        var out = List[UInt8](capacity=16)
-        for i in range(16):
-            out.append(t[i])
-        return out^
+        self._ghash(y, aad_addr, aad_len)
+        self._crypt[False](j0, y, src, dst, n)
+        y = self._mul1(y ^ _to_field(_len_block(aad_len, n)))
+        return _from_field(y) ^ _encrypt_block(self.k, j0)
+
+    def open_into(
+        self, iv: List[UInt8], aad_addr: Int, aad_len: Int, src: Int, dst: Int, n: Int, tag_addr: Int
+    ) -> Bool:
+        """Decrypt n bytes from src to dst (may be equal) and check the tag in
+        constant time. On a mismatch the written plaintext is zeroed and False
+        is returned: no unauthenticated plaintext stays visible."""
+        var j0 = self._j0(iv)
+        var y = U64x2(0)
+        self._ghash(y, aad_addr, aad_len)
+        self._crypt[True](j0, y, src, dst, n)
+        y = self._mul1(y ^ _to_field(_len_block(aad_len, n)))
+        var expect = _from_field(y) ^ _encrypt_block(self.k, j0)
+        var given = Pointer[UInt8, MutAnyOrigin](unsafe_from_address=tag_addr).load[width=16]()
+        if (expect ^ given).reduce_or() == 0:
+            return True
+        var out = Pointer[UInt8, MutAnyOrigin](unsafe_from_address=dst)
+        var off = 0
+        while off + 16 <= n:
+            (out + off).store(0, V16(0))
+            off += 16
+        while off < n:
+            out[off] = 0
+            off += 1
+        return False
 
     def seal(
         self, iv: List[UInt8], plaintext: List[UInt8], aad: List[UInt8]
     ) raises -> Tuple[List[UInt8], List[UInt8]]:
-        var j0 = self._j0(iv)
         var n = len(plaintext)
         var ct = List[UInt8](unsafe_uninit_length=n)
-        self._ctr(j0, Int(plaintext.unsafe_ptr()), Int(ct.unsafe_ptr()), n)
-        var tag = self._tag(j0, aad, Int(ct.unsafe_ptr()), n)
+        var t = self.seal_into(iv, Int(aad.unsafe_ptr()), len(aad), Int(plaintext.unsafe_ptr()), Int(ct.unsafe_ptr()), n)
+        var tag = List[UInt8](capacity=16)
+        for i in range(16):
+            tag.append(t[i])
         return (ct^, tag^)
 
     def open(
         self, iv: List[UInt8], ciphertext: List[UInt8], tag: List[UInt8], aad: List[UInt8]
     ) raises -> List[UInt8]:
-        """Verify the tag (constant-time comparison) before decrypting."""
-        var j0 = self._j0(iv)
+        if len(tag) != 16:
+            raise Error("GCM tag must be 16 bytes")
         var n = len(ciphertext)
-        var expect = self._tag(j0, aad, Int(ciphertext.unsafe_ptr()), n)
-        if not hmac_equal(expect, tag):
-            raise Error("authentication failed")
         var pt = List[UInt8](unsafe_uninit_length=n)
-        self._ctr(j0, Int(ciphertext.unsafe_ptr()), Int(pt.unsafe_ptr()), n)
+        if not self.open_into(iv, Int(aad.unsafe_ptr()), len(aad), Int(ciphertext.unsafe_ptr()), Int(pt.unsafe_ptr()), n, Int(tag.unsafe_ptr())):
+            raise Error("authentication failed")
         return pt^
 
 
 @always_inline
 def _counter_block(j0: V16, ctr: UInt32) -> V16:
-    var b = j0
-    b[12] = UInt8((ctr >> 24) & 0xFF)
-    b[13] = UInt8((ctr >> 16) & 0xFF)
-    b[14] = UInt8((ctr >> 8) & 0xFF)
-    b[15] = UInt8(ctr & 0xFF)
-    return b
+    """J0 with its last 32 bits (big-endian) replaced by ctr."""
+    var w = bitcast[DType.uint32, 4](j0)
+    w[3] = byte_swap(ctr)
+    return bitcast[DType.uint8, 16](w)
 
 
 def _len_block(aad_len: Int, ct_len: Int) -> V16:
