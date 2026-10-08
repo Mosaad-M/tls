@@ -4,7 +4,7 @@
 # Run through bench/bench_tls_io.sh (pixi run bench-io), which serves a
 # 256 MiB file, runs a second s_server that discards what it receives, and
 # runs this once per AES-GCM path:
-#   bench_tls_io PORT CA_DER_HEX SINK_PORT
+#   bench_tls_io PORT CA_DER_HEX SINK_PORT CHACHA_PORT
 # ============================================================================
 
 from std.ffi import external_call
@@ -111,3 +111,14 @@ def main() raises:
         sent += s4.send(chunk)
     print("  send(16 KiB) loop, 128 MiB:     ", _rate(sent, t0), "MB/s")
     s4.close()
+
+    var s5 = _open(Int(String(args[4])), anchors)
+    n = 0
+    t0 = perf_counter_ns()
+    while n < 128 * 1024 * 1024:
+        var c = s5.recv(65536)
+        if len(c) == 0:
+            break
+        n += len(c)
+    print("  recv loop, ChaCha20-Poly1305:   ", _rate(n, t0), "MB/s")
+    s5.close()

@@ -32,6 +32,7 @@ test-review-fixes = "mojo run -I . -I tests tests/test_review_fixes.mojo"
 ct-check = "mojo run -I . -I tests bench/ct_check.mojo"
 bench-io = "bash bench/bench_tls_io.sh"
 test-aes-hw = "mojo run -I . tests/test_aes_hw.mojo"
+test-chacha-fast = "mojo run -I . -I tests tests/test_chacha_fast.mojo"
 # The software AES-GCM path (what builds without AES instructions use)
 test-soft-aes = "bash -c 'for t in test_aes_hw test_gcm test_aes test_ct_crypto test_record test_record12 test_record_eof; do echo \"== $t (TLS_SOFT_AES)\"; mojo run -D TLS_SOFT_AES=true -I . -I tests tests/$t.mojo || exit 1; done; mojo run -D TLS_SOFT_AES=true -I . -I tests tests/test_socket_io.mojo'"
 test-interop = "bash tests/interop.sh && bash tests/keyupdate_interop.sh"
@@ -76,7 +77,7 @@ test = { depends-on = [
   "test-record", "test-record-eof", "test-socket-io", "test-ffi-compat", "test-ct-crypto", "test-protocol", "test-review-fixes", "test-record12", "test-handshake",
   "test-message", "test-message12", "test-prf", "test-alert",
   "test-psk-handshake", "test-session-ticket", "test-p256-sign",
-  "test-message12-mtls", "test-rsa4096", "test-sha512-vec", "test-sha512-sigs", "test-std-compat", "test-aes-hw",
+  "test-message12-mtls", "test-rsa4096", "test-sha512-vec", "test-sha512-sigs", "test-std-compat", "test-aes-hw", "test-chacha-fast",
   "test-fuzz-regressions"
 ] }
 

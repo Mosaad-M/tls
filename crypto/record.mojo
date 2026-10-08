@@ -18,7 +18,7 @@
 # ============================================================================
 
 from crypto.gcm import gcm_encrypt, gcm_decrypt, GcmKey
-from crypto.poly1305 import chacha20_poly1305_encrypt, chacha20_poly1305_decrypt
+from crypto.poly1305 import chacha20_poly1305_seal_into, chacha20_poly1305_open_into
 from std.ffi import external_call
 
 
@@ -47,14 +47,6 @@ def _at(addr: Int, n: Int) -> List[UInt8]:
     if n > 0:
         _ = external_call["memcpy", Int](Int(out.unsafe_ptr()), addr, n)
     return out^
-
-
-def _copy_to(dst: Int, src: List[UInt8], n: Int):
-    """Copy the first n bytes of src to address dst. src is an argument, so
-    it stays alive for the whole copy (a bare Int(x.unsafe_ptr()) does not
-    keep x alive)."""
-    if n > 0:
-        _ = external_call["memcpy", Int](dst, Int(src.unsafe_ptr()), n)
 
 
 def _grow(mut out: List[UInt8], n: Int) -> Int:
@@ -170,9 +162,8 @@ struct AeadKey(Movable):
             self._ensure(cipher, key)
             self._gcm[0].seal_into(nonce, aad_addr, aad_len, src, dst, n)
         else:
-            var enc = chacha20_poly1305_encrypt(key, nonce, _at(aad_addr, aad_len), _at(src, n))
-            _copy_to(dst, enc[0], n)
-            _copy_to(dst + n, enc[1], 16)
+            var t = chacha20_poly1305_seal_into(key, nonce, aad_addr, aad_len, src, dst, n)
+            Pointer[UInt8, MutAnyOrigin](unsafe_from_address=dst + n).unsafe_store(0, t)
 
     def open_into(
         mut self, cipher: UInt8, key: List[UInt8], nonce: List[UInt8],
@@ -184,15 +175,7 @@ struct AeadKey(Movable):
         if _is_gcm(cipher):
             self._ensure(cipher, key)
             return self._gcm[0].open_into(nonce, aad_addr, aad_len, src, dst, n, tag_addr)
-        var pt: List[UInt8]
-        try:
-            pt = chacha20_poly1305_decrypt(key, nonce, _at(aad_addr, aad_len), _at(src, n), _at(tag_addr, 16))
-        except e:
-            if String(e) == "authentication failed":
-                return False
-            raise Error(String(e))
-        _copy_to(dst, pt, n)
-        return True
+        return chacha20_poly1305_open_into(key, nonce, aad_addr, aad_len, src, dst, n, tag_addr)
 
 
 # ============================================================================
@@ -350,6 +333,39 @@ def _make_aad_12(seqno: UInt64, content_type: UInt8, plaintext_len: Int) -> List
     return aad^
 
 
+def _seal_12(
+    mut ak: AeadKey, cipher: UInt8, key: List[UInt8], iv_implicit: List[UInt8],
+    seqno: UInt64, content_type: UInt8, plaintext: List[UInt8], with_header: Bool,
+) raises -> List[UInt8]:
+    """[header(5) ||] explicit_nonce(8) || ciphertext || tag(16), sealed in
+    place in one list."""
+    if len(iv_implicit) != 4:
+        raise Error("record_seal_12: iv_implicit must be 4 bytes")
+
+    if not _is_gcm(cipher):
+        raise Error("record_seal_12: only AES-GCM supported")
+
+    var n = len(plaintext)
+    var aad = _make_aad_12(seqno, content_type, n)
+    var hdr = 5 if with_header else 0
+    var out = List[UInt8](capacity=hdr + 8 + n + 16)
+    if with_header:
+        var body = 8 + n + 16
+        out.append(content_type)
+        out.append(0x03)
+        out.append(0x03)
+        out.append(UInt8((body >> 8) & 0xFF))
+        out.append(UInt8(body & 0xFF))
+    var explicit_nonce = _make_explicit_nonce(seqno)
+    _put(out, explicit_nonce, 0, 8)
+    _put(out, plaintext, 0, n)
+    _ = _grow(out, 16)
+    var base = Int(out.unsafe_ptr()) + hdr
+    ak.seal_into(cipher, key, _make_nonce_12(iv_implicit, seqno), Int(aad.unsafe_ptr()), 13, base + 8, base + 8, n)
+    _ = len(aad)  # aad is read through its address: keep it alive until here
+    return out^
+
+
 def record_seal_12_k(
     mut ak:      AeadKey,
     cipher:      UInt8,
@@ -362,26 +378,23 @@ def record_seal_12_k(
     """AEAD-encrypt a TLS 1.2 record.
 
     Returns: explicit_nonce(8) || ciphertext || tag(16)
-    The TLS record header is NOT included — caller builds the full record.
+    The TLS record header is NOT included — record_seal_12_record_k adds it.
     """
-    if len(iv_implicit) != 4:
-        raise Error("record_seal_12: iv_implicit must be 4 bytes")
+    return _seal_12(ak, cipher, key, iv_implicit, seqno, content_type, plaintext, False)
 
-    if not _is_gcm(cipher):
-        raise Error("record_seal_12: only AES-GCM supported")
 
-    # Output: explicit_nonce || ciphertext || tag, sealed in place
-    var n = len(plaintext)
-    var aad = _make_aad_12(seqno, content_type, n)
-    var out = List[UInt8](capacity=8 + n + 16)
-    var explicit_nonce = _make_explicit_nonce(seqno)
-    _put(out, explicit_nonce, 0, 8)
-    _put(out, plaintext, 0, n)
-    _ = _grow(out, 16)
-    var base = Int(out.unsafe_ptr())
-    ak.seal_into(cipher, key, _make_nonce_12(iv_implicit, seqno), Int(aad.unsafe_ptr()), 13, base + 8, base + 8, n)
-    _ = len(aad)  # aad is read through its address: keep it alive until here
-    return out^
+def record_seal_12_record_k(
+    mut ak:      AeadKey,
+    cipher:      UInt8,
+    key:         List[UInt8],
+    iv_implicit: List[UInt8],   # 4-byte implicit IV from key_block
+    seqno:       UInt64,
+    content_type: UInt8,
+    plaintext:   List[UInt8],
+) raises -> List[UInt8]:
+    """AEAD-encrypt a whole TLS 1.2 record, ready to write:
+    header(5) || explicit_nonce(8) || ciphertext || tag(16)."""
+    return _seal_12(ak, cipher, key, iv_implicit, seqno, content_type, plaintext, True)
 
 
 def record_open_12_into(

@@ -21,6 +21,7 @@
 
 from crypto.record import (
     record_seal_12, record_open_12, record_open_12_into, AeadKey,
+    record_seal_12_k, record_seal_12_record_k,
     CIPHER_AES_128_GCM, CIPHER_AES_256_GCM,
 )
 
@@ -193,6 +194,24 @@ def test_open_12_into_appends_and_fails_cleanly() raises:
             raise Error("len " + String(n) + ": bad tag accepted or out changed")
 
 
+def test_seal_12_record_is_header_plus_payload() raises:
+    """record_seal_12_record_k == header || record_seal_12_k, for every size."""
+    var key = make_bytes(0x11, 32)
+    var iv4 = make_bytes(0x22, 4)
+    var lens: List[Int] = [0, 1, 2, 255, 256, 16384]
+    for n in lens:
+        var pt = make_bytes(0x33, n)
+        var ak1 = AeadKey()
+        var ak2 = AeadKey()
+        var payload = record_seal_12_k(ak1, CIPHER_AES_256_GCM, key, iv4, UInt64(n), 0x17, pt)
+        var record = record_seal_12_record_k(ak2, CIPHER_AES_256_GCM, key, iv4, UInt64(n), 0x17, pt)
+        var want: List[UInt8] = [0x17, 0x03, 0x03, UInt8(len(payload) >> 8), UInt8(len(payload) & 0xFF)]
+        for b in payload:
+            want.append(b)
+        if not bytes_equal(record, want):
+            raise Error("len " + String(n) + ": record != header || payload")
+
+
 def main() raises:
     var passed = 0
     var failed = 0
@@ -207,6 +226,7 @@ def main() raises:
     run_test[test_open_12_tampered_tag_raises]("record_open_12 tampered tag raises", passed, failed)
     run_test[test_open_12_wrong_seqno_raises]("record_open_12 wrong seqno raises", passed, failed)
     run_test[test_open_12_into_appends_and_fails_cleanly]("record_open_12_into appends; bad tag leaves out unchanged", passed, failed)
+    run_test[test_seal_12_record_is_header_plus_payload]("record_seal_12_record_k == header || record_seal_12_k", passed, failed)
 
     print()
     print("Results:", passed, "passed,", failed, "failed")

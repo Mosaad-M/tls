@@ -17,6 +17,7 @@ from std.math import sqrt
 from crypto.aes import AES
 from crypto.gcm import gcm_encrypt
 from crypto.aes_hw import GCM_HW
+from crypto.poly1305 import chacha20_poly1305_encrypt
 from crypto.p256 import p256_ecdh, p256_public_key
 from crypto.random import csprng_bytes
 from ref_aes_table import RefAES
@@ -185,8 +186,33 @@ def _short(tail: List[UInt8]) -> List[UInt8]:
     return out^
 
 
+def check_chacha(n: Int) raises:
+    # Secret: the key (hence the Poly1305 key r, s). Fixed vs random keys.
+    var fixed_key = csprng_bytes(32)
+    var nonce = csprng_bytes(12)
+    var msg = csprng_bytes(64)
+    var aad = csprng_bytes(13)
+    var classes = _classes(n)
+    var keys = List[List[UInt8]]()
+    for i in range(n):
+        keys.append(fixed_key.copy() if classes[i] else csprng_bytes(32))
+    var a = List[Float64]()
+    var b = List[Float64]()
+    for i in range(n):
+        var t0 = perf_counter_ns()
+        _ = chacha20_poly1305_encrypt(keys[i], nonce, aad, msg)
+        var t1 = perf_counter_ns()
+        if classes[i]:
+            a.append(Float64(t1 - t0))
+        else:
+            b.append(Float64(t1 - t0))
+    print("ChaCha20-Poly1305 64 bytes, fixed vs random key (" + String(n) + " runs):")
+    _report("vectorized (1.8.2)    ", _welch_t(a, b))
+
+
 def main() raises:
     print("=== dudect-style timing check (|t| > 4.5 = timing depends on the secret) ===")
     check_aes(20000)
     check_gcm(4000)
+    check_chacha(4000)
     check_p256(300)
