@@ -172,7 +172,7 @@ def check_p256(n: Int) raises:
             b_old.append(Float64(t2 - t1))
     print("P-256 ECDH, 64-bit vs 255-bit scalar (" + String(n) + " runs):")
     _report("BigInt ladder (1.4.5)  ", _welch_t(a_old, b_old))
-    _report("constant-time (1.4.6)  ", _welch_t(a_new, b_new))
+    _report("64-bit ct (1.9.0)      ", _welch_t(a_new, b_new))
 
 
 def _short(tail: List[UInt8]) -> List[UInt8]:

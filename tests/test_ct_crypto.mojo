@@ -15,11 +15,14 @@ from crypto.random import csprng_bytes
 from ref_aes_table import RefAES
 from ref_gcm_table import ref_gcm_encrypt
 from crypto.p256 import p256_public_key, p256_ecdh, p256_ecdsa_sign, p256_ecdsa_verify
-from ref_p256_bigint import ref_p256_public_key, ref_p256_ecdh, ref_p256_ecdsa_sign
-from crypto.p384 import (
-    p384_public_key, p384_ecdh,
+from ref_p256_bigint import ref_p256_public_key, ref_p256_ecdh, ref_p256_ecdsa_sign, ref_p256_ecdsa_verify
+from crypto.p384 import p384_public_key, p384_ecdh, p384_ecdsa_verify
+from ref_p384_bigint import (
     _p384_p, _p384_gx, _p384_gy, _p384_scalar_mul_affine, _p384_to_affine,
+    ref_p384_ecdsa_verify,
 )
+import crypto.ec_ct as ct
+from std.collections import InlineArray
 from crypto.bigint import bigint_from_bytes, bigint_to_bytes
 
 
@@ -347,6 +350,128 @@ def test_p384_rejects_off_curve_peer() raises:
         raise Error("off-curve P-384 peer key accepted")
 
 
+# ── ECDSA verification: 64-bit Montgomery (ec_ct) vs the BigInt reference ──
+
+def _sign_with[N: Int](c: ct.Curve[N], d: List[UInt8], h: List[UInt8]) raises -> Tuple[List[UInt8], List[UInt8]]:
+    """A valid ECDSA signature built from ec_ct primitives (tests only:
+    random nonce, no low-s)."""
+    var om = c.order.copy()
+    while True:
+        var k = csprng_bytes(8 * N)
+        k[0] &= 0x7F
+        if not ct.scalar_in_range(k, om):
+            continue
+        var big_r = ct.to_affine(ct.scalar_mult(k, c.g, c), c.field)
+        var r = ct.reduce_once(big_r[0], om)
+        var e = ct.reduce_once(ct.limbs_from_be[N](h, 0), om)
+        var rd = ct.mont_mul(ct.to_mont(r, om), ct.to_mont(ct.limbs_from_be[N](d, 0), om), om)
+        var sum = ct.add(ct.to_mont(e, om), rd, om)
+        var s = ct.from_mont(ct.mont_mul(ct.mont_inv(ct.to_mont(ct.limbs_from_be[N](k, 0), om), om), sum, om), om)
+        if ct.is_zero(r) == 1 or ct.is_zero(s) == 1:
+            continue
+        return (ct.limbs_to_be(r), ct.limbs_to_be(s))
+
+
+def _verifies_256(pub: List[UInt8], h: List[UInt8], r: List[UInt8], s: List[UInt8]) -> Tuple[Bool, Bool]:
+    var new_ok = True
+    var ref_ok = True
+    try:
+        p256_ecdsa_verify(pub, h, r, s)
+    except:
+        new_ok = False
+    try:
+        ref_p256_ecdsa_verify(pub, h, r, s)
+    except:
+        ref_ok = False
+    return (new_ok, ref_ok)
+
+
+def _verifies_384(pub: List[UInt8], h: List[UInt8], r: List[UInt8], s: List[UInt8]) -> Tuple[Bool, Bool]:
+    var new_ok = True
+    var ref_ok = True
+    try:
+        p384_ecdsa_verify(pub, h, r, s)
+    except:
+        new_ok = False
+    try:
+        ref_p384_ecdsa_verify(pub, h, r, s)
+    except:
+        ref_ok = False
+    return (new_ok, ref_ok)
+
+
+def _bump(v: List[UInt8], i: Int) -> List[UInt8]:
+    var w = v.copy()
+    w[i] ^= 0x01
+    return w^
+
+
+def _negatives(n_hex: String, size: Int, pub: List[UInt8], h: List[UInt8], r: List[UInt8], s: List[UInt8]) -> List[List[List[UInt8]]]:
+    """(pub, hash, r, s) variants that must all be rejected."""
+    var out = List[List[List[UInt8]]]()
+    var zero = List[UInt8](length=size, fill=0)
+    var n = _from_hex(n_hex)
+    var bad_pub = pub.copy()
+    bad_pub[len(bad_pub) - 1] ^= 0x01               # off the curve
+    var inf = List[UInt8](length=len(pub), fill=0)
+    inf[0] = 0x04                                    # (0, 0): not a point
+    var big = List[UInt8](length=size + 1, fill=0xFF)  # wider than the order
+    out.append([pub.copy(), _bump(h, 0), r.copy(), s.copy()])
+    out.append([pub.copy(), h.copy(), _bump(r, size - 1), s.copy()])
+    out.append([pub.copy(), h.copy(), r.copy(), _bump(s, size - 1)])
+    out.append([pub.copy(), h.copy(), zero.copy(), s.copy()])
+    out.append([pub.copy(), h.copy(), r.copy(), zero.copy()])
+    out.append([pub.copy(), h.copy(), n.copy(), s.copy()])
+    out.append([pub.copy(), h.copy(), r.copy(), n.copy()])
+    out.append([pub.copy(), h.copy(), big.copy(), s.copy()])
+    out.append([bad_pub^, h.copy(), r.copy(), s.copy()])
+    out.append([inf^, h.copy(), r.copy(), s.copy()])
+    out.append([pub.copy(), h.copy(), s.copy(), r.copy()])  # r and s swapped
+    return out^
+
+
+def test_p256_verify_matches_reference() raises:
+    var c = ct.p256_curve()
+    var n_hex = "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551"
+    for i in range(24):
+        var d = csprng_bytes(32)
+        d[0] &= 0x7F
+        var pub = p256_public_key(d)
+        var h = csprng_bytes(32)
+        var sig = _sign_with(c, d, h)
+        var ok = _verifies_256(pub, h, sig[0], sig[1])
+        if not ok[0] or not ok[1]:
+            raise Error("valid signature #" + String(i) + " rejected: new=" + String(ok[0]) + " ref=" + String(ok[1]))
+        # also tls's own signer (low-s, deterministic nonce)
+        var own = p256_ecdsa_sign(d, h, csprng_bytes(32))
+        if not _verifies_256(pub, h, own[0], own[1])[0]:
+            raise Error("p256_ecdsa_sign output rejected #" + String(i))
+        var negs = _negatives(n_hex, 32, pub, h, sig[0], sig[1])
+        for j in range(len(negs)):
+            var v = _verifies_256(negs[j][0], negs[j][1], negs[j][2], negs[j][3])
+            if v[0] or v[1]:
+                raise Error("negative #" + String(j) + " accepted: new=" + String(v[0]) + " ref=" + String(v[1]))
+
+
+def test_p384_verify_matches_reference() raises:
+    var c = ct.p384_curve()
+    var n_hex = "ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973"
+    for i in range(8):
+        var d = csprng_bytes(48)
+        d[0] &= 0x7F
+        var pub = p384_public_key(d)
+        var h = csprng_bytes(48)
+        var sig = _sign_with(c, d, h)
+        var ok = _verifies_384(pub, h, sig[0], sig[1])
+        if not ok[0] or not ok[1]:
+            raise Error("valid signature #" + String(i) + " rejected: new=" + String(ok[0]) + " ref=" + String(ok[1]))
+        var negs = _negatives(n_hex, 48, pub, h, sig[0], sig[1])
+        for j in range(len(negs)):
+            var v = _verifies_384(negs[j][0], negs[j][1], negs[j][2], negs[j][3])
+            if v[0] or v[1]:
+                raise Error("negative #" + String(j) + " accepted: new=" + String(v[0]) + " ref=" + String(v[1]))
+
+
 def main() raises:
     var passed = 0
     var failed = 0
@@ -368,6 +493,8 @@ def main() raises:
     run_test[test_p384_nist_cdh_vector]("P-384 NIST CAVP ECC CDH vector", passed, failed)
     run_test[test_p384_ecdh_agrees]("P-384 ECDH both directions agree", passed, failed)
     run_test[test_p384_rejects_off_curve_peer]("P-384 ECDH rejects an off-curve peer key", passed, failed)
+    run_test[test_p256_verify_matches_reference]("P-256 ECDSA verify vs BigInt reference (valid + 11 negatives each)", passed, failed)
+    run_test[test_p384_verify_matches_reference]("P-384 ECDSA verify vs BigInt reference (valid + 11 negatives each)", passed, failed)
     print()
     print("Results:", passed, "passed,", failed, "failed")
     if failed > 0:
