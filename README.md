@@ -259,6 +259,34 @@ whole in one buffer (one copy less per `send`).
 | ChaCha20-Poly1305, 16 KiB, seal / open | 930 / 935 MB/s | 37 / 37 MB/s | |
 | `recv` loop over ChaCha20-Poly1305 | 735–746 MB/s | ~37 MB/s | 695–732 MB/s |
 
+1.9.0 makes connecting fast. Signature verification was nearly the whole cost of a
+handshake: RSA exponentiation reduced one bit at a time, and ECDSA ran on
+variable-length big integers. Elliptic-curve arithmetic now uses 64-bit Montgomery limbs
+(the constant-time key generation, ECDH and signing as well as verification, which adds
+Shamir's trick), and RSA uses Montgomery exponentiation on 64-bit limbs. Measured with
+`pixi run bench-handshake` (local `openssl s_server`) and `pixi run bench`:
+
+| | 1.9.0 | 1.8.2 | Python (OpenSSL) |
+|---|---|---|---|
+| handshake, ECDSA P-256 cert (TLS 1.3) | 1.1 ms | 20.0 ms | 0.94 ms |
+| handshake, RSA-2048 cert (TLS 1.3) | 1.7 ms | 38.1 ms | 1.6 ms |
+| RSA-2048 / RSA-4096 verify | 0.08 / 0.32 ms | 36.5 / 134.6 ms | |
+| P-256 ECDSA verify | 0.24 ms | 18.5 ms | |
+| P-256 key generation / ECDH / signing | 0.27–0.29 ms | 2.9–3.0 ms | |
+
+A real site needs two or three verifications (leaf, intermediate, CertificateVerify).
+Handshakes with real servers (best of 5, over the network from the same machine):
+
+| | 1.9.0 | 1.8.2 | Python (OpenSSL) |
+|---|---|---|---|
+| www.google.com | 40 ms | 220 ms | 40 ms |
+| github.com | 36 ms | 139 ms | 40 ms |
+| www.wikipedia.org | 40 ms | 285 ms | 42 ms |
+| www.debian.org | 35 ms | 457 ms | 32 ms |
+| www.apple.com | 25 ms | 123 ms | 24 ms |
+
+Connecting is now bound by network round trips, as it is for OpenSSL.
+
 Fixed in 1.6.0 (second review, three independent reviewers):
 - **Crash:** a certificate with an empty EC public key aborted the process; it could be
   sent by any server, or an attacker on the path, before authentication.
@@ -363,6 +391,7 @@ pixi run test-socket        # TlsSocket against a local Python server
 pixi run test-interop       # handshakes against openssl s_server (also run in CI)
 pixi run bench              # primitive benchmarks
 pixi run bench-io           # TLS send/receive throughput against openssl s_server (AES-GCM paths + ChaCha20)
+pixi run bench-handshake    # handshake latency against openssl s_server (ECDSA/RSA, TLS 1.3/1.2) vs Python
 pixi run test-soft-aes      # tests on the software AES-GCM path (also in CI)
 pixi run fuzz 20000 1 2     # fuzz every parser: <inputs per target> <seeds...>
 pixi run ct-check           # dudect-style timing-leak check (manual; noisy)

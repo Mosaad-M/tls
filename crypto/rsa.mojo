@@ -11,7 +11,7 @@
 # ============================================================================
 
 from crypto.bigint import (
-    BigInt, bigint_from_bytes, bigint_to_bytes, bigint_modexp, bigint_bit_len, bigint_cmp,
+    bigint_from_bytes, bigint_bit_len, bigint_cmp,
 )
 from crypto.hash import sha256, sha384, sha512
 
@@ -74,11 +74,203 @@ def _mgf1(seed: List[UInt8], length: Int, h_len: Int) -> List[UInt8]:
 # Internal: sig^e mod n → zero-padded EM bytes
 # ============================================================================
 
-def _rsa_raw(sig: List[UInt8], n: BigInt, e: BigInt, em_len: Int) -> List[UInt8]:
-    """Compute sig^e mod n and return as em_len big-endian bytes."""
-    var sig_int = bigint_from_bytes(sig)
-    var em_int  = bigint_modexp(sig_int, e, n)
-    return bigint_to_bytes(em_int, em_len)
+# ============================================================================
+# sig^e mod n: Montgomery exponentiation on 64-bit limbs
+# ============================================================================
+# Verification handles only public data, so the exponent may be scanned with
+# branches. Limbs are little-endian UInt64; products go through UInt128.
+
+comptime _MAX_RSA_LIMBS = 128  # 8192-bit moduli
+
+
+@always_inline
+def _limb(p: Pointer[UInt64, MutAnyOrigin], i: Int) -> UInt64:
+    return p[unsafe_offset=i]
+
+
+def _be_to_limbs(b: List[UInt8], k: Int) raises -> List[UInt64]:
+    """Big-endian bytes as k little-endian limbs. Leading zero bytes beyond
+    8k are ignored; a value that does not fit raises."""
+    var out = List[UInt64](length=k, fill=0)
+    var n = len(b)
+    for i in range(n):
+        var bit = 8 * (n - 1 - i)
+        if (bit >> 6) >= k:
+            if b[i] != 0:
+                raise Error("rsa: value wider than the modulus")
+            continue
+        out[bit >> 6] |= UInt64(b[i]) << UInt64(bit & 63)
+    return out^
+
+
+def _limbs_to_be(a: List[UInt64], n_bytes: Int) -> List[UInt8]:
+    var out = List[UInt8](length=n_bytes, fill=0)
+    for i in range(n_bytes):
+        var bit = 8 * (n_bytes - 1 - i)
+        if (bit >> 6) < len(a):
+            out[i] = UInt8((a[bit >> 6] >> UInt64(bit & 63)) & 0xFF)
+    return out^
+
+
+struct _MontCtx(Movable):
+    """Montgomery context for an odd k-limb modulus m, R = 2^(64k)."""
+    var k: Int
+    var m: List[UInt64]
+    var m0inv: UInt64        # -m^-1 mod 2^64
+    var t: List[UInt64]      # scratch, k + 2 limbs
+
+    def __init__(out self, m: List[UInt64]):
+        self.k = len(m)
+        self.m = m.copy()
+        # Newton: inv = m0^-1 mod 2^64 (each step doubles the correct bits)
+        var inv: UInt64 = 1
+        for _ in range(6):
+            inv *= 2 - m[0] * inv
+        self.m0inv = UInt64(0) - inv
+        self.t = List[UInt64](length=self.k + 2, fill=0)
+
+    def mul(mut self, a: List[UInt64], b: List[UInt64], mut out: List[UInt64]):
+        """out = a * b * R^-1 mod m (CIOS); a, b < m; out may alias neither."""
+        var k = self.k
+        var ap = Pointer[UInt64, MutAnyOrigin](unsafe_from_address=Int(a.unsafe_ptr()))
+        var bp = Pointer[UInt64, MutAnyOrigin](unsafe_from_address=Int(b.unsafe_ptr()))
+        var mp = Pointer[UInt64, MutAnyOrigin](unsafe_from_address=Int(self.m.unsafe_ptr()))
+        var t = Pointer[UInt64, MutAnyOrigin](unsafe_from_address=Int(self.t.unsafe_ptr()))
+        for i in range(k + 2):
+            t[unsafe_offset=i] = 0
+        for i in range(k):
+            var bi = _limb(bp, i)
+            var c: UInt64 = 0
+            for j in range(k):
+                var uv = UInt128(t[unsafe_offset=j]) + UInt128(_limb(ap, j)) * UInt128(bi) + UInt128(c)
+                t[unsafe_offset=j] = UInt64(uv)
+                c = UInt64(uv >> 64)
+            var top = UInt128(t[unsafe_offset=k]) + UInt128(c)
+            t[unsafe_offset=k] = UInt64(top)
+            t[unsafe_offset=k + 1] = UInt64(top >> 64)
+            var mq = t[unsafe_offset=0] * self.m0inv
+            var uv = UInt128(t[unsafe_offset=0]) + UInt128(mq) * UInt128(_limb(mp, 0))
+            c = UInt64(uv >> 64)
+            for j in range(1, k):
+                uv = UInt128(t[unsafe_offset=j]) + UInt128(mq) * UInt128(_limb(mp, j)) + UInt128(c)
+                t[unsafe_offset=j - 1] = UInt64(uv)
+                c = UInt64(uv >> 64)
+            var hi = UInt128(t[unsafe_offset=k]) + UInt128(c)
+            t[unsafe_offset=k - 1] = UInt64(hi)
+            t[unsafe_offset=k] = t[unsafe_offset=k + 1] + UInt64(hi >> 64)
+        # out = t - m if t >= m (t < 2m)
+        var op = Pointer[UInt64, MutAnyOrigin](unsafe_from_address=Int(out.unsafe_ptr()))
+        var borrow: UInt64 = 0
+        for j in range(k):
+            var d = UInt128(t[unsafe_offset=j]) - UInt128(_limb(mp, j)) - UInt128(borrow)
+            op[unsafe_offset=j] = UInt64(d)
+            borrow = UInt64(d >> 127)
+        if t[unsafe_offset=k] == 0 and borrow == 1:  # t < m: keep t
+            for j in range(k):
+                op[unsafe_offset=j] = t[unsafe_offset=j]
+
+    def double(mut self, mut a: List[UInt64]):
+        """a = 2a mod m (a < m)."""
+        var k = self.k
+        var carry: UInt64 = 0
+        for j in range(k):
+            var v = a[j]
+            a[j] = (v << 1) | carry
+            carry = v >> 63
+        # subtract m if 2a >= m (carry out, or a >= m)
+        var d = List[UInt64](length=k, fill=0)
+        var borrow: UInt64 = 0
+        for j in range(k):
+            var x = UInt128(a[j]) - UInt128(self.m[j]) - UInt128(borrow)
+            d[j] = UInt64(x)
+            borrow = UInt64(x >> 127)
+        if carry == 1 or borrow == 0:
+            a = d^
+
+
+def _rsa_raw(sig: List[UInt8], n_bytes: List[UInt8], e_bytes: List[UInt8], em_len: Int) raises -> List[UInt8]:
+    """sig^e mod n as em_len big-endian bytes (n odd, sig < n: checked by the
+    callers' range check and here)."""
+    var start = 0
+    while start < len(n_bytes) and n_bytes[start] == 0:
+        start += 1
+    var nb = len(n_bytes) - start
+    var k = (nb + 7) // 8
+    if k == 0:
+        raise Error("rsa: modulus is zero")
+    if k > _MAX_RSA_LIMBS:
+        raise Error("rsa: modulus too large (over 8192 bits)")
+    if n_bytes[len(n_bytes) - 1] & 1 == 0:
+        raise Error("rsa: modulus must be odd")
+    var m = _be_to_limbs(n_bytes, k)
+    var ctx = _MontCtx(m)
+
+    # R mod m: m's top bit is in limb k-1; 2^(bits-1) < m, then double up to 2^(64k)
+    var bits = 64 * (k - 1)
+    var top = m[k - 1]
+    while top != 0:
+        bits += 1
+        top >>= 1
+    var r_mod = List[UInt64](length=k, fill=0)
+    r_mod[(bits - 1) >> 6] = UInt64(1) << UInt64((bits - 1) & 63)
+    for _ in range(64 * k - (bits - 1)):
+        ctx.double(r_mod)
+    # R^2 mod m: 64k = c * 2^s; Montgomery form of 2^c is 2^c * R (c doublings
+    # of R mod m); s Montgomery squarings turn it into the form of 2^(64k) = R,
+    # i.e. R * R mod m.
+    var c = 64 * k
+    var sq = 0
+    while c % 2 == 0:
+        c //= 2
+        sq += 1
+    var r2 = r_mod.copy()
+    for _ in range(c):
+        ctx.double(r2)
+    var tmp = List[UInt64](length=k, fill=0)
+    for _ in range(sq):
+        ctx.mul(r2, r2, tmp)
+        var _sw = r2^
+        r2 = tmp^
+        tmp = _sw^
+
+    var base = _be_to_limbs(sig, k)
+    # sig < m (RFC 8017 RSAVP1 step 1)
+    var lt = False
+    for j in range(k - 1, -1, -1):
+        if base[j] != m[j]:
+            lt = base[j] < m[j]
+            break
+    if not lt:
+        raise Error("rsa: signature representative out of range")
+    var bm = List[UInt64](length=k, fill=0)
+    ctx.mul(base, r2, bm)  # Montgomery form of sig
+
+    # left-to-right square-and-multiply over the public exponent
+    var acc = r_mod.copy()   # Montgomery form of 1
+    var started = False
+    for i in range(len(e_bytes)):
+        for bit in range(7, -1, -1):
+            var set = (e_bytes[i] >> UInt8(bit)) & 1 == 1
+            if started:
+                ctx.mul(acc, acc, tmp)
+                var _sw = acc^
+                acc = tmp^
+                tmp = _sw^
+            if set:
+                if started:
+                    ctx.mul(acc, bm, tmp)
+                    var _sw = acc^
+                    acc = tmp^
+                    tmp = _sw^
+                else:
+                    acc = bm.copy()
+                    started = True
+    if not started:
+        raise Error("rsa: public exponent is zero")
+    var one = List[UInt64](length=k, fill=0)
+    one[0] = 1
+    ctx.mul(acc, one, tmp)  # out of Montgomery form
+    return _limbs_to_be(tmp, em_len)
 
 
 # ============================================================================
@@ -95,7 +287,6 @@ def rsa_pkcs1_verify(
     var hash_len = len(msg_hash)
     _check_hash_len(hash_len, "rsa_pkcs1")
     var n = bigint_from_bytes(n_bytes)
-    var e = bigint_from_bytes(e_bytes)
     var k = len(n_bytes)
     if len(sig) != k:
         raise Error("rsa_pkcs1: signature length != key length")
@@ -107,7 +298,7 @@ def rsa_pkcs1_verify(
         raise Error("rsa_pkcs1: signature representative out of range")
 
     # Recover encoded message: em = sig^e mod n, padded to k bytes
-    var em = _rsa_raw(sig, n, e, k)
+    var em = _rsa_raw(sig, n_bytes, e_bytes, k)
 
     # Verify PKCS#1 v1.5 format: 0x00 0x01 0xFF...0xFF 0x00 DigestInfo Hash
     if em[0] != 0x00 or em[1] != 0x01:
@@ -154,7 +345,6 @@ def rsa_pss_verify(
     var h_len = len(msg_hash)
     _check_hash_len(h_len, "rsa_pss")
     var n    = bigint_from_bytes(n_bytes)
-    var e    = bigint_from_bytes(e_bytes)
     var mod_bits = bigint_bit_len(n)
     var em_bits  = mod_bits - 1
     var em_len   = (em_bits + 7) // 8
@@ -169,7 +359,7 @@ def rsa_pss_verify(
 
     # Recover m = s^e mod n as k bytes. EM is its low em_len bytes; when
     # em_len < k (modBits = 1 mod 8) the dropped high byte must be zero.
-    var m_full = _rsa_raw(sig, n, e, k)
+    var m_full = _rsa_raw(sig, n_bytes, e_bytes, k)
     for i in range(k - em_len):
         if m_full[i] != 0:
             raise Error("rsa_pss: encoded message longer than emLen")

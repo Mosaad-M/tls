@@ -7,10 +7,10 @@
 #   p256_ecdsa_verify(pub, hash, r, s) → raises on invalid signature
 #   p256_ecdsa_sign(priv, hash, nonce) → (r, s)
 #
-# Secret-key operations (public key, ECDH, signing) use the constant-time
-# arithmetic in crypto/ec_ct.mojo. Verification sees only public data and
-# uses BigInt arithmetic; field elements are BigInt in [0, p-1].
-# Points use Jacobian coordinates (X:Y:Z) with Z=1 for affine input.
+# All curve arithmetic runs in crypto/ec_ct.mojo (64-bit Montgomery limbs):
+# constant time for secret scalars (public key, ECDH, signing); signature
+# verification (ct.ecdsa_verify) sees only public data. The BigInt field
+# code left here validates peer public keys for ECDH.
 # ============================================================================
 
 from crypto.bigint import (
@@ -39,48 +39,6 @@ def _p256_p() -> BigInt:
     b.append(0xFF); b.append(0xFF); b.append(0xFF); b.append(0xFF)
     b.append(0xFF); b.append(0xFF); b.append(0xFF); b.append(0xFF)
     b.append(0xFF); b.append(0xFF); b.append(0xFF); b.append(0xFF)
-    return bigint_from_bytes(b)
-
-
-def _p256_n() -> BigInt:
-    """Curve order n."""
-    var b = List[UInt8](capacity=32)
-    b.append(0xFF); b.append(0xFF); b.append(0xFF); b.append(0xFF)
-    b.append(0x00); b.append(0x00); b.append(0x00); b.append(0x00)
-    b.append(0xFF); b.append(0xFF); b.append(0xFF); b.append(0xFF)
-    b.append(0xFF); b.append(0xFF); b.append(0xFF); b.append(0xFF)
-    b.append(0xBC); b.append(0xE6); b.append(0xFA); b.append(0xAD)
-    b.append(0xA7); b.append(0x17); b.append(0x9E); b.append(0x84)
-    b.append(0xF3); b.append(0xB9); b.append(0xCA); b.append(0xC2)
-    b.append(0xFC); b.append(0x63); b.append(0x25); b.append(0x51)
-    return bigint_from_bytes(b)
-
-
-def _p256_gx() -> BigInt:
-    """Generator x-coordinate."""
-    var b = List[UInt8](capacity=32)
-    b.append(0x6B); b.append(0x17); b.append(0xD1); b.append(0xF2)
-    b.append(0xE1); b.append(0x2C); b.append(0x42); b.append(0x47)
-    b.append(0xF8); b.append(0xBC); b.append(0xE6); b.append(0xE5)
-    b.append(0x63); b.append(0xA4); b.append(0x40); b.append(0xF2)
-    b.append(0x77); b.append(0x03); b.append(0x7D); b.append(0x81)
-    b.append(0x2D); b.append(0xEB); b.append(0x33); b.append(0xA0)
-    b.append(0xF4); b.append(0xA1); b.append(0x39); b.append(0x45)
-    b.append(0xD8); b.append(0x98); b.append(0xC2); b.append(0x96)
-    return bigint_from_bytes(b)
-
-
-def _p256_gy() -> BigInt:
-    """Generator y-coordinate."""
-    var b = List[UInt8](capacity=32)
-    b.append(0x4F); b.append(0xE3); b.append(0x42); b.append(0xE2)
-    b.append(0xFE); b.append(0x1A); b.append(0x7F); b.append(0x9B)
-    b.append(0x8E); b.append(0xE7); b.append(0xEB); b.append(0x4A)
-    b.append(0x7C); b.append(0x0F); b.append(0x9E); b.append(0x16)
-    b.append(0x2B); b.append(0xCE); b.append(0x33); b.append(0x57)
-    b.append(0x6B); b.append(0x31); b.append(0x5E); b.append(0xCE)
-    b.append(0xCB); b.append(0xB6); b.append(0x40); b.append(0x68)
-    b.append(0x37); b.append(0xBF); b.append(0x51); b.append(0xF5)
     return bigint_from_bytes(b)
 
 
@@ -228,18 +186,6 @@ def _fsq(a: BigInt, p: BigInt) -> BigInt:
     return _p256_fsq_fast(a)
 
 
-def _fneg(a: BigInt, p: BigInt) -> BigInt:
-    """-a mod p."""
-    if bigint_is_zero(a):
-        return bigint_zero()
-    return bigint_sub(p, a)
-
-
-def _finv(a: BigInt, p: BigInt) raises -> BigInt:
-    """a^(-1) mod p using binary extended GCD (fast, safe for public Z coord)."""
-    return bigint_modinv(a, p)
-
-
 def _fk(a: BigInt, k: UInt64, p: BigInt) -> BigInt:
     """k*a mod p for small constant k using repeated doubling."""
     if k == 2:
@@ -262,91 +208,11 @@ def _fk(a: BigInt, k: UInt64, p: BigInt) -> BigInt:
 # Jacobian point representation
 # ============================================================================
 
-struct P256Point(Copyable, Movable):
-    var x: BigInt
-    var y: BigInt
-    var z: BigInt
-    var inf: Bool  # True = point at infinity
-
-    def __init__(out self):
-        """Construct the point at infinity."""
-        self.x = bigint_zero()
-        self.y = bigint_zero()
-        self.z = bigint_zero()
-        self.inf = True
-
-    def __copyinit__(out self, copy: Self):
-        self.x = copy.x.copy()
-        self.y = copy.y.copy()
-        self.z = copy.z.copy()
-        self.inf = copy.inf
-
-    def __moveinit__(out self, deinit take: Self):
-        self.x = take.x^
-        self.y = take.y^
-        self.z = take.z^
-        self.inf = take.inf
-
-
-def _from_affine(x: BigInt, y: BigInt) -> P256Point:
-    """Jacobian point from affine (x, y) with Z=1."""
-    var P = P256Point()
-    P.x = x.copy()
-    P.y = y.copy()
-    P.z = bigint_one()
-    P.inf = False
-    return P^
-
-
-def _to_affine(P: P256Point, p: BigInt) raises -> Tuple[BigInt, BigInt]:
-    """Convert Jacobian to affine: (X/Z^2, Y/Z^3) mod p."""
-    var zinv = _finv(P.z, p)
-    var zinv2 = _fsq(zinv.copy(), p)
-    var zinv3 = _fmul(zinv, zinv2.copy(), p)
-    var ax = _fmul(P.x, zinv2, p)
-    var ay = _fmul(P.y, zinv3, p)
-    return (ax^, ay^)
-
-
 # ============================================================================
 # Point doubling — dbl-2001-b (optimized for a = -3)
 # https://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-3.html#doubling-dbl-2001-b
 # Cost: 3M + 5S + 8add
 # ============================================================================
-
-def _pdbl(P: P256Point, p: BigInt) -> P256Point:
-    if P.inf or bigint_is_zero(P.y):
-        return P256Point()
-
-    var delta = _fsq(P.z, p)                        # delta = Z1²
-    var gamma = _fsq(P.y, p)                        # gamma = Y1²
-    var beta  = _fmul(P.x, gamma.copy(), p)         # beta  = X1·gamma
-    # alpha = 3·(X1−delta)·(X1+delta)
-    var xmd   = _fsub(P.x, delta.copy(), p)
-    var xpd   = _fadd(P.x, delta, p)
-    var alpha = _fk(_fmul(xmd, xpd, p), 3, p)
-    # X3 = alpha² − 8·beta
-    var x3    = _fsub(_fsq(alpha.copy(), p), _fk(beta.copy(), 8, p), p)
-    # Z3 = (Y1+Z1)² − gamma − delta  [delta reused below]
-    var delta2 = _fsq(P.z, p)                       # recompute to avoid borrow conflict
-    var gamma2 = gamma.copy()
-    var ypz2  = _fsq(_fadd(P.y, P.z, p), p)
-    var z3    = _fsub(_fsub(ypz2, gamma2, p), delta2, p)
-    # Y3 = alpha·(4·beta − X3) − 8·gamma²
-    var four_beta = _fk(beta, 4, p)
-    var y3    = _fsub(
-        _fmul(alpha, _fsub(four_beta, x3.copy(), p), p),
-        _fk(_fsq(gamma, p), 8, p),
-        p
-    )
-
-    var R = P256Point()
-    R.x = x3^
-    R.y = y3^
-    R.z = z3^
-    R.inf = False
-    return R^
-
 
 # ============================================================================
 # Mixed addition (Jacobian P + affine Q) — madd-2007-bl
@@ -354,159 +220,15 @@ def _pdbl(P: P256Point, p: BigInt) -> P256Point:
 # Cost: 7M + 4S + 9add  (Z2 = 1 assumed)
 # ============================================================================
 
-def _pmadd(P: P256Point, qx: BigInt, qy: BigInt, p: BigInt) -> P256Point:
-    """P + Q where Q is in affine coordinates."""
-    if P.inf:
-        return _from_affine(qx, qy)
-
-    var z1z1 = _fsq(P.z, p)                            # Z1Z1 = Z1²
-    var u2   = _fmul(qx, z1z1.copy(), p)               # U2   = X2·Z1Z1
-    var s2   = _fmul(qy, _fmul(P.z, z1z1, p), p)      # S2   = Y2·Z1·Z1Z1
-    var h    = _fsub(u2, P.x, p)                        # H    = U2 − X1
-    var hh   = _fsq(h.copy(), p)                        # HH   = H²
-    var i    = _fk(hh, 4, p)                            # I    = 4·HH
-    var j    = _fmul(h.copy(), i.copy(), p)             # J    = H·I
-    var r2   = _fk(_fsub(s2, P.y, p), 2, p)            # r    = 2·(S2 − Y1)
-    var v    = _fmul(P.x, i, p)                         # V    = X1·I
-    # X3 = r² − J − 2V
-    var x3   = _fsub(_fsub(_fsq(r2.copy(), p), j.copy(), p), _fk(v.copy(), 2, p), p)
-    # Y3 = r·(V − X3) − 2·Y1·J
-    var y3   = _fsub(
-        _fmul(r2, _fsub(v, x3.copy(), p), p),
-        _fk(_fmul(P.y, j, p), 2, p),
-        p
-    )
-    # Z3 = (Z1+H)² − Z1Z1 − HH
-    var z1z1b = _fsq(P.z, p)                            # recompute Z1Z1
-    var hhb   = _fsq(h, p)                              # recompute HH (h already moved? no, h is borrowed)
-    # Wait — h was borrowed into hh, j, z3.  Let's recompute z3:
-    # Actually h was passed as a borrow to _fsq and _fmul, so it's still valid.
-    # But we already moved h^ to j above... no, it was passed as h.copy() to j.
-    # Let me reorganize:
-    var zplusH = _fadd(P.z, h, p)  # h still valid (borrowed)
-    var z3     = _fsub(_fsub(_fsq(zplusH, p), z1z1b, p), hhb, p)
-
-    # Special case: H = 0 means same X-coordinate
-    if bigint_is_zero(h):
-        # Same X: either P = Q (double) or P = -Q (infinity)
-        if bigint_is_zero(r2):
-            return _pdbl(_from_affine(qx, qy), p)
-        else:
-            return P256Point()
-
-    var R = P256Point()
-    R.x = x3^
-    R.y = y3^
-    R.z = z3^
-    R.inf = False
-    return R^
-
-
 # ============================================================================
 # Full Jacobian addition — add-2007-bl
 # https://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-3.html#addition-add-2007-bl
 # Cost: 11M + 5S
 # ============================================================================
 
-def _padd(P: P256Point, Q: P256Point, p: BigInt) -> P256Point:
-    """Full Jacobian + Jacobian point addition."""
-    if P.inf:
-        return Q.copy()
-    if Q.inf:
-        return P.copy()
-
-    var z1z1 = _fsq(P.z, p)
-    var z2z2 = _fsq(Q.z, p)
-    var u1   = _fmul(P.x, z2z2.copy(), p)
-    var u2   = _fmul(Q.x, z1z1.copy(), p)
-    var s1   = _fmul(P.y, _fmul(Q.z, z2z2, p), p)
-    var s2   = _fmul(Q.y, _fmul(P.z, z1z1, p), p)
-    var h    = _fsub(u2, u1.copy(), p)
-    var i    = _fsq(_fk(h.copy(), 2, p), p)
-    var j    = _fmul(h.copy(), i.copy(), p)
-    var r    = _fk(_fsub(s2, s1.copy(), p), 2, p)
-    var v    = _fmul(u1, i, p)
-    var x3   = _fsub(_fsub(_fsq(r.copy(), p), j.copy(), p), _fk(v.copy(), 2, p), p)
-    var y3   = _fsub(
-        _fmul(r, _fsub(v, x3.copy(), p), p),
-        _fk(_fmul(s1, j, p), 2, p),
-        p
-    )
-    var z3   = _fmul(
-        _fsub(_fsub(_fsq(_fadd(P.z, Q.z, p), p), _fsq(P.z, p), p), _fsq(Q.z, p), p),
-        h, p
-    )
-
-    if bigint_is_zero(h):
-        if bigint_is_zero(r):
-            return _pdbl(P, p)
-        else:
-            return P256Point()
-
-    var R = P256Point()
-    R.x = x3^
-    R.y = y3^
-    R.z = z3^
-    R.inf = False
-    return R^
-
-
 # ============================================================================
 # Scalar multiplication: Montgomery ladder (constant-time structure)
 # ============================================================================
-
-def _p256_point_cswap(mut a: P256Point, mut b: P256Point, swap: Int):
-    """Conditionally swap two P-256 points in constant time (swap if swap==1)."""
-    var mask: UInt32 = ~UInt32(0) if swap == 1 else UInt32(0)
-    bigint_cswap_inplace(a.x, b.x, mask)
-    bigint_cswap_inplace(a.y, b.y, mask)
-    bigint_cswap_inplace(a.z, b.z, mask)
-    var ai = UInt32(1) if a.inf else UInt32(0)
-    var bi = UInt32(1) if b.inf else UInt32(0)
-    var t = (ai ^ bi) & mask
-    ai ^= t
-    bi ^= t
-    a.inf = (ai == 1)
-    b.inf = (bi == 1)
-
-
-def _scalar_mul_affine(scalar: BigInt, px: BigInt, py: BigInt, p: BigInt) -> P256Point:
-    """Compute scalar * P where P = (px, py) in affine coords, using Montgomery ladder."""
-    var r0 = P256Point()  # point at infinity
-    var r1 = P256Point()
-    r1.x = px.copy()
-    r1.y = py.copy()
-    r1.z = bigint_one()
-    r1.inf = False
-    var bits = bigint_bit_len(scalar)
-    if bits == 0:
-        return r0^
-    for i in range(bits - 1, -1, -1):
-        var b = Int(bigint_get_bit(scalar, i))
-        _p256_point_cswap(r0, r1, b)
-        var add_result = _padd(r0, r1, p)
-        r0 = _pdbl(r0, p)
-        r1 = add_result^
-        _p256_point_cswap(r0, r1, b)
-    return r0^
-
-
-def _scalar_mul(scalar: BigInt, P: P256Point, p: BigInt) -> P256Point:
-    """Compute scalar * P where P is in Jacobian coords, using Montgomery ladder."""
-    var r0 = P256Point()  # point at infinity
-    var r1 = P.copy()
-    var bits = bigint_bit_len(scalar)
-    if bits == 0:
-        return r0^
-    for i in range(bits - 1, -1, -1):
-        var b = Int(bigint_get_bit(scalar, i))
-        _p256_point_cswap(r0, r1, b)
-        var add_result = _padd(r0, r1, p)
-        r0 = _pdbl(r0, p)
-        r1 = add_result^
-        _p256_point_cswap(r0, r1, b)
-    return r0^
-
 
 # ============================================================================
 # Point validation
@@ -595,51 +317,7 @@ def p256_ecdsa_verify(
     sig_s:    List[UInt8],   # 32-byte s component
 ) raises:
     """Verify P-256 ECDSA signature. Raises on invalid."""
-    var p = _p256_p()
-    var n = _p256_n()
-
-    # Parse public key
-    var parsed = _parse_pub(pub_key)
-    var qx = parsed[0].copy()
-    var qy = parsed[1].copy()
-    if bigint_cmp(qx, p) >= 0 or bigint_cmp(qy, p) >= 0:
-        raise Error("p256: public key coordinate out of range")
-    if not _point_on_curve(qx.copy(), qy.copy(), p):
-        raise Error("p256: public key not on curve")
-
-    # Parse r, s
-    var r = bigint_from_bytes(sig_r)
-    var s = bigint_from_bytes(sig_s)
-    var one = bigint_one()
-    if bigint_cmp(r, one) < 0 or bigint_cmp(r, n) >= 0:
-        raise Error("p256: r out of range")
-    if bigint_cmp(s, one) < 0 or bigint_cmp(s, n) >= 0:
-        raise Error("p256: s out of range")
-
-    # e = hash interpreted as integer, reduced mod n
-    var e = bigint_mod(bigint_from_bytes(msg_hash), n)
-
-    # w = s^(-1) mod n
-    var w = bigint_modinv(s, n)
-
-    # u1 = e*w mod n, u2 = r*w mod n
-    var u1 = bigint_modmul(e, w.copy(), n)
-    var u2 = bigint_modmul(r.copy(), w, n)
-
-    # R = u1*G + u2*Q
-    var gx = _p256_gx()
-    var gy = _p256_gy()
-    var R1 = _scalar_mul_affine(u1, gx, gy, p)
-    var R2 = _scalar_mul_affine(u2, qx, qy, p)
-    var R  = _padd(R1, R2, p)
-    if R.inf:
-        raise Error("p256: ECDSA verify failed — R is infinity")
-
-    # Convert R to affine and check x mod n == r
-    var affine = _to_affine(R, p)
-    var rx = bigint_mod(affine[0], n)
-    if bigint_cmp(rx, r) != 0:
-        raise Error("p256: ECDSA signature invalid")
+    ct.ecdsa_verify(ct.p256_curve(), pub_key, msg_hash, sig_r, sig_s, "p256")
 
 
 def p256_ecdsa_sign(
@@ -678,7 +356,7 @@ def p256_ecdsa_sign(
         k_input.append(msg_hash[i])
     for i in range(32):
         k_input.append(nonce_bytes[i])
-    var k = ct.reduce_once(ct.limbs_from_be[8](hmac_sha256(private_key, k_input), 0), order)
+    var k = ct.reduce_once(ct.limbs_from_be[4](hmac_sha256(private_key, k_input), 0), order)
     if ct.is_zero(k) == 1:
         raise Error("p256_ecdsa_sign: degenerate nonce k=0; retry with different nonce_bytes")
     var k_bytes = ct.limbs_to_be(k)
@@ -690,8 +368,8 @@ def p256_ecdsa_sign(
         raise Error("p256_ecdsa_sign: degenerate r=0; retry with different nonce_bytes")
 
     # s = k^-1 * (e + r*d) mod n, in the Montgomery domain mod n
-    var e = ct.reduce_once(ct.limbs_from_be[8](msg_hash, 0), order)
-    var d = ct.limbs_from_be[8](private_key, 0)
+    var e = ct.reduce_once(ct.limbs_from_be[4](msg_hash, 0), order)
+    var d = ct.limbs_from_be[4](private_key, 0)
     var rd = ct.mont_mul(ct.to_mont(r, order), ct.to_mont(d, order), order)
     var sum = ct.add(ct.to_mont(e, order), rd, order)
     var s_m = ct.mont_mul(ct.mont_inv(ct.to_mont(k, order), order), sum, order)
@@ -701,11 +379,11 @@ def p256_ecdsa_sign(
 
     # Low-s normalization: s > (n-1)/2  =>  s = n - s, chosen by mask
     var half = order.m.copy()
-    for i in range(8):
-        var next_bit = (order.m[i + 1] & 1) << 31 if i < 7 else UInt64(0)
+    for i in range(4):
+        var next_bit = (order.m[i + 1] & 1) << 63 if i < 3 else UInt64(0)
         half[i] = (order.m[i] >> 1) | next_bit
     var high = ct.lt(half, s)
-    var neg = ct.sub(InlineArray[UInt64, 8](fill=0), s, order)  # n - s
+    var neg = ct.sub(InlineArray[UInt64, 4](fill=0), s, order)  # n - s
     s = ct.select(UInt64(0) - high, neg, s)
 
     return (ct.limbs_to_be(r), ct.limbs_to_be(s))

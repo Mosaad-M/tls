@@ -8,7 +8,7 @@
 
 from std.time import perf_counter_ns
 from crypto.curve25519 import x25519, x25519_public_key
-from crypto.p256 import p256_ecdh, p256_public_key, p256_ecdsa_sign
+from crypto.p256 import p256_ecdh, p256_public_key, p256_ecdsa_sign, p256_ecdsa_verify
 from crypto.gcm import gcm_encrypt, GcmKey
 from crypto.poly1305 import chacha20_poly1305_encrypt, chacha20_poly1305_decrypt, poly1305_mac
 from crypto.chacha20 import chacha20_encrypt
@@ -160,6 +160,15 @@ def bench_p256() raises:
     for _ in range(iters):
         _ = p256_ecdsa_sign(priv, h, nonce)
     _per_op("P-256 ECDSA sign", iters, Int(perf_counter_ns() - start))
+
+    # verification: every TLS handshake checks 2-3 signatures (1.9.0: 64-bit
+    # Montgomery field and Shamir's trick; RSA rows: pixi run bench-handshake)
+    var pub = p256_public_key(priv)
+    var sig = p256_ecdsa_sign(priv, h, nonce)
+    start = perf_counter_ns()
+    for _ in range(iters):
+        p256_ecdsa_verify(pub, h, sig[0], sig[1])
+    _per_op("P-256 ECDSA verify", iters, Int(perf_counter_ns() - start))
 
 
 def main() raises:
