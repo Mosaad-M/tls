@@ -8,7 +8,6 @@
 
 from crypto.hmac import hmac_equal
 
-from std.collections import InlineArray
 
 
 def _ref_rotl32(v: UInt32, n: Int) -> UInt32:
@@ -16,7 +15,7 @@ def _ref_rotl32(v: UInt32, n: Int) -> UInt32:
 
 
 def _ref_quarter_round(
-    mut s: InlineArray[UInt32, 16],
+    mut s: Array[UInt32, 16],
     a: Int, b: Int, c: Int, d: Int,
 ):
     s[a] = s[a] + s[b]; s[d] ^= s[a]; s[d] = _ref_rotl32(s[d], 16)
@@ -61,7 +60,7 @@ def ref_chacha20_block(
         raise Error("ChaCha20 nonce must be 12 bytes")
 
     # Build initial state
-    var s = InlineArray[UInt32, 16](fill=UInt32(0))
+    var s = Array[UInt32, 16](fill=UInt32(0))
     s[0]  = UInt32(0x61707865)  # "expa"
     s[1]  = UInt32(0x3320646e)  # "nd 3"
     s[2]  = UInt32(0x79622d32)  # "2-by"

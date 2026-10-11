@@ -22,7 +22,6 @@ from ref_p384_bigint import (
     ref_p384_ecdsa_verify,
 )
 import crypto.ec_ct as ct
-from std.collections import InlineArray
 from crypto.bigint import bigint_from_bytes, bigint_to_bytes
 
 

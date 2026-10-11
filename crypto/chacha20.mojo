@@ -19,7 +19,6 @@
 # ============================================================================
 
 from std.bit import rotate_bits_left
-from std.collections import InlineArray
 from std.ffi import external_call
 from std.math import iota
 from std.memory import bitcast
@@ -31,7 +30,7 @@ comptime _NARROW = 4  # blocks per step for the tail, so short records stay chea
 
 
 @always_inline
-def _qr[W: Int, a: Int, b: Int, c: Int, d: Int](mut x: InlineArray[SIMD[DType.uint32, W], 16]):
+def _qr[W: Int, a: Int, b: Int, c: Int, d: Int](mut x: Array[SIMD[DType.uint32, W], 16]):
     x[a] += x[b]; x[d] = rotate_bits_left[16](x[d] ^ x[a])
     x[c] += x[d]; x[b] = rotate_bits_left[12](x[b] ^ x[c])
     x[a] += x[b]; x[d] = rotate_bits_left[8](x[d] ^ x[a])
@@ -44,7 +43,7 @@ def _xor_step[W: Int](
 ):
     """dst[0:64W] = src[0:64W] ^ keystream blocks ctr .. ctr+W-1 (dst may equal src)."""
     comptime _V = SIMD[DType.uint32, W]
-    var x = InlineArray[_V, 16](fill=_V(0))
+    var x = Array[_V, 16](fill=_V(0))
     x[0] = _V(0x61707865)
     x[1] = _V(0x3320646E)
     x[2] = _V(0x79622D32)
@@ -111,7 +110,7 @@ def chacha20_xor_into(
         ctr += UInt32(_NARROW)
     if off < n:
         # last partial step: through a zeroed stack buffer
-        var buf = InlineArray[UInt8, 64 * _NARROW](fill=0)
+        var buf = Array[UInt8, 64 * _NARROW](fill=0)
         var b = Int(buf.unsafe_ptr())
         _ = external_call["memcpy", Int](b, src + off, n - off)
         _xor_step[_NARROW](k, nw, ctr, b, b)

@@ -10,7 +10,6 @@
 # authentication). No secret-dependent branches.
 # ============================================================================
 
-from std.collections import InlineArray
 
 
 @always_inline
@@ -33,7 +32,7 @@ def _sha1_maj(b: UInt32, c: UInt32, d: UInt32) -> UInt32:
     return (b & c) | (b & d) | (c & d)
 
 
-def _compress1(mut h: InlineArray[UInt32, 5], block: List[UInt8]):
+def _compress1(mut h: Array[UInt32, 5], block: List[UInt8]):
     """Run the SHA-1 compression function on one 64-byte block."""
     # Round constants
     var K0: UInt32 = 0x5A827999  # rounds  0-19
@@ -42,7 +41,7 @@ def _compress1(mut h: InlineArray[UInt32, 5], block: List[UInt8]):
     var K3: UInt32 = 0xCA62C1D6  # rounds 60-79
 
     # Build message schedule W[0..79]
-    var w = InlineArray[UInt32, 80](fill=UInt32(0))
+    var w = Array[UInt32, 80](fill=UInt32(0))
     for i in range(16):
         var j = i * 4
         w[i] = (
@@ -90,12 +89,12 @@ struct SHA1(Copyable, Movable):
         var digest = h.finalize()   # 20 bytes; h is consumed after this
     """
 
-    var _h: InlineArray[UInt32, 5]
+    var _h: Array[UInt32, 5]
     var _buf: List[UInt8]
     var _total: UInt64
 
     def __init__(out self):
-        self._h = InlineArray[UInt32, 5](fill=UInt32(0))
+        self._h = Array[UInt32, 5](fill=UInt32(0))
         self._h[0] = 0x67452301
         self._h[1] = 0xEFCDAB89
         self._h[2] = 0x98BADCFE

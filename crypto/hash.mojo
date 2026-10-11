@@ -8,7 +8,6 @@
 # No side-channel concerns: hash functions have no secret-dependent branches.
 # ============================================================================
 
-from std.collections import InlineArray
 
 
 # ============================================================================
@@ -51,10 +50,10 @@ def _sigma1_32(x: UInt32) -> UInt32:
     return _rotr32(x, 17) ^ _rotr32(x, 19) ^ (x >> 10)
 
 
-def _compress256(mut h: InlineArray[UInt32, 8], block: List[UInt8]):
+def _compress256(mut h: Array[UInt32, 8], block: List[UInt8]):
     """Run the SHA-256 compression function on one 64-byte block."""
     # Round constants: first 32 bits of fractional cube roots of first 64 primes
-    var k = InlineArray[UInt32, 64](fill=UInt32(0))
+    var k = Array[UInt32, 64](fill=UInt32(0))
     k[0]  = 0x428A2F98; k[1]  = 0x71374491; k[2]  = 0xB5C0FBCF; k[3]  = 0xE9B5DBA5
     k[4]  = 0x3956C25B; k[5]  = 0x59F111F1; k[6]  = 0x923F82A4; k[7]  = 0xAB1C5ED5
     k[8]  = 0xD807AA98; k[9]  = 0x12835B01; k[10] = 0x243185BE; k[11] = 0x550C7DC3
@@ -73,7 +72,7 @@ def _compress256(mut h: InlineArray[UInt32, 8], block: List[UInt8]):
     k[60] = 0x90BEFFFA; k[61] = 0xA4506CEB; k[62] = 0xBEF9A3F7; k[63] = 0xC67178F2
 
     # Build message schedule
-    var w = InlineArray[UInt32, 64](fill=UInt32(0))
+    var w = Array[UInt32, 64](fill=UInt32(0))
     for i in range(16):
         var j = i * 4
         w[i] = (
@@ -107,12 +106,12 @@ struct SHA256(Copyable, Movable):
         var digest = h.finalize()   # 32 bytes; h is consumed after this
     """
 
-    var _h: InlineArray[UInt32, 8]
+    var _h: Array[UInt32, 8]
     var _buf: List[UInt8]
     var _total: UInt64
 
     def __init__(out self):
-        self._h = InlineArray[UInt32, 8](fill=UInt32(0))
+        self._h = Array[UInt32, 8](fill=UInt32(0))
         self._h[0] = 0x6A09E667; self._h[1] = 0xBB67AE85
         self._h[2] = 0x3C6EF372; self._h[3] = 0xA54FF53A
         self._h[4] = 0x510E527F; self._h[5] = 0x9B05688C
@@ -233,10 +232,10 @@ def _sigma1_64(x: UInt64) -> UInt64:
     return _rotr64(x, 19) ^ _rotr64(x, 61) ^ (x >> 6)
 
 
-def _compress384(mut h: InlineArray[UInt64, 8], block: List[UInt8]):
+def _compress384(mut h: Array[UInt64, 8], block: List[UInt8]):
     """Run the SHA-384/512 compression function on one 128-byte block."""
     # Round constants: first 64 bits of fractional cube roots of first 80 primes
-    var k = InlineArray[UInt64, 80](fill=UInt64(0))
+    var k = Array[UInt64, 80](fill=UInt64(0))
     k[0]  = 0x428A2F98D728AE22; k[1]  = 0x7137449123EF65CD
     k[2]  = 0xB5C0FBCFEC4D3B2F; k[3]  = 0xE9B5DBA58189DBBC
     k[4]  = 0x3956C25BF348B538; k[5]  = 0x59F111F1B605D019
@@ -279,7 +278,7 @@ def _compress384(mut h: InlineArray[UInt64, 8], block: List[UInt8]):
     k[78] = 0x5FCB6FAB3AD6FAEC; k[79] = 0x6C44198C4A475817
 
     # Build message schedule
-    var w = InlineArray[UInt64, 80](fill=UInt64(0))
+    var w = Array[UInt64, 80](fill=UInt64(0))
     for i in range(16):
         var j = i * 8
         w[i] = (
@@ -316,12 +315,12 @@ struct SHA384(Copyable, Movable):
         var digest = h.finalize()   # 48 bytes; h is consumed after this
     """
 
-    var _h: InlineArray[UInt64, 8]
+    var _h: Array[UInt64, 8]
     var _buf: List[UInt8]
     var _total: UInt64
 
     def __init__(out self):
-        self._h = InlineArray[UInt64, 8](fill=UInt64(0))
+        self._h = Array[UInt64, 8](fill=UInt64(0))
         self._h[0] = 0xCBBB9D5DC1059ED8; self._h[1] = 0x629A292A367CD507
         self._h[2] = 0x9159015A3070DD17; self._h[3] = 0x152FECD8F70E5939
         self._h[4] = 0x67332667FFC00B31; self._h[5] = 0x8EB44A8768581511
@@ -427,14 +426,14 @@ struct SHA512(Copyable, Movable):
         var digest = h.finalize()   # 64 bytes; h is consumed after this
     """
 
-    var _h: InlineArray[UInt64, 8]
+    var _h: Array[UInt64, 8]
     var _buf: List[UInt8]
     var _total: UInt64
 
     def __init__(out self):
         # SHA-512 initial hash values (FIPS 180-4 §5.3.5)
         # Fractional parts of square roots of 9th–16th primes
-        self._h = InlineArray[UInt64, 8](fill=UInt64(0))
+        self._h = Array[UInt64, 8](fill=UInt64(0))
         self._h[0] = 0x6A09E667F3BCC908; self._h[1] = 0xBB67AE8584CAA73B
         self._h[2] = 0x3C6EF372FE94F82B; self._h[3] = 0xA54FF53A5F1D36F1
         self._h[4] = 0x510E527FADE682D1; self._h[5] = 0x9B05688C2B3E6C1F

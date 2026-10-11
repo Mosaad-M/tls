@@ -896,7 +896,7 @@ def _parse_asn1_time(content: List[UInt8], is_generalized: Bool) raises -> Int64
         raise Error("time field out of range")
 
     # Days per month (non-leap year), months 1-indexed
-    var dim = InlineArray[Int, 12](fill=0)
+    var dim = Array[Int, 12](fill=0)
     dim[0] = 31; dim[1] = 28; dim[2] = 31; dim[3] = 30
     dim[4] = 31; dim[5] = 30; dim[6] = 31; dim[7] = 31
     dim[8] = 30; dim[9] = 31; dim[10] = 30; dim[11] = 31

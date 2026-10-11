@@ -18,7 +18,6 @@
 #     produces any plaintext
 # ============================================================================
 
-from std.collections import InlineArray
 from std.memory import bitcast
 from crypto.chacha20 import chacha20_block, chacha20_xor_into
 
@@ -52,7 +51,7 @@ struct _Poly1305(Movable):
     var t1: UInt64
     var t2: UInt64
     var pad: SIMD[DType.uint64, 2]
-    var buf: InlineArray[UInt8, 16]
+    var buf: Array[UInt8, 16]
     var buf_len: Int
 
     def __init__(out self, key_addr: Int):
@@ -88,7 +87,7 @@ struct _Poly1305(Movable):
         self.t1 = q1 * (5 << 2)
         self.t2 = q2 * (5 << 2)
         self.pad = _le128(key_addr + 16)
-        self.buf = InlineArray[UInt8, 16](fill=0)
+        self.buf = Array[UInt8, 16](fill=0)
         self.buf_len = 0
 
     @always_inline

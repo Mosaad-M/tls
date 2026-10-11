@@ -53,13 +53,13 @@ def _clmul(a: UInt64, b: UInt64) -> U64x2:
 
 
 struct _RoundKeys(Copyable, Movable):
-    var rk: InlineArray[V16, 15]
+    var rk: Array[V16, 15]
     var nr: Int
 
     def __init__(out self, key: List[UInt8]) raises:
         var w = expand_key_words(key)
         self.nr = len(w) // 4 - 1
-        self.rk = InlineArray[V16, 15](fill=V16(0))
+        self.rk = Array[V16, 15](fill=V16(0))
         for r in range(self.nr + 1):
             var v = V16(0)
             for j in range(4):
@@ -95,11 +95,11 @@ def _encrypt_block(k: _RoundKeys, block: V16) -> V16:
 
 
 @always_inline
-def _enc8_rounds[NR: Int](rk: InlineArray[V16, 15], mut b: InlineArray[V16, 8]):
+def _enc8_rounds[NR: Int](rk: Array[V16, 15], mut b: Array[V16, 8]):
     """Eight blocks, rounds fully unrolled for NR (10 or 14): the round keys
     stay in registers and the AES units pipeline across the blocks."""
     comptime if _HW_X86:
-        var s = InlineArray[U64x2, 8](fill=U64x2(0))
+        var s = Array[U64x2, 8](fill=U64x2(0))
         comptime for i in range(8):
             s[i] = bitcast[DType.uint64, 2](b[i] ^ rk[0])
         comptime for r in range(1, NR):
@@ -124,7 +124,7 @@ def _enc8_rounds[NR: Int](rk: InlineArray[V16, 15], mut b: InlineArray[V16, 8]):
 
 
 @always_inline
-def _encrypt8(rk: InlineArray[V16, 15], nr: Int, mut b: InlineArray[V16, 8]):
+def _encrypt8(rk: Array[V16, 15], nr: Int, mut b: Array[V16, 8]):
     if nr == 14:
         _enc8_rounds[14](rk, b)
     else:
@@ -184,13 +184,13 @@ struct HwGcmKey(Copyable, Movable):
     """An AES key prepared for hardware GCM: round keys and H^1..H^8 (with
     each power's h0^h1 for Karatsuba)."""
     var k: _RoundKeys
-    var hp: InlineArray[U64x2, 8]     # hp[i] = H^(i+1)
-    var hk: InlineArray[UInt64, 8]    # hk[i] = hp[i][0] ^ hp[i][1]
+    var hp: Array[U64x2, 8]     # hp[i] = H^(i+1)
+    var hk: Array[UInt64, 8]    # hk[i] = hp[i][0] ^ hp[i][1]
 
     def __init__(out self, key: List[UInt8]) raises:
         self.k = _RoundKeys(key)
-        self.hp = InlineArray[U64x2, 8](fill=U64x2(0))
-        self.hk = InlineArray[UInt64, 8](fill=0)
+        self.hp = Array[U64x2, 8](fill=U64x2(0))
+        self.hk = Array[UInt64, 8](fill=0)
         var h = _to_field(_encrypt_block(self.k, V16(0)))
         self.hp[0] = h
         for i in range(1, 8):
@@ -212,7 +212,7 @@ struct HwGcmKey(Copyable, Movable):
         return _acc_reduce(lo, hi, mid)
 
     @always_inline
-    def _absorb8(self, y: U64x2, x: InlineArray[U64x2, 8]) -> U64x2:
+    def _absorb8(self, y: U64x2, x: Array[U64x2, 8]) -> U64x2:
         """y = (y ^ x0)*H^8 ^ x1*H^7 ^ ... ^ x7*H, one reduction."""
         var lo = U64x2(0)
         var hi = U64x2(0)
@@ -259,13 +259,13 @@ struct HwGcmKey(Copyable, Movable):
         var c0 = (UInt32(j0[12]) << 24) | (UInt32(j0[13]) << 16) | (UInt32(j0[14]) << 8) | UInt32(j0[15])
         var ctr = c0 + 1
         var off = 0
-        var ks = InlineArray[V16, 8](fill=V16(0))
+        var ks = Array[V16, 8](fill=V16(0))
         var rk = self.k.rk.copy()   # local copy: no aliasing with dst, so kept in registers
         var nr = self.k.nr
         # Encrypting: the GHASH of each group depends on that group's AES
         # output, so it is deferred one group (software pipelining) and runs
         # while the next group's AES does. Decrypting needs no deferral.
-        var prev = InlineArray[U64x2, 8](fill=U64x2(0))
+        var prev = Array[U64x2, 8](fill=U64x2(0))
         var have_prev = False
         while off + 128 <= n:
             comptime for i in range(8):
