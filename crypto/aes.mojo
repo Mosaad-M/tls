@@ -15,10 +15,9 @@
 # block goes to q[i]; ortho() converts between this and the plain layout.
 # ============================================================================
 
-from std.collections import InlineArray
 
 
-comptime _Q = InlineArray[UInt64, 8]
+comptime _Q = Array[UInt64, 8]
 
 
 # ============================================================================
@@ -222,7 +221,7 @@ def _interleave_in(w0: UInt32, w1: UInt32, w2: UInt32, w3: UInt32) -> Tuple[UInt
     return (x0 | (x2 << 8), x1 | (x3 << 8))
 
 
-def _interleave_out(q0: UInt64, q1: UInt64) -> InlineArray[UInt32, 4]:
+def _interleave_out(q0: UInt64, q1: UInt64) -> Array[UInt32, 4]:
     """Inverse of _interleave_in: two 64-bit words back to four block words."""
     comptime M16 = UInt64(0x0000FFFF0000FFFF)
     comptime M8 = UInt64(0x00FF00FF00FF00FF)
@@ -234,7 +233,7 @@ def _interleave_out(q0: UInt64, q1: UInt64) -> InlineArray[UInt32, 4]:
     x1 = (x1 | (x1 >> 8)) & M16
     x2 = (x2 | (x2 >> 8)) & M16
     x3 = (x3 | (x3 >> 8)) & M16
-    var w = InlineArray[UInt32, 4](fill=0)
+    var w = Array[UInt32, 4](fill=0)
     w[0] = UInt32(x0 & 0xFFFFFFFF) | UInt32(x0 >> 16)
     w[1] = UInt32(x1 & 0xFFFFFFFF) | UInt32(x1 >> 16)
     w[2] = UInt32(x2 & 0xFFFFFFFF) | UInt32(x2 >> 16)

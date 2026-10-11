@@ -19,7 +19,6 @@ from crypto.bigint import (
     bigint_mul, bigint_mod, bigint_modmul, bigint_modinv,
     bigint_bit_len, bigint_get_bit, bigint_cswap_inplace,
 )
-from std.collections import InlineArray
 from crypto.hmac import hmac_sha256
 import crypto.ec_ct as ct
 
@@ -383,7 +382,7 @@ def p256_ecdsa_sign(
         var next_bit = (order.m[i + 1] & 1) << 63 if i < 3 else UInt64(0)
         half[i] = (order.m[i] >> 1) | next_bit
     var high = ct.lt(half, s)
-    var neg = ct.sub(InlineArray[UInt64, 4](fill=0), s, order)  # n - s
+    var neg = ct.sub(Array[UInt64, 4](fill=0), s, order)  # n - s
     s = ct.select(UInt64(0) - high, neg, s)
 
     return (ct.limbs_to_be(r), ct.limbs_to_be(s))

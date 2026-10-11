@@ -20,7 +20,6 @@
 # The same field code serves the scalar field (mod n) for ECDSA signing.
 # ============================================================================
 
-from std.collections import InlineArray
 
 
 @always_inline
@@ -46,13 +45,13 @@ def _mac(t: UInt64, a: UInt64, b: UInt64, carry: UInt64) -> Tuple[UInt64, UInt64
 
 struct Modulus[N: Int](Copyable, Movable):
     """An odd modulus of 64*N bits with its Montgomery constants (R = 2^(64N))."""
-    var m: InlineArray[UInt64, Self.N]
-    var r2: InlineArray[UInt64, Self.N]   # R^2 mod m
+    var m: Array[UInt64, Self.N]
+    var r2: Array[UInt64, Self.N]   # R^2 mod m
     var m0inv: UInt64                # -m^-1 mod 2^64
 
     def __init__(out self, m: List[UInt64], r2: List[UInt64], m0inv: UInt64):
-        self.m = InlineArray[UInt64, Self.N](fill=0)
-        self.r2 = InlineArray[UInt64, Self.N](fill=0)
+        self.m = Array[UInt64, Self.N](fill=0)
+        self.r2 = Array[UInt64, Self.N](fill=0)
         for i in range(Self.N):
             self.m[i] = m[i]
             self.r2[i] = r2[i]
@@ -63,9 +62,9 @@ struct Modulus[N: Int](Copyable, Movable):
 # Conversions
 # ============================================================================
 
-def limbs_from_be[N: Int](b: List[UInt8], off: Int) -> InlineArray[UInt64, N]:
+def limbs_from_be[N: Int](b: List[UInt8], off: Int) -> Array[UInt64, N]:
     """8*N big-endian bytes at b[off:] → limbs (least significant first)."""
-    var a = InlineArray[UInt64, N](fill=0)
+    var a = Array[UInt64, N](fill=0)
     for i in range(N):
         var o = off + 8 * (N - 1 - i)
         var v: UInt64 = 0
@@ -75,7 +74,7 @@ def limbs_from_be[N: Int](b: List[UInt8], off: Int) -> InlineArray[UInt64, N]:
     return a^
 
 
-def limbs_to_be[N: Int](a: InlineArray[UInt64, N]) -> List[UInt8]:
+def limbs_to_be[N: Int](a: Array[UInt64, N]) -> List[UInt8]:
     var out = List[UInt8](capacity=8 * N)
     for i in range(N - 1, -1, -1):
         for j in range(7, -1, -1):
@@ -83,8 +82,8 @@ def limbs_to_be[N: Int](a: InlineArray[UInt64, N]) -> List[UInt8]:
     return out^
 
 
-def limbs_small[N: Int](v: UInt64) -> InlineArray[UInt64, N]:
-    var a = InlineArray[UInt64, N](fill=0)
+def limbs_small[N: Int](v: UInt64) -> Array[UInt64, N]:
+    var a = Array[UInt64, N](fill=0)
     a[0] = v
     return a^
 
@@ -106,7 +105,7 @@ def _unhex(h: String) -> List[UInt8]:
 # ============================================================================
 
 @always_inline
-def is_zero[N: Int](a: InlineArray[UInt64, N]) -> UInt64:
+def is_zero[N: Int](a: Array[UInt64, N]) -> UInt64:
     """1 if a == 0 else 0, without branching."""
     var acc: UInt64 = 0
     comptime for i in range(N):
@@ -115,7 +114,7 @@ def is_zero[N: Int](a: InlineArray[UInt64, N]) -> UInt64:
 
 
 @always_inline
-def lt[N: Int](a: InlineArray[UInt64, N], b: InlineArray[UInt64, N]) -> UInt64:
+def lt[N: Int](a: Array[UInt64, N], b: Array[UInt64, N]) -> UInt64:
     """1 if a < b else 0 (borrow of a - b), without branching."""
     var borrow: UInt64 = 0
     comptime for i in range(N):
@@ -124,16 +123,16 @@ def lt[N: Int](a: InlineArray[UInt64, N], b: InlineArray[UInt64, N]) -> UInt64:
 
 
 @always_inline
-def select[N: Int](mask: UInt64, a: InlineArray[UInt64, N], b: InlineArray[UInt64, N]) -> InlineArray[UInt64, N]:
+def select[N: Int](mask: UInt64, a: Array[UInt64, N], b: Array[UInt64, N]) -> Array[UInt64, N]:
     """a where mask is all ones, b where mask is zero."""
-    var r = InlineArray[UInt64, N](fill=0)
+    var r = Array[UInt64, N](fill=0)
     comptime for i in range(N):
         r[i] = (a[i] & mask) | (b[i] & ~mask)
     return r^
 
 
 @always_inline
-def cswap[N: Int](mut a: InlineArray[UInt64, N], mut b: InlineArray[UInt64, N], bit: UInt64):
+def cswap[N: Int](mut a: Array[UInt64, N], mut b: Array[UInt64, N], bit: UInt64):
     var mask = UInt64(0) - bit
     comptime for i in range(N):
         var t = (a[i] ^ b[i]) & mask
@@ -142,9 +141,9 @@ def cswap[N: Int](mut a: InlineArray[UInt64, N], mut b: InlineArray[UInt64, N], 
 
 
 @always_inline
-def _sub_m_if[N: Int](r: InlineArray[UInt64, N], hi: UInt64, md: Modulus[N]) -> InlineArray[UInt64, N]:
+def _sub_m_if[N: Int](r: Array[UInt64, N], hi: UInt64, md: Modulus[N]) -> Array[UInt64, N]:
     """r + hi*R, reduced by one conditional subtraction of m."""
-    var d = InlineArray[UInt64, N](fill=0)
+    var d = Array[UInt64, N](fill=0)
     var borrow: UInt64 = 0
     comptime for i in range(N):
         var sb = _sbb(r[i], md.m[i], borrow)
@@ -155,7 +154,7 @@ def _sub_m_if[N: Int](r: InlineArray[UInt64, N], hi: UInt64, md: Modulus[N]) -> 
 
 
 @always_inline
-def reduce_once[N: Int](a: InlineArray[UInt64, N], md: Modulus[N]) -> InlineArray[UInt64, N]:
+def reduce_once[N: Int](a: Array[UInt64, N], md: Modulus[N]) -> Array[UInt64, N]:
     """a mod m for a < 2m."""
     return _sub_m_if(a, 0, md)
 
@@ -165,8 +164,8 @@ def reduce_once[N: Int](a: InlineArray[UInt64, N], md: Modulus[N]) -> InlineArra
 # ============================================================================
 
 @always_inline
-def add[N: Int](a: InlineArray[UInt64, N], b: InlineArray[UInt64, N], md: Modulus[N]) -> InlineArray[UInt64, N]:
-    var r = InlineArray[UInt64, N](fill=0)
+def add[N: Int](a: Array[UInt64, N], b: Array[UInt64, N], md: Modulus[N]) -> Array[UInt64, N]:
+    var r = Array[UInt64, N](fill=0)
     var c: UInt64 = 0
     comptime for i in range(N):
         var s = _adc(a[i], b[i], c)
@@ -176,8 +175,8 @@ def add[N: Int](a: InlineArray[UInt64, N], b: InlineArray[UInt64, N], md: Modulu
 
 
 @always_inline
-def sub[N: Int](a: InlineArray[UInt64, N], b: InlineArray[UInt64, N], md: Modulus[N]) -> InlineArray[UInt64, N]:
-    var r = InlineArray[UInt64, N](fill=0)
+def sub[N: Int](a: Array[UInt64, N], b: Array[UInt64, N], md: Modulus[N]) -> Array[UInt64, N]:
+    var r = Array[UInt64, N](fill=0)
     var borrow: UInt64 = 0
     comptime for i in range(N):
         var d = _sbb(a[i], b[i], borrow)
@@ -194,9 +193,9 @@ def sub[N: Int](a: InlineArray[UInt64, N], b: InlineArray[UInt64, N], md: Modulu
 
 
 @always_inline
-def mont_mul[N: Int](a: InlineArray[UInt64, N], b: InlineArray[UInt64, N], md: Modulus[N]) -> InlineArray[UInt64, N]:
+def mont_mul[N: Int](a: Array[UInt64, N], b: Array[UInt64, N], md: Modulus[N]) -> Array[UInt64, N]:
     """a * b * R^-1 mod m (CIOS Montgomery multiplication)."""
-    var t = InlineArray[UInt64, N + 2](fill=0)
+    var t = Array[UInt64, N + 2](fill=0)
     comptime for i in range(N):
         var bi = b[i]
         var c: UInt64 = 0
@@ -218,27 +217,27 @@ def mont_mul[N: Int](a: InlineArray[UInt64, N], b: InlineArray[UInt64, N], md: M
         t[N - 1] = hi[0]
         t[N] = t[N + 1] + hi[1]
         t[N + 1] = 0
-    var r = InlineArray[UInt64, N](fill=0)
+    var r = Array[UInt64, N](fill=0)
     comptime for i in range(N):
         r[i] = t[i]
     return _sub_m_if(r, t[N], md)
 
 
 @always_inline
-def to_mont[N: Int](a: InlineArray[UInt64, N], md: Modulus[N]) -> InlineArray[UInt64, N]:
+def to_mont[N: Int](a: Array[UInt64, N], md: Modulus[N]) -> Array[UInt64, N]:
     return mont_mul(a, md.r2, md)
 
 
 @always_inline
-def from_mont[N: Int](a: InlineArray[UInt64, N], md: Modulus[N]) -> InlineArray[UInt64, N]:
+def from_mont[N: Int](a: Array[UInt64, N], md: Modulus[N]) -> Array[UInt64, N]:
     return mont_mul(a, limbs_small[N](1), md)
 
 
-def mont_one[N: Int](md: Modulus[N]) -> InlineArray[UInt64, N]:
+def mont_one[N: Int](md: Modulus[N]) -> Array[UInt64, N]:
     return to_mont(limbs_small[N](1), md)
 
 
-def mont_inv[N: Int](a: InlineArray[UInt64, N], md: Modulus[N]) -> InlineArray[UInt64, N]:
+def mont_inv[N: Int](a: Array[UInt64, N], md: Modulus[N]) -> Array[UInt64, N]:
     """a^-1 in the Montgomery domain via a^(m-2); 0 maps to 0.
 
     The exponent is public, so branching on its bits leaks nothing.
@@ -258,11 +257,11 @@ def mont_inv[N: Int](a: InlineArray[UInt64, N], md: Modulus[N]) -> InlineArray[U
 # ============================================================================
 
 struct Point[N: Int](Copyable, Movable):
-    var x: InlineArray[UInt64, Self.N]
-    var y: InlineArray[UInt64, Self.N]
-    var z: InlineArray[UInt64, Self.N]
+    var x: Array[UInt64, Self.N]
+    var y: Array[UInt64, Self.N]
+    var z: Array[UInt64, Self.N]
 
-    def __init__(out self, x: InlineArray[UInt64, Self.N], y: InlineArray[UInt64, Self.N], z: InlineArray[UInt64, Self.N]):
+    def __init__(out self, x: Array[UInt64, Self.N], y: Array[UInt64, Self.N], z: Array[UInt64, Self.N]):
         self.x = x.copy()
         self.y = y.copy()
         self.z = z.copy()
@@ -272,7 +271,7 @@ struct Curve[N: Int](Copyable, Movable):
     """A short-Weierstrass curve with a = -3 (P-256, P-384)."""
     var field: Modulus[Self.N]              # field prime p
     var order: Modulus[Self.N]              # group order n
-    var b: InlineArray[UInt64, Self.N]      # curve coefficient b, Montgomery form
+    var b: Array[UInt64, Self.N]      # curve coefficient b, Montgomery form
     var g: Point[Self.N]                    # base point, Montgomery form
 
     def __init__(out self, field: Modulus[Self.N], order: Modulus[Self.N], b_hex: String, gx_hex: String, gy_hex: String):
@@ -326,7 +325,7 @@ def p384_curve() -> Curve[6]:
     )
 
 
-def point_add[N: Int](p1: Point[N], p2: Point[N], b: InlineArray[UInt64, N], md: Modulus[N]) -> Point[N]:
+def point_add[N: Int](p1: Point[N], p2: Point[N], b: Array[UInt64, N], md: Modulus[N]) -> Point[N]:
     """Complete addition (RCB 2016 Algorithm 4, a = -3); valid for p1 == p2."""
     var t0 = mont_mul(p1.x, p2.x, md)
     var t1 = mont_mul(p1.y, p2.y, md)
@@ -374,7 +373,7 @@ def point_add[N: Int](p1: Point[N], p2: Point[N], b: InlineArray[UInt64, N], md:
     return Point[N](x3, y3, z3)
 
 
-def point_double[N: Int](p: Point[N], b: InlineArray[UInt64, N], md: Modulus[N]) -> Point[N]:
+def point_double[N: Int](p: Point[N], b: Array[UInt64, N], md: Modulus[N]) -> Point[N]:
     """Complete doubling (RCB 2016 Algorithm 6, a = -3)."""
     var t0 = mont_mul(p.x, p.x, md)
     var t1 = mont_mul(p.y, p.y, md)
@@ -421,7 +420,7 @@ def point_cswap[N: Int](mut a: Point[N], mut b: Point[N], bit: UInt64):
 
 def scalar_mult[N: Int](k: List[UInt8], p: Point[N], c: Curve[N]) -> Point[N]:
     """k * p for an 8N-byte big-endian scalar: Montgomery ladder, 64N steps."""
-    var r0 = Point[N](InlineArray[UInt64, N](fill=0), mont_one(c.field), InlineArray[UInt64, N](fill=0))
+    var r0 = Point[N](Array[UInt64, N](fill=0), mont_one(c.field), Array[UInt64, N](fill=0))
     var r1 = p.copy()
     for i in range(64 * N - 1, -1, -1):
         var bit = UInt64((k[8 * N - 1 - (i >> 3)] >> UInt8(i & 7)) & 1)
@@ -432,7 +431,7 @@ def scalar_mult[N: Int](k: List[UInt8], p: Point[N], c: Curve[N]) -> Point[N]:
     return r0^
 
 
-def to_affine[N: Int](p: Point[N], md: Modulus[N]) raises -> Tuple[InlineArray[UInt64, N], InlineArray[UInt64, N]]:
+def to_affine[N: Int](p: Point[N], md: Modulus[N]) raises -> Tuple[Array[UInt64, N], Array[UInt64, N]]:
     """(x, y) in normal form. Raises for the identity (Z == 0).
 
     The check runs on the final result, which is public (a public key, an
@@ -486,7 +485,7 @@ def ecdh_x[N: Int](private_key: List[UInt8], peer_public_key: List[UInt8], c: Cu
 # ECDSA verification (public data only: variable time is fine here)
 # ============================================================================
 
-def _scalar_bytes[N: Int](v: List[UInt8], name: String, prefix: String) raises -> InlineArray[UInt64, N]:
+def _scalar_bytes[N: Int](v: List[UInt8], name: String, prefix: String) raises -> Array[UInt64, N]:
     """A big-endian integer of any length (leading zeros allowed) as N limbs;
     raises "<prefix>: <name> out of range" if it does not fit."""
     var start = 0
@@ -502,7 +501,7 @@ def _scalar_bytes[N: Int](v: List[UInt8], name: String, prefix: String) raises -
 
 
 @always_inline
-def _bit[N: Int](a: InlineArray[UInt64, N], i: Int) -> Int:
+def _bit[N: Int](a: Array[UInt64, N], i: Int) -> Int:
     return Int((a[i >> 6] >> UInt64(i & 63)) & 1)
 
 
@@ -559,7 +558,7 @@ def ecdsa_verify[N: Int](
 
     var q = Point[N](xm, ym, mont_one(fm))
     var gq = point_add(c.g, q, c.b, fm)
-    var acc = Point[N](InlineArray[UInt64, N](fill=0), mont_one(fm), InlineArray[UInt64, N](fill=0))
+    var acc = Point[N](Array[UInt64, N](fill=0), mont_one(fm), Array[UInt64, N](fill=0))
     var top = 64 * N - 1
     while top >= 0 and _bit(u1, top) == 0 and _bit(u2, top) == 0:
         top -= 1

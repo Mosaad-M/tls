@@ -20,15 +20,14 @@
 # implementation. Documented limitation — out of scope for initial version.
 # ============================================================================
 
-from std.collections import InlineArray
 
 
 # ============================================================================
 # S-box and inverse S-box (FIPS 197 Figure 7)
 # ============================================================================
 
-def _sbox() -> InlineArray[UInt8, 256]:
-    var s = InlineArray[UInt8, 256](fill=UInt8(0))
+def _sbox() -> Array[UInt8, 256]:
+    var s = Array[UInt8, 256](fill=UInt8(0))
     s[0]=0x63;s[1]=0x7c;s[2]=0x77;s[3]=0x7b;s[4]=0xf2;s[5]=0x6b;s[6]=0x6f;s[7]=0xc5
     s[8]=0x30;s[9]=0x01;s[10]=0x67;s[11]=0x2b;s[12]=0xfe;s[13]=0xd7;s[14]=0xab;s[15]=0x76
     s[16]=0xca;s[17]=0x82;s[18]=0xc9;s[19]=0x7d;s[20]=0xfa;s[21]=0x59;s[22]=0x47;s[23]=0xf0
@@ -114,7 +113,7 @@ struct RefAES(Copyable, Movable):
     """
     var _nr: Int                        # number of rounds (10 or 14)
     var _rk: List[UInt32]              # expanded round key words
-    var _sb: InlineArray[UInt8, 256]   # S-box cached at init (avoids rebuilding per block)
+    var _sb: Array[UInt8, 256]   # S-box cached at init (avoids rebuilding per block)
 
     def __init__(out self, key: List[UInt8]) raises:
         var nk = len(key) // 4  # words in key (4 or 8)
@@ -174,7 +173,7 @@ struct RefAES(Copyable, Movable):
 
         # Load block into 4×4 state (column-major: state[col][row])
         # state[c][r] = block[r + 4*c]
-        var s = InlineArray[UInt8, 16](fill=UInt8(0))
+        var s = Array[UInt8, 16](fill=UInt8(0))
         for i in range(16):
             s[i] = block[i]
 
@@ -206,7 +205,7 @@ struct RefAES(Copyable, Movable):
 # i.e. state[4*col + row]
 # ============================================================================
 
-def _add_round_key(mut s: InlineArray[UInt8, 16], rk: List[UInt32], rnd: Int):
+def _add_round_key(mut s: Array[UInt8, 16], rk: List[UInt32], rnd: Int):
     """XOR state with round key words."""
     for col in range(4):
         var w = rk[rnd * 4 + col]
@@ -216,13 +215,13 @@ def _add_round_key(mut s: InlineArray[UInt8, 16], rk: List[UInt32], rnd: Int):
         s[col * 4 + 3] ^= UInt8(w & 0xFF)
 
 
-def _sub_bytes(mut s: InlineArray[UInt8, 16], sbox: InlineArray[UInt8, 256]):
+def _sub_bytes(mut s: Array[UInt8, 16], sbox: Array[UInt8, 256]):
     """Apply S-box substitution to each byte."""
     for i in range(16):
         s[i] = sbox[Int(s[i])]
 
 
-def _shift_rows(mut s: InlineArray[UInt8, 16]):
+def _shift_rows(mut s: Array[UInt8, 16]):
     """Cyclically shift rows left: row 0 by 0, row 1 by 1, row 2 by 2, row 3 by 3.
 
     State is column-major: s[4*col + row].
@@ -251,7 +250,7 @@ def _shift_rows(mut s: InlineArray[UInt8, 16]):
     s[0 * 4 + 3] = t2
 
 
-def _mix_columns(mut s: InlineArray[UInt8, 16]):
+def _mix_columns(mut s: Array[UInt8, 16]):
     """Mix each column using GF(2^8) arithmetic (FIPS 197 §5.1.3).
 
     Uses _xtime (single shift+XOR) instead of _gmul for speed:

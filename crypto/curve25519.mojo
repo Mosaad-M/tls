@@ -10,17 +10,16 @@
 # Scalar multiply: constant-time Montgomery ladder
 # ============================================================================
 
-from std.collections import InlineArray
 
 # ============================================================================
 # Field element
 # ============================================================================
 
 struct Fe(Copyable, Movable):
-    var v: InlineArray[UInt64, 5]
+    var v: Array[UInt64, 5]
 
     def __init__(out self):
-        self.v = InlineArray[UInt64, 5](fill=UInt64(0))
+        self.v = Array[UInt64, 5](fill=UInt64(0))
 
     def __copyinit__(out self, copy: Self):
         self.v = copy.v.copy()
