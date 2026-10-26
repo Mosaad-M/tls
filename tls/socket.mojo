@@ -139,7 +139,7 @@ def load_system_ca_bundle() raises -> List[X509Cert]:
         raise Error("load_system_ca_bundle: cannot open " + path)
     # Not validated as UTF-8 (read() would be): only the ASCII PEM blocks
     # matter, and a stray byte in a comment must not lose the whole bundle
-    var content = String(unsafe_from_utf8=raw^)
+    var content = String(unsafe_from_utf8=raw)
 
     # Decode all PEM CERTIFICATE blocks
     var ders = pem_decode(content, "CERTIFICATE")

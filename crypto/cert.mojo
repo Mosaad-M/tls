@@ -616,7 +616,7 @@ def _tbs_children(tbs_raw: List[UInt8]) raises -> List[DerElem]:
 def _bytes_to_string(b: List[UInt8]) -> String:
     """Convert byte list to String (assumes valid UTF-8)."""
     var copy = b.copy()
-    return String(unsafe_from_utf8=copy^)
+    return String(unsafe_from_utf8=copy)
 
 
 def _bytes_lower_eq(a: List[UInt8], b: List[UInt8]) -> Bool:

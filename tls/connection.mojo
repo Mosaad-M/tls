@@ -9,7 +9,7 @@
 # ============================================================================
 
 from std.ffi import external_call, get_errno
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.sys.info import CompilationTarget
 from crypto.hash import SHA256, SHA384, sha256, sha384, sha512
 from crypto.handshake import (
@@ -148,7 +148,7 @@ def tls_prepare_fd(fd: Int32):
     """Stop writes to a closed peer from raising SIGPIPE (macOS: SO_NOSIGPIPE;
     Linux uses MSG_NOSIGNAL on each send). Harmless on non-sockets."""
     comptime if CompilationTarget.is_macos():
-        var one = alloc[Int32](1)
+        var one = unsafe_alloc[Int32](1)
         one[] = 1
         _ = external_call["setsockopt", Int32](
             fd, _SOL_SOCKET, _SO_NOSIGPIPE, Int(one), Int32(4)
@@ -160,7 +160,7 @@ def tls_set_timeout(fd: Int32, seconds: Int) raises:
     """Set SO_RCVTIMEO and SO_SNDTIMEO (whole seconds; 0 = no timeout)."""
     if seconds < 0:
         raise Error("tls: timeout must be >= 0 seconds")
-    var tv = alloc[UInt8](16)  # struct timeval { tv_sec (8), tv_usec (8 incl. padding) }
+    var tv = unsafe_alloc[UInt8](16)  # struct timeval { tv_sec (8), tv_usec (8 incl. padding) }
     for i in range(16):
         tv[unsafe_offset=i] = 0
     tv.unsafe_bitcast[Int]()[unsafe_offset=0] = seconds
@@ -795,8 +795,8 @@ def _tls13_handshake_impl(
     th384.update(ch_msg)
 
     # ── Step 3: Read ServerHello (plaintext record) ───────────────────────────
-    var sh_rec_type: UInt8 = 0
-    var sh_rec_body = List[UInt8]()
+    var sh_rec_type: UInt8
+    var sh_rec_body: List[UInt8]
 
     # Skip any CCS that may arrive before ServerHello
     while True:

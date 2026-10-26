@@ -8,7 +8,7 @@
 # ============================================================================
 
 from std.ffi import external_call
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.sys import argv
 from std.time import perf_counter_ns
 from crypto.aes_hw import GCM_HW
@@ -20,7 +20,7 @@ def _tcp_connect(port: Int) raises -> Int32:
     var fd = external_call["socket", Int32](Int32(2), Int32(1), Int32(0))
     if fd < 0:
         raise Error("socket() failed")
-    var addr = alloc[UInt8](16)
+    var addr = unsafe_alloc[UInt8](16)
     for i in range(16):
         addr[unsafe_offset=i] = 0
     addr[unsafe_offset=0] = 2

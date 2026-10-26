@@ -28,8 +28,8 @@ mojo build app.mojo $(cat .mojo_flags)
 
 Or clone the repository and build with `-I path/to/tls`.
 
-**Requirements:** Mojo >= 1.0.0, on linux-64 or osx-arm64. CI runs the tests on Mojo 1.0.0
-and on the newest Mojo release (1.1.0 as of tls 1.9.1).
+**Requirements:** Mojo >= 1.2.0, on linux-64 or osx-arm64. CI runs the tests on Mojo 1.2.0
+and on the newest Mojo release. For Mojo 1.0 / 1.1, use tls 1.9.1.
 
 **Using tls with other code.** A Mojo program may declare each C function with
 only one signature. Since 1.7.0, tls declares none of the C functions that Mojo's

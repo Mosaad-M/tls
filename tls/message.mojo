@@ -268,7 +268,7 @@ def validate_encrypted_extensions(
                 for q in range(name_len):
                     if name[q] < 0x20 or name[q] > 0x7E:
                         raise Error("tls: non-printable ALPN protocol name")
-                alpn = String(unsafe_from_utf8=name^)
+                alpn = String(unsafe_from_utf8=name)
         else:
             raise Error(
                 "tls: extension " + String(Int(ext_type))

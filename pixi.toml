@@ -84,5 +84,5 @@ test = { depends-on = [
 ] }
 
 [dependencies]
-mojo = ">=1.0.0"
+mojo = ">=1.2.0"
 openssl = ">=3.0"  # tests/interop.sh and keyupdate_interop.sh (openssl s_server)

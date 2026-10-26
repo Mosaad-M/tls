@@ -167,7 +167,7 @@ def test_open_12_wrong_seqno_raises() raises:
 
 
 def test_open_12_into_appends_and_fails_cleanly() raises:
-    """record_open_12_into appends after existing bytes; a bad tag leaves
+    """Check record_open_12_into appends after existing bytes; a bad tag leaves
     the list exactly as it was."""
     var key  = make_bytes(0x01, 32)
     var iv4  = make_bytes(0x02, 4)
@@ -195,7 +195,7 @@ def test_open_12_into_appends_and_fails_cleanly() raises:
 
 
 def test_seal_12_record_is_header_plus_payload() raises:
-    """record_seal_12_record_k == header || record_seal_12_k, for every size."""
+    """Check record_seal_12_record_k == header || record_seal_12_k, for every size."""
     var key = make_bytes(0x11, 32)
     var iv4 = make_bytes(0x22, 4)
     var lens: List[Int] = [0, 1, 2, 255, 256, 16384]

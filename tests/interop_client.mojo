@@ -9,7 +9,7 @@
 # ============================================================================
 
 from std.ffi import external_call
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.sys import argv
 from std.time import perf_counter_ns
 from crypto.cert import X509Cert, cert_parse
@@ -20,7 +20,7 @@ def _tcp_connect(port: Int) raises -> Int32:
     var fd = external_call["socket", Int32](Int32(2), Int32(1), Int32(0))
     if fd < 0:
         raise Error("socket() failed")
-    var addr = alloc[UInt8](16)
+    var addr = unsafe_alloc[UInt8](16)
     for i in range(16):
         addr[unsafe_offset=i] = 0
     addr[unsafe_offset=0] = 2
@@ -126,5 +126,5 @@ def main() raises:
         b.append(c)
     _ = tls.send(b)
     var page = tls.recv_all(allow_truncation=True)
-    print(String(unsafe_from_utf8=page^))
+    print(String(unsafe_from_utf8=page))
     tls.close()

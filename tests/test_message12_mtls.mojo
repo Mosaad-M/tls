@@ -47,7 +47,7 @@ def bytes_to_hex(b: List[UInt8]) -> String:
         var byte = Int(b[i])
         result.append(digits[(byte >> 4) & 0xF])
         result.append(digits[byte & 0xF])
-    return String(unsafe_from_utf8=result^)
+    return String(unsafe_from_utf8=result)
 
 
 def assert_eq(actual: Int, expected: Int, label: String) raises:

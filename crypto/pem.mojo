@@ -95,4 +95,4 @@ def _strip_whitespace(data: List[UInt8]) -> String:
         var b = data[i]
         if b != 10 and b != 13 and b != 32 and b != 9:
             out.append(b)
-    return String(unsafe_from_utf8=out^)
+    return String(unsafe_from_utf8=out)

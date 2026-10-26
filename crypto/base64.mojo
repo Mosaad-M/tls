@@ -45,7 +45,7 @@ def base64_encode(data: List[UInt8]) -> String:
         out.append(table[Int((b1 << 2) & 0x3F)])
         out.append(UInt8(61))  # '='
 
-    return String(unsafe_from_utf8=out^)
+    return String(unsafe_from_utf8=out)
 
 
 def _b64_decode_char(c: UInt8) raises -> UInt8:
