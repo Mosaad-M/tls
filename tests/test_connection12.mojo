@@ -6,7 +6,7 @@
 # ============================================================================
 
 from std.ffi import external_call
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from crypto.cert import X509Cert, cert_parse
 from tls.connection12 import tls12_client_handshake, TlsKeys12
 from tls.socket import TlsSocket
@@ -40,7 +40,7 @@ def _tcp_connect(port: Int) raises -> Int32:
     var fd = external_call["socket", Int32](AF_INET, SOCK_STREAM, Int32(0))
     if fd < 0:
         raise Error("socket() failed")
-    var addr = alloc[UInt8](16)
+    var addr = unsafe_alloc[UInt8](16)
     for i in range(16):
         addr[unsafe_offset=i] = 0
     addr[unsafe_offset=0] = 2

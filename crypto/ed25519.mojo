@@ -197,7 +197,6 @@ def _fe_pow_p58(z: Fe) -> Fe:
     t2 = fe_sq(t2.copy()); t2 = fe_sq(t2.copy()); t2 = fe_sq(t2.copy())
     t2 = fe_sq(t2.copy()); t2 = fe_sq(t2.copy())
     t2 = fe_mul(t2, z2_20_0)
-    var z2_40_0 = t2.copy()
 
     t2 = fe_sq(t2.copy()); t2 = fe_sq(t2.copy()); t2 = fe_sq(t2.copy())
     t2 = fe_sq(t2.copy()); t2 = fe_sq(t2.copy())
@@ -504,27 +503,21 @@ def _scalar_reduce(s: List[UInt8]) -> List[UInt8]:
     # Phase 2: Fold s18..s12 into s6..s0 (s18 may be non-zero after extended carry)
     s6  += s18 * Int64(666643); s7  += s18 * Int64(470296); s8  += s18 * Int64(654183)
     s9  -= s18 * Int64(997805); s10 += s18 * Int64(136657); s11 -= s18 * Int64(683901)
-    s18 = 0
 
     s5  += s17 * Int64(666643); s6  += s17 * Int64(470296); s7  += s17 * Int64(654183)
     s8  -= s17 * Int64(997805); s9  += s17 * Int64(136657); s10 -= s17 * Int64(683901)
-    s17 = 0
 
     s4  += s16 * Int64(666643); s5  += s16 * Int64(470296); s6  += s16 * Int64(654183)
     s7  -= s16 * Int64(997805); s8  += s16 * Int64(136657); s9  -= s16 * Int64(683901)
-    s16 = 0
 
     s3  += s15 * Int64(666643); s4  += s15 * Int64(470296); s5  += s15 * Int64(654183)
     s6  -= s15 * Int64(997805); s7  += s15 * Int64(136657); s8  -= s15 * Int64(683901)
-    s15 = 0
 
     s2  += s14 * Int64(666643); s3  += s14 * Int64(470296); s4  += s14 * Int64(654183)
     s5  -= s14 * Int64(997805); s6  += s14 * Int64(136657); s7  -= s14 * Int64(683901)
-    s14 = 0
 
     s1  += s13 * Int64(666643); s2  += s13 * Int64(470296); s3  += s13 * Int64(654183)
     s4  -= s13 * Int64(997805); s5  += s13 * Int64(136657); s6  -= s13 * Int64(683901)
-    s13 = 0
 
     s0  += s12 * Int64(666643); s1  += s12 * Int64(470296); s2  += s12 * Int64(654183)
     s3  -= s12 * Int64(997805); s4  += s12 * Int64(136657); s5  -= s12 * Int64(683901)
@@ -566,7 +559,6 @@ def _scalar_reduce(s: List[UInt8]) -> List[UInt8]:
     # Phase 4: Second fold s12, floor carry s0..s10 (final canonical)
     s0  += s12 * Int64(666643); s1  += s12 * Int64(470296); s2  += s12 * Int64(654183)
     s3  -= s12 * Int64(997805); s4  += s12 * Int64(136657); s5  -= s12 * Int64(683901)
-    s12 = 0
 
     carry0  = s0  >> 21; s1  += carry0;  s0  -= carry0  << 21
     carry1  = s1  >> 21; s2  += carry1;  s1  -= carry1  << 21

@@ -8,7 +8,7 @@
 # ============================================================================
 
 from std.ffi import external_call
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.sys.info import CompilationTarget
 
 comptime _SHUT_WR: Int32 = 1
@@ -23,7 +23,7 @@ struct Pair(Movable):
     var peer: Int32
 
     def __init__(out self) raises:
-        var fds = alloc[Int32](2)
+        var fds = unsafe_alloc[Int32](2)
         # AF_UNIX = 1, SOCK_STREAM = 1 on Linux and macOS
         var rc = external_call["socketpair", Int32](Int32(1), Int32(1), Int32(0), fds)
         if rc != 0:
@@ -36,7 +36,7 @@ struct Pair(Movable):
     def grow_buffers(self, n: Int):
         """Ask for n-byte socket buffers so a test can write n bytes before
         reading (macOS defaults to ~8 KB; Linux caps at net.core.wmem_max)."""
-        var v = alloc[Int32](1)
+        var v = unsafe_alloc[Int32](1)
         v[unsafe_offset=0] = Int32(n)
         for fd in [self.mine, self.peer]:
             _ = external_call["setsockopt", Int32](fd, _SOL_SOCKET, _SO_SNDBUF, Int(v), Int32(4))
@@ -57,7 +57,7 @@ def send_all(fd: Int32, data: List[UInt8]) raises:
     var n = len(data)
     if n == 0:
         return
-    var buf = alloc[UInt8](n)
+    var buf = unsafe_alloc[UInt8](n)
     for i in range(n):
         buf[unsafe_offset=i] = data[i]
     var total = 0
@@ -72,7 +72,7 @@ def send_all(fd: Int32, data: List[UInt8]) raises:
 
 def recv_some(fd: Int32, max_bytes: Int) raises -> List[UInt8]:
     """Up to max_bytes; empty at end of stream."""
-    var buf = alloc[UInt8](max_bytes)
+    var buf = unsafe_alloc[UInt8](max_bytes)
     var got = external_call["recv", Int](fd, Int(buf), max_bytes, Int32(0))
     if got < 0:
         buf.unsafe_free()

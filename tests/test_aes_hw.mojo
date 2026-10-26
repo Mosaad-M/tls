@@ -138,7 +138,7 @@ def _check_into(n: Int, aad_len: Int, key_len: Int) raises:
 
 
 def test_into_inplace_and_failure() raises:
-    """seal_into/open_into in place at every 128-byte group boundary and
+    """Check seal_into/open_into in place at every 128-byte group boundary and
     every AAD length 0..64; a failed open zeroes its output."""
     var lens: List[Int] = [0, 1, 15, 16, 17, 127, 128, 129, 255, 256, 257, 1023, 1024, 1025, 16383, 16384, 16385]
     for n in lens:

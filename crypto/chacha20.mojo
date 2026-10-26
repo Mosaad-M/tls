@@ -22,7 +22,7 @@ from std.bit import rotate_bits_left
 from std.ffi import external_call
 from std.math import iota
 from std.memory import bitcast
-from std.sys.info import is_little_endian
+from std.sys.info import Endian
 
 
 comptime _WIDE = 16   # blocks per step for bulk data (fastest on M1: 8 -> 1.2, 16 -> 1.7 GB/s)
@@ -86,7 +86,7 @@ def chacha20_xor_into(
 ) raises:
     """XOR n bytes at src with the ChaCha20 keystream starting at block
     `counter` and write them to dst (dst may equal src)."""
-    comptime assert is_little_endian(), "ChaCha20 loads words in host byte order"
+    comptime assert Endian.native() == .little, "ChaCha20 loads words in host byte order"
     if len(key) != 32:
         raise Error("ChaCha20 key must be 32 bytes")
     if len(nonce) != 12:

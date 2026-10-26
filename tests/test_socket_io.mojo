@@ -8,7 +8,7 @@
 
 from std.ffi import external_call
 from sockpair import Pair, send_all as _write, recv_exact as _read_exact
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from crypto.record import (
     record_seal, record_open,
     CIPHER_AES_128_GCM, CTYPE_ALERT, CTYPE_APPLICATION_DATA, CTYPE_HANDSHAKE,
@@ -123,9 +123,9 @@ def test_key_update_not_requested() raises:
     var a = s.recv(100)
     var b = s.recv(100)
     p.close()
-    if String(unsafe_from_utf8=a^) != "before":
+    if String(unsafe_from_utf8=a) != "before":
         raise Error("first record wrong")
-    if String(unsafe_from_utf8=b^) != "after":
+    if String(unsafe_from_utf8=b) != "after":
         raise Error("record after KeyUpdate wrong")
 
 
@@ -137,7 +137,7 @@ def test_key_update_requested() raises:
     _write(p.peer, record_seal(CIPHER_AES_128_GCM, old.key, old.iv, 0, CTYPE_HANDSHAKE, _key_update(1)))
     _write(p.peer, record_seal(CIPHER_AES_128_GCM, new.key, new.iv, 0, CTYPE_APPLICATION_DATA, _bytes("data")))
     var got = s.recv(100)
-    if String(unsafe_from_utf8=got^) != "data":
+    if String(unsafe_from_utf8=got) != "data":
         raise Error("record after KeyUpdate wrong")
     # The client must answer with KeyUpdate(update_not_requested) under its
     # old keys, then switch its own keys.
@@ -212,7 +212,7 @@ def test_read_timeout_is_resumable() raises:
     _write(p.peer, rest)
     var got = s.recv(100)
     p.close()
-    if String(unsafe_from_utf8=got^) != "intact":
+    if String(unsafe_from_utf8=got) != "intact":
         raise Error("record after a timeout was not reassembled")
 
 
@@ -411,7 +411,7 @@ def test_tampered_record_mid_stream() raises:
     _write(p.peer, bad)
     _write(p.peer, record_seal(CIPHER_AES_128_GCM, k.key, k.iv, seq + 1, CTYPE_APPLICATION_DATA, _filled(10, 0xEE)))
     var got = List[UInt8]()
-    var message = String()
+    var message: String
     try:
         while True:
             var chunk = s.recv(65536)

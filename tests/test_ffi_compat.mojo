@@ -14,13 +14,13 @@
 # ============================================================================
 
 from std.ffi import external_call
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from crypto.cert import X509Cert, cert_chain_verify
 from tls.connection import tls_read_some, tls_set_timeout, tls_prepare_fd, tls_tcp_write
 
 
 def _tcp_style_calls(fd: Int32) -> Int:
-    var buf = alloc[UInt8](16)
+    var buf = unsafe_alloc[UInt8](16)
     # tcp.mojo: _send / _recv
     var a = external_call["send", Int](fd, Int(buf), Int(1), Int32(0))
     var b = external_call["recv", Int](fd, Int(buf), Int(1), Int32(0))

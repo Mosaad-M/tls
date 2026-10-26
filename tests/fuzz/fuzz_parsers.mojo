@@ -484,7 +484,7 @@ def run_target(target: String, b: List[UInt8], anchors: List[X509Cert]) raises:
         var ascii = List[UInt8]()
         for i in range(len(b)):
             ascii.append(b[i] & 0x7F)
-        _ = parse_ip_literal(String(unsafe_from_utf8=ascii^))
+        _ = parse_ip_literal(String(unsafe_from_utf8=ascii))
     elif target == "post_handshake":
         var s = TlsSocket(Int32(-1))
         s._keys.server_app_secret = filled(32, 1)
@@ -527,7 +527,7 @@ def open_current(path: String) -> Int32:
     and pwrite are C functions std does not declare (unlike open/write/lseek),
     so declaring them here cannot clash with std or tls."""
     var p = path
-    return external_call["creat", Int32](p.as_c_string_slice().unsafe_ptr(), Int32(420))
+    return external_call["creat", Int32](p.as_c_string_span().ptr(), Int32(420))
 
 
 def save_current(fd: Int32, b: List[UInt8]):
