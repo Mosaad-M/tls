@@ -26,6 +26,7 @@ test-record = "mojo run -I . tests/test_record.mojo"
 test-record-eof = "mojo run -I . -I tests tests/test_record_eof.mojo"
 test-socket-io = "mojo run -I . -I tests tests/test_socket_io.mojo"
 test-ffi-compat = "mojo run -I . tests/test_ffi_compat.mojo"
+test-ca-bundle-env = "mojo run -I . tests/test_ca_bundle_env.mojo"
 test-ct-crypto = "mojo run -I . -I tests tests/test_ct_crypto.mojo"
 test-protocol = "mojo run -I . tests/test_protocol.mojo"
 test-review-fixes = "mojo run -I . -I tests tests/test_review_fixes.mojo"
@@ -71,6 +72,7 @@ format-hash = "mblack crypto/hash.mojo tests/test_hash.mojo"
 # Composite task — excludes test-connection, test-connection12, test-socket
 # (those require local cert files and a running Python TLS server)
 test = { depends-on = [
+    "test-ca-bundle-env",
   "test-hash", "test-hmac", "test-hkdf", "test-hkdf-sha384",
   "test-aes", "test-gcm", "test-chacha20", "test-poly1305",
   "test-bigint", "test-rsa", "test-curve25519", "test-p256", "test-p384",
