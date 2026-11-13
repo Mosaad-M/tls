@@ -3,7 +3,8 @@
 # ============================================================================
 # API:
 #   def load_system_ca_bundle() raises -> List[X509Cert]
-#       Reads /etc/ssl/certs/ca-certificates.crt, parses all CERTIFICATE blocks.
+#       Reads $SSL_CERT_FILE, else the platform's bundle; parses all CERTIFICATE blocks.
+#   def load_ca_bundle(path: String) raises -> List[X509Cert]
 #
 #   struct TlsSocket(Movable):
 #       def __init__(out self, tcp_fd: Int32 = 0)
@@ -26,6 +27,8 @@
 
 from std.ffi import external_call
 from std.sys.info import CompilationTarget
+from std.os import getenv
+from std.os.path import exists
 from crypto.cert import X509Cert, cert_parse
 from crypto.pem import pem_decode
 from crypto.hash import SHA256, SHA384
@@ -121,22 +124,50 @@ def _sock_wrap_hs_msg(msg_type: UInt8, body: List[UInt8]) -> List[UInt8]:
 # load_system_ca_bundle
 # ============================================================================
 
+comptime _LINUX_CA_BUNDLES: List[StaticString] = [
+    "/etc/ssl/certs/ca-certificates.crt",  # Debian, Ubuntu, Arch, Gentoo
+    "/etc/pki/tls/certs/ca-bundle.crt",  # Fedora, RHEL, Amazon Linux
+    "/etc/ssl/ca-bundle.pem",  # openSUSE
+    "/etc/ssl/cert.pem",  # Alpine
+]
+
+
 def load_system_ca_bundle() raises -> List[X509Cert]:
     """Load trusted CA certificates from the system CA bundle.
 
+    `SSL_CERT_FILE`, when set, names the bundle (as for OpenSSL, curl and
+    Python), e.g. a conda environment's `$CONDA_PREFIX/ssl/cacert.pem` or a
+    private CA for a test server. Otherwise:
     macOS: /etc/ssl/cert.pem
-    Linux: /etc/ssl/certs/ca-certificates.crt
+    Linux: the first of the usual distribution paths that exists.
+    """
+    var env = getenv("SSL_CERT_FILE")
+    if env.byte_length() > 0:
+        return load_ca_bundle(env)
+    comptime if CompilationTarget.is_macos():
+        return load_ca_bundle("/etc/ssl/cert.pem")
+    else:
+        comptime for k in range(len(_LINUX_CA_BUNDLES)):
+            comptime candidate = _LINUX_CA_BUNDLES[k]
+            if exists(candidate):
+                return load_ca_bundle(candidate)
+        raise Error(
+            "load_system_ca_bundle: no CA bundle found (set SSL_CERT_FILE)"
+        )
+
+
+def load_ca_bundle(path: String) raises -> List[X509Cert]:
+    """Load the CERTIFICATE blocks of a PEM file as trust anchors.
+
     PEM-decodes all CERTIFICATE blocks, and cert_parses each one.
     Silently skips certs that fail to parse.
     """
-    comptime CA_BUNDLE = "/etc/ssl/cert.pem" if CompilationTarget.is_macos() else "/etc/ssl/certs/ca-certificates.crt"
-    var path = String(CA_BUNDLE)
     var raw: List[UInt8]
     try:
         with open(path, "r") as f:
             raw = f.read_bytes()
     except:
-        raise Error("load_system_ca_bundle: cannot open " + path)
+        raise Error("load_ca_bundle: cannot open " + path)
     # Not validated as UTF-8 (read() would be): only the ASCII PEM blocks
     # matter, and a stray byte in a comment must not lose the whole bundle
     var content = String(unsafe_from_utf8=raw)
