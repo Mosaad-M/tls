@@ -27,7 +27,8 @@ from tls.message import (
     parse_certificate_request13, parse_cert_verify, parse_new_session_ticket,
 )
 from tls.message12 import (
-    parse_server_hello_version, parse_server_hello_tls12_exts, parse_server_key_exchange,
+    parse_server_hello_version, parse_server_hello_tls12_exts, parse_server_hello_tls12_alpn,
+    parse_server_key_exchange,
     parse_certificate_request12, parse_finished_body,
 )
 from tls.connection import tls_handle_incoming_alert, HandshakeReader
@@ -454,6 +455,13 @@ def run_target(target: String, b: List[UInt8], anchors: List[X509Cert]) raises:
     elif target == "server_hello":
         try:
             _ = parse_server_hello_tls12_exts(b)
+        except:
+            pass
+        try:
+            var offered = List[String]()
+            offered.append("h2")
+            offered.append("http/1.1")
+            _ = parse_server_hello_tls12_alpn(b, offered)
         except:
             pass
         _ = parse_server_hello_version(b)

@@ -98,6 +98,16 @@ scenario "TLS 1.2 without extended master secret (server -no_ems)" \
     "New, TLSv1.2, Cipher is;;Extended master secret: no" \
     -- -tls1_2 -no_ems
 
+# ── ALPN (RFC 7301) on TLS 1.2 and 1.3 ──────────────────────────────────────
+scenario "TLS 1.2 ALPN: server selects h2" "New, TLSv1.2, Cipher is;;ALPN: [h2]" \
+    --alpn h2,http/1.1 -- -tls1_2 -alpn h2,http/1.1
+scenario "TLS 1.2 ALPN: server selects http/1.1" "New, TLSv1.2, Cipher is;;ALPN: [http/1.1]" \
+    --alpn h2,http/1.1 -- -tls1_2 -alpn http/1.1
+scenario "TLS 1.2 ALPN: server has none configured" "New, TLSv1.2, Cipher is;;ALPN: []" \
+    --alpn h2,http/1.1 -- -tls1_2
+scenario "TLS 1.3 ALPN: server selects h2" "New, TLSv1.3, Cipher is;;ALPN: [h2]" \
+    --alpn h2,http/1.1 -- -tls1_3 -alpn h2,http/1.1
+
 # ── Security review fixes (1.6.0) ───────────────────────────────────────────
 scenario "TLS 1.3 handshake messages fragmented across records" \
     "New, TLSv1.3, Cipher is" \

@@ -92,6 +92,54 @@ def parse_server_hello_tls12_exts(body: List[UInt8]) raises -> Bool:
     return ems
 
 
+def parse_server_hello_tls12_alpn(body: List[UInt8], offered: List[String]) raises -> String:
+    """The ALPN protocol a TLS 1.2 ServerHello selected (RFC 7301 §3.1), or "".
+
+    The extension carries a ProtocolNameList with exactly one name, and that
+    name must be one the ClientHello offered; anything else is an
+    illegal_parameter (an unsolicited ALPN is unsupported_extension).
+    """
+    var sh = parse_server_hello(body)
+    var ext_bytes = sh.extensions.copy()
+    var proto = String("")
+    var seen = False
+    var off = 0
+    while off + 4 <= len(ext_bytes):
+        var ext_type = _read_u16be(ext_bytes, off)
+        var ext_len  = Int(_read_u16be(ext_bytes, off + 2))
+        off += 4
+        if off + ext_len > len(ext_bytes):
+            raise Error("tls12: ServerHello extension overruns the message (decode_error)")
+        if ext_type == 0x0010:  # application_layer_protocol_negotiation
+            if seen:
+                raise Error("tls12: duplicate ALPN extension (illegal_parameter)")
+            seen = True
+            if len(offered) == 0:
+                raise Error("tls12: ALPN in ServerHello but none offered (unsupported_extension)")
+            # uint16 list length, then one uint8-prefixed name filling it
+            if ext_len < 4 or Int(_read_u16be(ext_bytes, off)) != ext_len - 2:
+                raise Error("tls12: bad ALPN extension (decode_error)")
+            var name_len = Int(ext_bytes[off + 2])
+            if name_len == 0 or name_len != ext_len - 3:
+                raise Error("tls12: ALPN must select exactly one protocol (illegal_parameter)")
+            for k in range(len(offered)):
+                var cand = offered[k].as_bytes()
+                if len(cand) != name_len:
+                    continue
+                var same = True
+                for j in range(name_len):
+                    if cand[j] != ext_bytes[off + 3 + j]:
+                        same = False
+                        break
+                if same:
+                    proto = offered[k]
+                    break
+            if proto.byte_length() == 0:
+                raise Error("tls12: server selected an ALPN protocol that was not offered (illegal_parameter)")
+        off += ext_len
+    return proto
+
+
 def parse_server_hello_version(body: List[UInt8]) raises -> Tuple[UInt16, List[UInt8], List[UInt8], Bool]:
     """Parse a ServerHello body and determine the version; validates it.
 

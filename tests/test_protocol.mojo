@@ -10,7 +10,7 @@ from crypto.prf import tls12_master_secret, tls12_extended_master_secret
 from crypto.hash import sha256, sha384
 from crypto.cert import cert_parse
 from tls.connection12 import _verify_ske_signature
-from tls.message12 import parse_server_hello_tls12_exts
+from tls.message12 import parse_server_hello_tls12_exts, parse_server_hello_tls12_alpn
 from tls.message import (
     build_client_hello, is_hello_retry_request, parse_hello_retry_request,
     hrr_message_hash, GROUP_SECP256R1, GROUP_SECP384R1,
@@ -134,6 +134,63 @@ def test_ems_and_ri_parsing() raises:
         raise Error("EMS detected without the extension")
     if parse_server_hello_tls12_exts(_server_hello12(List[UInt8]())):
         raise Error("EMS detected with no extensions")
+
+
+def _alpn_ext(name: String) -> List[UInt8]:
+    var n = name.as_bytes()
+    var ext: List[UInt8] = [0x00, 0x10, 0x00, UInt8(len(n) + 3), 0x00, UInt8(len(n) + 1), UInt8(len(n))]
+    for i in range(len(n)):
+        ext.append(n[i])
+    return ext^
+
+
+def _offered() -> List[String]:
+    var o = List[String]()
+    o.append("h2")
+    o.append("http/1.1")
+    return o^
+
+
+def _alpn_raises(exts: List[UInt8], offered: List[String]) -> Bool:
+    try:
+        _ = parse_server_hello_tls12_alpn(_server_hello12(exts), offered)
+    except:
+        return True
+    return False
+
+
+def test_tls12_alpn_selected() raises:
+    if parse_server_hello_tls12_alpn(_server_hello12(_alpn_ext("h2")), _offered()) != "h2":
+        raise Error("h2 not returned")
+    if parse_server_hello_tls12_alpn(_server_hello12(_alpn_ext("http/1.1")), _offered()) != "http/1.1":
+        raise Error("http/1.1 not returned")
+    # alongside the other extensions a 1.2 server sends
+    var both: List[UInt8] = [0x00, 0x17, 0x00, 0x00, 0xFF, 0x01, 0x00, 0x01, 0x00]
+    both.extend(_alpn_ext("h2"))
+    if parse_server_hello_tls12_alpn(_server_hello12(both), _offered()) != "h2":
+        raise Error("h2 not returned next to EMS/RI")
+    if parse_server_hello_tls12_alpn(_server_hello12(List[UInt8]()), _offered()) != "":
+        raise Error("no extension must mean no protocol")
+
+
+def test_tls12_alpn_rejected() raises:
+    if not _alpn_raises(_alpn_ext("spdy/3"), _offered()):
+        raise Error("a protocol that was not offered was accepted")
+    if not _alpn_raises(_alpn_ext("h2"), List[String]()):
+        raise Error("an unsolicited ALPN was accepted")
+    var two: List[UInt8] = [0x00, 0x10, 0x00, 0x08, 0x00, 0x06, 0x02, 0x68, 0x32, 0x02, 0x68, 0x32]
+    if not _alpn_raises(two, _offered()):
+        raise Error("two selected protocols were accepted")
+    var empty_name: List[UInt8] = [0x00, 0x10, 0x00, 0x03, 0x00, 0x01, 0x00]
+    if not _alpn_raises(empty_name, _offered()):
+        raise Error("an empty protocol name was accepted")
+    var bad_len: List[UInt8] = [0x00, 0x10, 0x00, 0x05, 0x00, 0x09, 0x02, 0x68, 0x32]
+    if not _alpn_raises(bad_len, _offered()):
+        raise Error("an inconsistent list length was accepted")
+    var dup = _alpn_ext("h2")
+    dup.extend(_alpn_ext("h2"))
+    if not _alpn_raises(dup, _offered()):
+        raise Error("a duplicate ALPN extension was accepted")
 
 
 def test_nonempty_ri_rejected() raises:
@@ -296,6 +353,8 @@ def main() raises:
     run_test[test_master_secret_prf_hash]("TLS 1.2 master secret uses the suite's PRF hash", passed, failed)
     run_test[test_extended_master_secret]("extended master secret (SHA-256/384)", passed, failed)
     run_test[test_ems_and_ri_parsing]("ServerHello EMS / renegotiation_info parsing", passed, failed)
+    run_test[test_tls12_alpn_selected]("TLS 1.2 ALPN: selected protocol returned", passed, failed)
+    run_test[test_tls12_alpn_rejected]("TLS 1.2 ALPN: bad selections rejected", passed, failed)
     run_test[test_nonempty_ri_rejected]("non-empty renegotiation_info rejected", passed, failed)
     run_test[test_ske_p384_key_sha256]("SKE: P-384 key, SHA-256 signature", passed, failed)
     run_test[test_ske_p256_key_sha384]("SKE: P-256 key, SHA-384 signature", passed, failed)

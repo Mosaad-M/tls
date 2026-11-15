@@ -3,7 +3,8 @@
 # ============================================================================
 # API:
 #   def load_system_ca_bundle() raises -> List[X509Cert]
-#       Reads /etc/ssl/certs/ca-certificates.crt, parses all CERTIFICATE blocks.
+#       Reads $SSL_CERT_FILE, else the platform's bundle; parses all CERTIFICATE blocks.
+#   def load_ca_bundle(path: String) raises -> List[X509Cert]
 #
 #   struct TlsSocket(Movable):
 #       def __init__(out self, tcp_fd: Int32 = 0)
@@ -26,6 +27,8 @@
 
 from std.ffi import external_call
 from std.sys.info import CompilationTarget
+from std.os import getenv
+from std.os.path import exists
 from crypto.cert import X509Cert, cert_parse
 from crypto.pem import pem_decode
 from crypto.hash import SHA256, SHA384
@@ -58,7 +61,7 @@ from crypto.handshake import (
     tls13_traffic_keys, tls13_traffic_keys_sha384,
 )
 from tls.message12 import (
-    parse_server_hello_version, check_downgrade_sentinel, parse_server_hello_tls12_exts,
+    parse_server_hello_version, check_downgrade_sentinel, parse_server_hello_tls12_exts, parse_server_hello_tls12_alpn,
 )
 
 comptime _ALERT_UNEXPECTED_MESSAGE : UInt8 = 10
@@ -121,22 +124,50 @@ def _sock_wrap_hs_msg(msg_type: UInt8, body: List[UInt8]) -> List[UInt8]:
 # load_system_ca_bundle
 # ============================================================================
 
+comptime _LINUX_CA_BUNDLES: List[StaticString] = [
+    "/etc/ssl/certs/ca-certificates.crt",  # Debian, Ubuntu, Arch, Gentoo
+    "/etc/pki/tls/certs/ca-bundle.crt",  # Fedora, RHEL, Amazon Linux
+    "/etc/ssl/ca-bundle.pem",  # openSUSE
+    "/etc/ssl/cert.pem",  # Alpine
+]
+
+
 def load_system_ca_bundle() raises -> List[X509Cert]:
     """Load trusted CA certificates from the system CA bundle.
 
+    `SSL_CERT_FILE`, when set, names the bundle (as for OpenSSL, curl and
+    Python), e.g. a conda environment's `$CONDA_PREFIX/ssl/cacert.pem` or a
+    private CA for a test server. Otherwise:
     macOS: /etc/ssl/cert.pem
-    Linux: /etc/ssl/certs/ca-certificates.crt
+    Linux: the first of the usual distribution paths that exists.
+    """
+    var env = getenv("SSL_CERT_FILE")
+    if env.byte_length() > 0:
+        return load_ca_bundle(env)
+    comptime if CompilationTarget.is_macos():
+        return load_ca_bundle("/etc/ssl/cert.pem")
+    else:
+        comptime for k in range(len(_LINUX_CA_BUNDLES)):
+            comptime candidate = _LINUX_CA_BUNDLES[k]
+            if exists(candidate):
+                return load_ca_bundle(candidate)
+        raise Error(
+            "load_system_ca_bundle: no CA bundle found (set SSL_CERT_FILE)"
+        )
+
+
+def load_ca_bundle(path: String) raises -> List[X509Cert]:
+    """Load the CERTIFICATE blocks of a PEM file as trust anchors.
+
     PEM-decodes all CERTIFICATE blocks, and cert_parses each one.
     Silently skips certs that fail to parse.
     """
-    comptime CA_BUNDLE = "/etc/ssl/cert.pem" if CompilationTarget.is_macos() else "/etc/ssl/certs/ca-certificates.crt"
-    var path = String(CA_BUNDLE)
     var raw: List[UInt8]
     try:
         with open(path, "r") as f:
             raw = f.read_bytes()
     except:
-        raise Error("load_system_ca_bundle: cannot open " + path)
+        raise Error("load_ca_bundle: cannot open " + path)
     # Not validated as UTF-8 (read() would be): only the ASCII PEM blocks
     # matter, and a stray byte in a comment must not lose the whole bundle
     var content = String(unsafe_from_utf8=raw)
@@ -171,6 +202,7 @@ struct TlsSocket(Movable):
     var _buf:    List[UInt8] # buffered decrypted application bytes
     var _buf_pos: Int        # bytes of _buf already returned
     var _is12:   Bool        # True if TLS 1.2 was negotiated
+    var _alpn12: String      # ALPN protocol the TLS 1.2 ServerHello selected, "" if none
     var _close_notify: Bool  # True once an authenticated close_notify arrived
     var _rx:     List[UInt8] # raw bytes received but not yet a whole record
     var _rx_pos: Int         # bytes of _rx already handed out as records
@@ -188,6 +220,7 @@ struct TlsSocket(Movable):
         self._buf    = List[UInt8]()
         self._buf_pos = 0
         self._is12   = False
+        self._alpn12 = String("")
         self._close_notify = False
         self._rx     = List[UInt8]()
         self._rx_pos = 0
@@ -208,6 +241,7 @@ struct TlsSocket(Movable):
         self._buf    = take._buf^
         self._buf_pos = take._buf_pos
         self._is12   = take._is12
+        self._alpn12 = take._alpn12^
         self._close_notify = take._close_notify
         self._rx     = take._rx^
         self._rx_pos = take._rx_pos
@@ -330,6 +364,7 @@ struct TlsSocket(Movable):
             # ── TLS 1.2 path ──────────────────────────────────────────────────
             self._check_downgrade(server_random)
             var ems = parse_server_hello_tls12_exts(sh_msg.body)
+            var alpn12 = parse_server_hello_tls12_alpn(sh_msg.body, alpn_protocols)
             var use_sha384 = (cipher_suite == 0xC030 or cipher_suite == 0xC02C)
             try:
                 self._keys12 = tls12_client_handshake(
@@ -338,6 +373,7 @@ struct TlsSocket(Movable):
                     th, th384, use_sha384, ems, reader.buf.copy(),
                 )
                 self._is12 = True
+                self._alpn12 = alpn12^
             except e:
                 self._is12 = False  # reset to safe state on handshake failure
                 raise Error(String(e))
@@ -398,6 +434,7 @@ struct TlsSocket(Movable):
             raise Error("mTLS: requires TLS 1.2; server negotiated TLS 1.3")
         self._check_downgrade(server_random)
         var ems = parse_server_hello_tls12_exts(sh_msg.body)
+        var alpn12 = parse_server_hello_tls12_alpn(sh_msg.body, alpn_protocols)
 
         var use_sha384 = (cipher_suite == 0xC030 or cipher_suite == 0xC02C)
         try:
@@ -408,6 +445,7 @@ struct TlsSocket(Movable):
                 client_cert, client_key, ems, reader.buf.copy(),
             )
             self._is12 = True
+            self._alpn12 = alpn12^
         except e:
             self._is12 = False
             raise Error(String(e))
@@ -978,9 +1016,9 @@ struct TlsSocket(Movable):
 
         Returns the protocol name (e.g. "h2" or "http/1.1") if the server
         echoed an ALPN extension in EncryptedExtensions, or "" if ALPN was
-        not advertised in the ClientHello, not supported by the server, or
-        this is a TLS 1.2 connection (TLS 1.2 ALPN deferred to v1.4.0).
+        not advertised in the ClientHello or not supported by the server. For
+        TLS 1.2 it is the protocol named in the ServerHello's ALPN extension.
         """
         if self._is12:
-            return String("")
+            return self._alpn12
         return self._keys.negotiated_protocol
