@@ -107,10 +107,11 @@ struct TlsSocket(Movable):
     def set_timeout(mut self, seconds: Int) raises     # receive/send timeout; 0 = none
     def close(mut self) raises                         # sends close_notify, closes the fd
 
-    def negotiated_protocol(self) -> String            # ALPN result (TLS 1.3), or ""
+    def negotiated_protocol(self) -> String            # ALPN result (TLS 1.2 and 1.3), or ""
     def session_tickets(self) -> List[SessionTicket]   # tickets received (TLS 1.3)
 
 def load_system_ca_bundle() raises -> List[X509Cert]
+def load_ca_bundle(path: String) raises -> List[X509Cert]   # any PEM file
 ```
 
 ### End of stream
@@ -143,8 +144,11 @@ Sockets from the `tcp` package already have send and receive timeouts (its
 - Writing to a closed connection never raises SIGPIPE, and system calls interrupted by
   a signal (EINTR) are retried.
 
-`load_system_ca_bundle` reads `/etc/ssl/certs/ca-certificates.crt` on Linux and
-`/etc/ssl/cert.pem` on macOS (bundles up to 2 MB). Certificates it cannot parse are
+`load_system_ca_bundle` reads the file named by `$SSL_CERT_FILE` when it is set (a missing
+file raises). Otherwise it reads `/etc/ssl/cert.pem` on macOS and, on Linux, the first of
+`/etc/ssl/certs/ca-certificates.crt` (Debian, Ubuntu), `/etc/pki/tls/certs/ca-bundle.crt`
+(Fedora, RHEL), `/etc/ssl/ca-bundle.pem` (openSUSE) and `/etc/ssl/cert.pem` (Alpine) that
+exists (bundles up to 2 MB). `load_ca_bundle(path)` does the same for any PEM file. Certificates it cannot parse are
 skipped. For your own trust anchors, parse DER certificates with `cert_parse` from
 `crypto.cert`.
 
@@ -156,7 +160,7 @@ skipped. For your own trust anchors, parse DER certificates with `cert_parse` fr
 | Key exchange | X25519; P-256 or P-384 after a HelloRetryRequest | X25519, P-256, P-384 |
 | Server signatures | ECDSA P-256 and P-384, RSA-PSS (SHA-256/384/512) | ECDSA (SHA-256/384, either curve), RSA-PSS and RSA PKCS#1 v1.5 (SHA-256/384/512) |
 | SNI | yes | yes |
-| ALPN | yes | offered; the result is not reported |
+| ALPN | yes | yes |
 | Client certificates | no | P-256 ECDSA |
 
 Not supported: TLS 1.1 and older, CBC or non-ECDHE cipher suites (never offered),
