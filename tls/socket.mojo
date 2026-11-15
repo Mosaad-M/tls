@@ -58,7 +58,7 @@ from crypto.handshake import (
     tls13_traffic_keys, tls13_traffic_keys_sha384,
 )
 from tls.message12 import (
-    parse_server_hello_version, check_downgrade_sentinel, parse_server_hello_tls12_exts,
+    parse_server_hello_version, check_downgrade_sentinel, parse_server_hello_tls12_exts, parse_server_hello_tls12_alpn,
 )
 
 comptime _ALERT_UNEXPECTED_MESSAGE : UInt8 = 10
@@ -171,6 +171,7 @@ struct TlsSocket(Movable):
     var _buf:    List[UInt8] # buffered decrypted application bytes
     var _buf_pos: Int        # bytes of _buf already returned
     var _is12:   Bool        # True if TLS 1.2 was negotiated
+    var _alpn12: String      # ALPN protocol the TLS 1.2 ServerHello selected, "" if none
     var _close_notify: Bool  # True once an authenticated close_notify arrived
     var _rx:     List[UInt8] # raw bytes received but not yet a whole record
     var _rx_pos: Int         # bytes of _rx already handed out as records
@@ -188,6 +189,7 @@ struct TlsSocket(Movable):
         self._buf    = List[UInt8]()
         self._buf_pos = 0
         self._is12   = False
+        self._alpn12 = String("")
         self._close_notify = False
         self._rx     = List[UInt8]()
         self._rx_pos = 0
@@ -208,6 +210,7 @@ struct TlsSocket(Movable):
         self._buf    = take._buf^
         self._buf_pos = take._buf_pos
         self._is12   = take._is12
+        self._alpn12 = take._alpn12^
         self._close_notify = take._close_notify
         self._rx     = take._rx^
         self._rx_pos = take._rx_pos
@@ -330,6 +333,7 @@ struct TlsSocket(Movable):
             # ── TLS 1.2 path ──────────────────────────────────────────────────
             self._check_downgrade(server_random)
             var ems = parse_server_hello_tls12_exts(sh_msg.body)
+            var alpn12 = parse_server_hello_tls12_alpn(sh_msg.body, alpn_protocols)
             var use_sha384 = (cipher_suite == 0xC030 or cipher_suite == 0xC02C)
             try:
                 self._keys12 = tls12_client_handshake(
@@ -338,6 +342,7 @@ struct TlsSocket(Movable):
                     th, th384, use_sha384, ems, reader.buf.copy(),
                 )
                 self._is12 = True
+                self._alpn12 = alpn12^
             except e:
                 self._is12 = False  # reset to safe state on handshake failure
                 raise Error(String(e))
@@ -398,6 +403,7 @@ struct TlsSocket(Movable):
             raise Error("mTLS: requires TLS 1.2; server negotiated TLS 1.3")
         self._check_downgrade(server_random)
         var ems = parse_server_hello_tls12_exts(sh_msg.body)
+        var alpn12 = parse_server_hello_tls12_alpn(sh_msg.body, alpn_protocols)
 
         var use_sha384 = (cipher_suite == 0xC030 or cipher_suite == 0xC02C)
         try:
@@ -408,6 +414,7 @@ struct TlsSocket(Movable):
                 client_cert, client_key, ems, reader.buf.copy(),
             )
             self._is12 = True
+            self._alpn12 = alpn12^
         except e:
             self._is12 = False
             raise Error(String(e))
@@ -978,9 +985,9 @@ struct TlsSocket(Movable):
 
         Returns the protocol name (e.g. "h2" or "http/1.1") if the server
         echoed an ALPN extension in EncryptedExtensions, or "" if ALPN was
-        not advertised in the ClientHello, not supported by the server, or
-        this is a TLS 1.2 connection (TLS 1.2 ALPN deferred to v1.4.0).
+        not advertised in the ClientHello or not supported by the server. For
+        TLS 1.2 it is the protocol named in the ServerHello's ALPN extension.
         """
         if self._is12:
-            return String("")
+            return self._alpn12
         return self._keys.negotiated_protocol

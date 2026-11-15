@@ -113,7 +113,15 @@ def main() raises:
         return
 
     var tls = TlsSocket(_tcp_connect(port))
-    if len(args) >= 5:
+    var alpn_mode = len(args) >= 5 and String(args[3]) == "--alpn"
+    if alpn_mode:
+        # interop_client PORT CA --alpn h2,http/1.1
+        var offered = List[String]()
+        for p in String(args[4]).split(","):
+            offered.append(String(p))
+        tls.connect("localhost", anchors, offered)
+        print("ALPN: [" + tls.negotiated_protocol() + "]")
+    elif len(args) >= 5:
         tls.connect_with_client_cert(
             "localhost", anchors, _unhex(String(args[3])), _unhex(String(args[4]))
         )
