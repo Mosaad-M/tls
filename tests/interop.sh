@@ -133,7 +133,9 @@ CERT="$WORK/rsa.pem" KEY="$WORK/rsa.key" scenario "TLS 1.2 rsa_pss_rsae_sha512 S
 
 # ── Receive path (1.8.0): 32 MiB from s_server -WWW, three receive styles ─────
 # Every byte is checked; the time limits catch quadratic copying (1.7.0's
-# recv_all ran at ~1 MB/s, small reads at ~22 us per message).
+# recv_all ran at ~1 MB/s, small reads at ~22 us per message). A healthy run
+# takes ~1 s (33-39 MB/s on CI), so the limits sit at 5-6x that: a 1 s limit
+# failed a good macOS run at 1.0055 s, while 1 MB/s (32 s) still fails clearly.
 BULK_SIZE=$((32 * 1024 * 1024))
 mkdir -p "$WORK/www"
 python3 -c "
@@ -156,9 +158,9 @@ bulk() {  # bulk <mode> <max seconds>
     fi
     kill "$server" 2>/dev/null; wait "$server" 2>/dev/null
 }
-bulk recv_all 1
-bulk recv 1
-bulk small 2
+bulk recv_all 5
+bulk recv 5
+bulk small 10
 
 # hostile <name> <mode> <expect> [upstream s_server args...]
 # expect: "ok:<page check>" (handshake must succeed) or "fail:<error text>"
