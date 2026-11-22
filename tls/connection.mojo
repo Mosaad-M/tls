@@ -156,19 +156,32 @@ def tls_prepare_fd(fd: Int32):
         one.unsafe_free()
 
 
-def tls_set_timeout(fd: Int32, seconds: Int) raises:
-    """Set SO_RCVTIMEO and SO_SNDTIMEO (whole seconds; 0 = no timeout)."""
-    if seconds < 0:
-        raise Error("tls: timeout must be >= 0 seconds")
+def tls_set_timeout_ms(fd: Int32, ms: Int) raises:
+    """Set SO_RCVTIMEO and SO_SNDTIMEO in milliseconds (0 = no timeout).
+
+    The kernel rounds to its clock tick (a few ms); tv_sec is capped at
+    Int32.MAX so a huge value means "very long", not a wrapped number.
+    """
+    if ms < 0:
+        raise Error("tls: timeout must be >= 0 milliseconds")
     var tv = unsafe_alloc[UInt8](16)  # struct timeval { tv_sec (8), tv_usec (8 incl. padding) }
     for i in range(16):
         tv[unsafe_offset=i] = 0
-    tv.unsafe_bitcast[Int]()[unsafe_offset=0] = seconds
+    var words = tv.unsafe_bitcast[Int]()
+    words[unsafe_offset=0] = min(ms // 1000, Int(Int32.MAX))
+    words[unsafe_offset=1] = (ms % 1000) * 1000
     var rc1 = external_call["setsockopt", Int32](fd, _SOL_SOCKET, _SO_RCVTIMEO, Int(tv), Int32(16))
     var rc2 = external_call["setsockopt", Int32](fd, _SOL_SOCKET, _SO_SNDTIMEO, Int(tv), Int32(16))
     tv.unsafe_free()
     if rc1 != 0 or rc2 != 0:
         raise Error("tls: setsockopt timeout failed (errno=" + String(_errno()) + ")")
+
+
+def tls_set_timeout(fd: Int32, seconds: Int) raises:
+    """Set SO_RCVTIMEO and SO_SNDTIMEO (whole seconds; 0 = no timeout)."""
+    if seconds < 0:
+        raise Error("tls: timeout must be >= 0 seconds")
+    tls_set_timeout_ms(fd, min(seconds, 1_000_000_000) * 1000)
 
 
 def tls_read_into(fd: Int32, addr: Int, max_bytes: Int) raises -> Int:

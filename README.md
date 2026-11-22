@@ -105,6 +105,7 @@ struct TlsSocket(Movable):
                  allow_truncation: Bool = False) raises -> List[UInt8]
     def close_notify_received(self) -> Bool            # authenticated end of stream seen
     def set_timeout(mut self, seconds: Int) raises     # receive/send timeout; 0 = none
+    def set_timeout_ms(mut self, ms: Int) raises       # same, in milliseconds (kernel tick, a few ms)
     def close(mut self) raises                         # sends close_notify, closes the fd
 
     def negotiated_protocol(self) -> String            # ALPN result (TLS 1.2 and 1.3), or ""
@@ -135,6 +136,8 @@ connection. So:
 
 Sockets from the `tcp` package already have send and receive timeouts (its
 `timeout_secs`, 30 s by default); for another file descriptor, call `set_timeout`.
+`set_timeout_ms` does the same in milliseconds (new in 1.12.0): a 200 ms receive timeout
+fires after about 200 ms, and a huge value means "very long" instead of wrapping.
 
 - A receive timeout raises `tls: read timed out`. Nothing is lost: a partly received
   record is kept, so `recv()` can simply be called again.
