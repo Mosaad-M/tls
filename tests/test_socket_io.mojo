@@ -9,6 +9,8 @@
 from std.ffi import external_call
 from sockpair import Pair, send_all as _write, recv_exact as _read_exact
 from std.memory.alloc import unsafe_alloc
+from std.sys.info import CompilationTarget
+from std.time import perf_counter_ns
 from crypto.record import (
     record_seal, record_open,
     CIPHER_AES_128_GCM, CTYPE_ALERT, CTYPE_APPLICATION_DATA, CTYPE_HANDSHAKE,
@@ -230,6 +232,95 @@ def test_timeout_message_not_eof() raises:
     p.close()
     if message.find("timed out") < 0 or message.find("connection closed") >= 0:
         raise Error("timeout error: '" + message + "'")
+
+
+# ── Millisecond timeouts ────────────────────────────────────────────────────
+
+def _kernel_timeout_us(fd: Int32, send: Bool) raises -> Int:
+    var sol = Int32(0xFFFF) if CompilationTarget.is_macos() else Int32(1)
+    var opt: Int32
+    if CompilationTarget.is_macos():
+        opt = Int32(0x1005) if send else Int32(0x1006)
+    else:
+        opt = Int32(21) if send else Int32(20)
+    var tv = unsafe_alloc[UInt8](16)
+    for i in range(16):
+        tv[unsafe_offset=i] = 0
+    var n = unsafe_alloc[Int32](1)
+    n[unsafe_offset=0] = 16
+    var rc = external_call["getsockopt", Int32](fd, sol, opt, Int(tv), Int(n))
+    var w = tv.unsafe_bitcast[Int]()
+    var us = w[unsafe_offset=0] * 1_000_000 + (w[unsafe_offset=1] & 0xFFFFFFFF)
+    tv.unsafe_free()
+    n.unsafe_free()
+    if rc != 0:
+        raise Error("getsockopt failed")
+    return us
+
+
+def test_ms_timeout_reaches_the_kernel() raises:
+    var p = Pair()
+    var s = _sock(p.mine)
+    var bad = String()
+    for ms in [1, 5, 250, 999, 1000, 1001, 1500, 59999, 3_600_000]:
+        s.set_timeout_ms(ms)
+        for send in [False, True]:
+            var got = _kernel_timeout_us(p.mine, send)
+            if got < ms * 1000 or got - ms * 1000 > 20_000:
+                bad = "set_timeout_ms(" + String(ms) + "): kernel holds " + String(got) + " us"
+    # a huge value means "very long", not a wrapped small number
+    s.set_timeout_ms(Int.MAX)
+    if _kernel_timeout_us(p.mine, False) < 1_000_000_000:
+        bad = "huge ms wrapped to " + String(_kernel_timeout_us(p.mine, False)) + " us"
+    # seconds API still reads back whole seconds, and 0 clears
+    s.set_timeout(3)
+    if _kernel_timeout_us(p.mine, False) != 3_000_000:
+        bad = "set_timeout(3) changed meaning"
+    s.set_timeout_ms(0)
+    if _kernel_timeout_us(p.mine, False) != 0:
+        bad = "set_timeout_ms(0) did not clear the timeout"
+    p.close()
+    if bad.byte_length() > 0:
+        raise Error(bad)
+
+
+def test_ms_timeout_fires_in_time_and_is_resumable() raises:
+    var p = Pair()
+    var s = _sock(p.mine)
+    s.set_timeout_ms(200)
+    var old = Keys(_server_secret())
+    var rec = record_seal(CIPHER_AES_128_GCM, old.key, old.iv, 0, CTYPE_APPLICATION_DATA, _bytes("intact"))
+    var first = List[UInt8]()
+    var rest = List[UInt8]()
+    for i in range(len(rec)):
+        if i < 10:
+            first.append(rec[i])
+        else:
+            rest.append(rec[i])
+    _write(p.peer, first)
+    var t0 = perf_counter_ns()
+    _expect_error(s, "read timed out")
+    var ms = Int((perf_counter_ns() - t0) // 1_000_000)
+    _write(p.peer, rest)
+    var got = s.recv(100)
+    p.close()
+    if ms < 150 or ms > 800:
+        raise Error("200 ms timeout fired after " + String(ms) + " ms")
+    if String(unsafe_from_utf8=got) != "intact":
+        raise Error("record after an ms timeout was not reassembled")
+
+
+def test_negative_timeout_is_an_error() raises:
+    var p = Pair()
+    var s = _sock(p.mine)
+    var failed = False
+    try:
+        s.set_timeout_ms(-1)
+    except:
+        failed = True
+    p.close()
+    if not failed:
+        raise Error("set_timeout_ms(-1) was accepted")
 
 
 def test_send_to_closed_peer_raises() raises:
@@ -496,6 +587,9 @@ def main() raises:
     run_test[test_key_update_not_last_in_record]("KeyUpdate not last in its record", passed, failed)
     run_test[test_read_timeout_is_resumable]("read timeout mid-record is resumable", passed, failed)
     run_test[test_timeout_message_not_eof]("timeout is not reported as EOF", passed, failed)
+    run_test[test_ms_timeout_reaches_the_kernel]("ms timeouts reach the kernel (getsockopt), huge value clamps", passed, failed)
+    run_test[test_ms_timeout_fires_in_time_and_is_resumable]("200 ms read timeout fires in 0.15-0.8 s and is resumable", passed, failed)
+    run_test[test_negative_timeout_is_an_error]("negative ms timeout is an error", passed, failed)
     run_test[test_send_to_closed_peer_raises]("send to a closed peer raises (no SIGPIPE)", passed, failed)
     run_test[test_ccs_after_handshake_is_fatal_and_sticky]("CCS after handshake: fatal and sticky", passed, failed)
     run_test[test_forged_record_is_sticky]("forged record: sticky failure + bad_record_mac alert", passed, failed)

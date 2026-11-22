@@ -21,6 +21,7 @@
 #           raises "tls: truncated: ..." unless allow_truncation is True.
 #       def close_notify_received(self) -> Bool
 #       def set_timeout(mut self, seconds: Int) raises
+#       def set_timeout_ms(mut self, ms: Int) raises
 #           Read timeouts raise "tls: read timed out" and can be retried.
 #       def close(mut self) raises
 # ============================================================================
@@ -43,7 +44,7 @@ from crypto.record import (
 )
 from tls.connection import (
     tls13_after_server_hello, tls_cipher_from_suite, TlsKeys,
-    tls_tcp_read, tls_tcp_write, tls_read_into, tls_prepare_fd, tls_set_timeout,
+    tls_tcp_read, tls_tcp_write, tls_read_into, tls_prepare_fd, tls_set_timeout, tls_set_timeout_ms,
     tls_handle_incoming_alert, tls_send_plaintext_alert, tls_ec_keypair, HandshakeReader,
     ALERT_LEVEL_WARNING, ALERT_LEVEL_FATAL, ALERT_CLOSE_NOTIFY,
 )
@@ -480,6 +481,11 @@ struct TlsSocket(Movable):
         tcp package already have timeouts (its timeout_secs).
         """
         tls_set_timeout(self._fd, seconds)
+
+    def set_timeout_ms(mut self, ms: Int) raises:
+        """Like set_timeout, in milliseconds (0 = none). The kernel rounds to
+        its clock tick, a few ms. Same read/write behaviour after a timeout."""
+        tls_set_timeout_ms(self._fd, ms)
 
     def _write_record(mut self, record: List[UInt8]) raises:
         """Write one whole record. A failure part-way through cannot be
