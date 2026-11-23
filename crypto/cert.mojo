@@ -1102,8 +1102,8 @@ def cert_chain_verify(
        expired cross-sign does not break a valid chain.
     3. Verify signatures top-down, so each key used is already trusted.
 
-    Not supported (rejected when marked critical): nameConstraints,
-    policyConstraints, inhibitAnyPolicy.
+    nameConstraints are enforced for DNS and IP names. Not supported (rejected
+    when marked critical): policyConstraints, inhibitAnyPolicy.
     """
     var n = len(chain)
     if n == 0:
