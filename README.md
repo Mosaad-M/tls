@@ -25,7 +25,7 @@ Or clone the repository and build with `-I path/to/tls`. Release history is in
 [CHANGELOG.md](CHANGELOG.md).
 
 Requires Mojo >= 1.2.0 on linux-64 or osx-arm64. CI runs the tests on Mojo 1.2.0 and on
-the newest Mojo release. For Mojo 1.0 or 1.1, use tls 1.9.1.
+the newest Mojo release.
 
 ### Using tls with other code
 

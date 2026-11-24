@@ -8,7 +8,7 @@ Release history for tls. The README describes the current behaviour.
 - 1.11.0: reads the ALPN protocol from a TLS 1.2 ServerHello (`negotiated_protocol()`
   used to report "" there), honours `SSL_CERT_FILE`, tries the other Linux bundle paths,
   and adds `load_ca_bundle(path)`.
-- 1.10.0: builds on Mojo 1.2.0, which is now the floor.
+- 1.10.0: builds on Mojo 1.2.0, which is now the floor. On Mojo 1.0 or 1.1, use 1.9.1.
 - 1.7.0: tls works next to Mojo's standard library (see Using tls with other code in the README). Sockets use `recv` and `send`
   on every platform. The system CA bundle is no longer cut off at 2 MB; larger bundles
   used to lose their last certificates silently.
