@@ -5,8 +5,9 @@ C wrappers. The record layer, both handshakes, X.509 path validation and every
 cryptographic primitive (AES-GCM, ChaCha20-Poly1305, SHA-2, X25519, P-256 and P-384,
 RSA) live in this repository.
 
-Use 1.4.4 or later. Versions before 1.4.3 did not check that a certificate's issuer was a
-CA, so the holder of any publicly trusted certificate could impersonate any host. See
+Do not use versions before 1.4.4. Before 1.4.3, tls did not check that a certificate's
+issuer was a CA, so the holder of any publicly trusted certificate could impersonate any
+host, and 1.4.4 closed truncation and several protocol gaps. See
 [Security status](#security-status).
 
 ## Install
@@ -25,7 +26,8 @@ mojo-pkg install
 mojo build app.mojo $(cat .mojo_flags)
 ```
 
-Or clone the repository and build with `-I path/to/tls`. Release history is in [CHANGELOG.md](CHANGELOG.md).
+Or clone the repository and build with `-I path/to/tls`. Release history is in
+[CHANGELOG.md](CHANGELOG.md).
 
 Requires Mojo >= 1.2.0 on linux-64 or osx-arm64. CI runs the tests on Mojo 1.2.0 and on
 the newest Mojo release. For Mojo 1.0 or 1.1, use tls 1.9.1.
@@ -136,7 +138,7 @@ connection. So:
 
 Sockets from the `tcp` package already have send and receive timeouts (its
 `timeout_secs`, 30 s by default). For another file descriptor, call `set_timeout`.
-`set_timeout_ms` does the same in milliseconds (new in 1.12.0): a 200 ms receive timeout
+`set_timeout_ms` does the same in milliseconds: a 200 ms receive timeout
 fires after about 200 ms, and a huge value means "very long" instead of wrapping.
 
 - A receive timeout raises `tls: read timed out`. Nothing is lost: a partly received
@@ -189,8 +191,7 @@ no option to skip it.
   root. Signatures are verified top-down, and only after the path is anchored.
 - Issuers: must be CAs (basicConstraints `cA`) that may sign certificates (`keyCertSign`
   when keyUsage is present), within their `pathLenConstraint`, with issuer and subject
-  names that chain. An intermediate's extendedKeyUsage must allow serverAuth, and RSA
-  keys must be at least 2048 bits.
+  names that chain. An intermediate's extendedKeyUsage must allow serverAuth.
 - Leaf: must allow server authentication (`serverAuth` when extendedKeyUsage is present)
   and signing (`digitalSignature` when keyUsage is present).
 - Validity: every certificate below the anchor must be within its validity period, and
@@ -204,8 +205,9 @@ no option to skip it.
   least two labels after it (`*.com` matches nothing), and never matches an IP address.
   IP addresses match only iPAddress SANs, and no SNI is sent for them.
 - Algorithms: RSA (PKCS#1 v1.5 and PSS) and ECDSA (P-256, P-384) certificate signatures
-  with SHA-256, SHA-384 or SHA-512. SHA-1 signatures are rejected, and so are
-  unsupported curves, non-minimal DER, trailing data and mismatched signature algorithms.
+  with SHA-256, SHA-384 or SHA-512. RSA keys must be at least 2048 bits. SHA-1
+  signatures are rejected, and so are unsupported curves, non-minimal DER, trailing data
+  and mismatched signature algorithms.
 
 ## Security status
 
@@ -252,8 +254,9 @@ Handshakes with real servers, best of 5 over the network from the same machine:
 | www.debian.org | 35 ms | 32 ms |
 | www.apple.com | 25 ms | 24 ms |
 
-Connecting is bound by network round trips, as it is for OpenSSL, and receiving runs at
-the same speed with about the same CPU time per megabyte.
+Connecting is bound by network round trips, as it is for OpenSSL. In these benchmarks
+receiving runs at the same speed as Python's client, with about the same CPU time per
+megabyte.
 
 ## Layout
 
