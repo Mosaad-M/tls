@@ -9,13 +9,18 @@ Release history for tls. The README describes the current behaviour.
   used to report "" there), honours `SSL_CERT_FILE`, tries the other Linux bundle paths,
   and adds `load_ca_bundle(path)`.
 - 1.10.0: builds on Mojo 1.2.0, which is now the floor. On Mojo 1.0 or 1.1, use 1.9.1.
-- 1.7.0: tls works next to Mojo's standard library (see Using tls with other code in the README). Sockets use `recv` and `send`
-  on every platform. The system CA bundle is no longer cut off at 2 MB; larger bundles
+- 1.7.0: tls works next to Mojo's standard library (see "Using tls with other code" in the
+  README). Before this, a program that used tls and called `open()` failed to compile with
+  "existing function with conflicting signature". Sockets use `recv` and `send` on every
+  platform. The system CA bundle is no longer cut off at 2 MB; larger bundles
   used to lose their last certificates silently.
 
 ## Security fixes by release
 
-- 1.6.0: a certificate with an empty EC public key aborted the process, and any server or
+Use 1.4.4 or later. Before 1.4.3, tls did not check that a certificate's issuer was a CA,
+so the holder of any publicly trusted certificate could impersonate any host.
+
+- 1.6.0: a certificate with an empty EC public key aborted the process (the fuzzer finds it on 1.5.0 within seconds), and any server or
   attacker on the path could send one before authentication. Handshake messages were
   buffered without limit (several GB in seconds); they are now capped at 64 KiB each and
   256 KiB per handshake. Handshake state machines are strict: messages are reassembled

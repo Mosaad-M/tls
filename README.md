@@ -29,15 +29,14 @@ the newest Mojo release.
 
 ### Using tls with other code
 
-A Mojo program may declare each C function with only one signature. Since 1.7.0, tls
-declares none of the C functions that Mojo's standard library declares (file I/O, errno,
-`getenv`, clocks), so it works next to `open()`, `std.os` and `std.time`. Before 1.7.0, a
-program that used tls and called `open()` failed to compile with "existing function with
-conflicting signature". The socket calls (`recv`, `send`, `setsockopt`, `close`) use the
-same signatures as the [tcp](https://github.com/Mosaad-M/tcp) package. If your own code
-calls these C functions, declare them the same way: see `tests/test_ffi_compat.mojo`.
-With tls 1.7.0 or later, use websocket >= 1.2.0, requests >= 1.3.0 and pg >= 1.6.0;
-older releases declare errno access themselves and clash.
+A Mojo program may declare each C function with only one signature. tls declares
+none of the C functions that Mojo's standard library declares (file I/O, errno, `getenv`,
+clocks), so it works next to `open()`, `std.os` and `std.time`. The socket calls (`recv`,
+`send`, `setsockopt`, `close`) use the same signatures as the
+[tcp](https://github.com/Mosaad-M/tcp) package. If your own code calls these C functions,
+declare them the same way: see `tests/test_ffi_compat.mojo`.
+Use websocket >= 1.2.0, requests >= 1.3.0 and pg >= 1.6.0 with it; older releases declare
+errno access themselves and clash.
 
 ## Usage
 
@@ -207,18 +206,12 @@ no option to skip it.
 ## Security status
 
 No external audit has been done. Two internal reviews in October 2026 (the second by
-three independent reviewers) produced findings that were all fixed by 1.6.0. Known
-limits: no certificate revocation checking (OCSP or CRL), no session resumption or 0-RTT,
+three independent reviewers) produced findings that were all fixed. Known limits: no certificate revocation checking (OCSP or CRL), no session resumption or 0-RTT,
 and no client certificates in TLS 1.3.
 
-If you pin an old version, use 1.4.4 or later. Before 1.4.3, tls did not check that a
-certificate's issuer was a CA, so the holder of any publicly trusted certificate could
-impersonate any host, and 1.4.4 closed truncation and several protocol gaps.
-
-Since 1.6.1, every parser that reads bytes from the peer (certificates, handshake
-messages, alerts, record reassembly) is fuzzed on each pull request and nightly; see
-[Development](#development). Run against 1.5.0, the fuzzer finds the empty-EC-point crash
-within seconds. Every fix, by release, is in [CHANGELOG.md](CHANGELOG.md).
+Every parser that reads bytes from the peer (certificates, handshake messages, alerts,
+record reassembly) is fuzzed on each pull request and nightly; see
+[Development](#development). Every fix, by release, is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Performance
 
