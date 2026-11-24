@@ -5,11 +5,6 @@ C wrappers. The record layer, both handshakes, X.509 path validation and every
 cryptographic primitive (AES-GCM, ChaCha20-Poly1305, SHA-2, X25519, P-256 and P-384,
 RSA) live in this repository.
 
-Do not use versions before 1.4.4. Before 1.4.3, tls did not check that a certificate's
-issuer was a CA, so the holder of any publicly trusted certificate could impersonate any
-host, and 1.4.4 closed truncation and several protocol gaps. See
-[Security status](#security-status).
-
 ## Install
 
 With [mojo-pkg](https://github.com/Mosaad-M/mojo-pkg), add the dependency to
@@ -215,6 +210,10 @@ No external audit has been done. Two internal reviews in October 2026 (the secon
 three independent reviewers) produced findings that were all fixed by 1.6.0. Known
 limits: no certificate revocation checking (OCSP or CRL), no session resumption or 0-RTT,
 and no client certificates in TLS 1.3.
+
+If you pin an old version, use 1.4.4 or later. Before 1.4.3, tls did not check that a
+certificate's issuer was a CA, so the holder of any publicly trusted certificate could
+impersonate any host, and 1.4.4 closed truncation and several protocol gaps.
 
 Since 1.6.1, every parser that reads bytes from the peer (certificates, handshake
 messages, alerts, record reassembly) is fuzzed on each pull request and nightly; see
