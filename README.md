@@ -29,14 +29,11 @@ the newest Mojo release.
 
 ### Using tls with other code
 
-A Mojo program may declare each C function with only one signature. tls declares
-none of the C functions that Mojo's standard library declares (file I/O, errno, `getenv`,
-clocks), so it works next to `open()`, `std.os` and `std.time`. The socket calls (`recv`,
-`send`, `setsockopt`, `close`) use the same signatures as the
-[tcp](https://github.com/Mosaad-M/tcp) package. If your own code calls these C functions,
-declare them the same way: see `tests/test_ffi_compat.mojo`.
-Use websocket >= 1.2.0, requests >= 1.3.0 and pg >= 1.6.0 with it; older releases declare
-errno access themselves and clash.
+A Mojo program may declare each C function with only one signature. tls declares none
+of the C functions that Mojo's standard library declares, so it works next to `open()`,
+`std.os` and `std.time`. Its socket calls match tcp's; if your own code calls them, see
+`tests/test_ffi_compat.mojo`. Use websocket >= 1.2.0, requests >= 1.3.0 and pg >= 1.6.0
+with it.
 
 ## Usage
 
@@ -211,89 +208,26 @@ and no client certificates in TLS 1.3.
 
 Every parser that reads bytes from the peer (certificates, handshake messages, alerts,
 record reassembly) is fuzzed on each pull request and nightly; see
-[Development](#development). Every fix, by release, is in [CHANGELOG.md](CHANGELOG.md).
+[CONTRIBUTING.md](CONTRIBUTING.md). Every fix, by release, is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Performance
 
-Measured on an Apple M1 Pro against a local `openssl s_server` (`pixi run bench-io`,
-`pixi run bench-handshake`), with Python's OpenSSL client alongside.
-
-| Throughput (TLS 1.3, AES-256-GCM unless noted) | tls | Python (OpenSSL) |
-|---|---|---|
-| `recv(64 KiB)` loop | 1,230 MB/s | 1,160-1,260 MB/s |
-| `recv_all` | 1,140 MB/s | |
-| `send(16 KiB)` loop | 1,790 MB/s | 1,340 MB/s |
-| `recv_exact(5)` + `recv_exact(59)` | 0.16 us | |
-| AES-256-GCM, 16 KiB, seal / open | 4.8 / 4.5 GB/s | |
-| ChaCha20-Poly1305, 16 KiB, seal / open | 930 / 935 MB/s | |
-| `recv` loop over ChaCha20-Poly1305 | 735-746 MB/s | 695-732 MB/s |
-
-| Handshake | tls | Python (OpenSSL) |
-|---|---|---|
-| ECDSA P-256 cert (TLS 1.3) | 1.1 ms | 0.94 ms |
-| RSA-2048 cert (TLS 1.3) | 1.7 ms | 1.6 ms |
-| RSA-2048 / RSA-4096 verify | 0.08 / 0.32 ms | |
-| P-256 ECDSA verify | 0.24 ms | |
-| P-256 key generation / ECDH / signing | 0.27-0.29 ms | |
-
-Handshakes with real servers, best of 5 over the network from the same machine:
-
-| | tls | Python (OpenSSL) |
-|---|---|---|
-| www.google.com | 40 ms | 40 ms |
-| github.com | 36 ms | 40 ms |
-| www.wikipedia.org | 40 ms | 42 ms |
-| www.debian.org | 35 ms | 32 ms |
-| www.apple.com | 25 ms | 24 ms |
-
-Connecting is bound by network round trips, as it is for OpenSSL. In these benchmarks
-receiving runs at the same speed as Python's client, with about the same CPU time per
-megabyte.
-
-## Layout
-
-```
-crypto/  primitives and X.509
-  aes, gcm, chacha20, poly1305           AEAD ciphers (constant time)
-  aes_hw                                 AES-GCM on AES-NI/PCLMULQDQ or ARMv8 AES/PMULL
-  hash (SHA-256/384/512), sha1, hmac, hkdf, prf (TLS 1.2 PRF)
-  curve25519, p256, p384, ec_ct (constant-time P-256/P-384), rsa, bigint, ed25519 (not used by TLS)
-  asn1, pem, base64, cert                X.509 parsing and path validation
-  random                                 OS randomness (/dev/urandom)
-  record, handshake                      record protection, TLS 1.3 key schedule
-tls/     protocol
-  socket                                 TlsSocket, the public API
-  connection, connection12               TLS 1.3 and 1.2 handshakes
-  message, message12                     handshake message encoding and parsing
-```
+On an Apple M1 Pro against a local `openssl s_server`, tls receives at 1.2 GB/s (level with
+Python's OpenSSL client) and sends at 1.8 GB/s (Python: 1.3 GB/s). A TLS 1.3 handshake takes
+1.1 ms with an ECDSA certificate and 1.7 ms with RSA-2048 (Python: 0.94 and 1.6 ms).
+Handshakes with real sites are bound by network round trips. Tables and methods are in
+[BENCHMARKS.md](BENCHMARKS.md).
 
 ## Development
 
 ```bash
 pixi run test               # unit tests (run in CI on Linux and macOS)
-pixi run test-connection    # TLS 1.3 against a local Python server
-pixi run test-connection12  # TLS 1.2 against a local Python server
-pixi run test-socket        # TlsSocket against a local Python server
 pixi run test-interop       # handshakes against openssl s_server (also run in CI)
-pixi run bench              # primitive benchmarks
-pixi run bench-io           # TLS send/receive throughput against openssl s_server (AES-GCM paths + ChaCha20)
-pixi run bench-handshake    # handshake latency against openssl s_server (ECDSA/RSA, TLS 1.3/1.2) vs Python
-pixi run test-soft-aes      # tests on the software AES-GCM path (also in CI)
 pixi run fuzz 20000 1 2     # fuzz every parser: <inputs per target> <seeds...>
-pixi run ct-check           # dudect-style timing-leak check (manual; noisy)
-mojo run -I . -I <path to tcp> tests/live_sites.mojo   # real sites + badssl.com (network)
 ```
 
-The three local-server tests need certificates: run `bash tests/gen_test_certs.sh` and
-paste the printed CA hex into the test files as the script describes.
-`tests/gen_path_fixtures.sh` and `tests/gen_sha512_fixtures.sh` regenerate the
-certificate fixtures.
-
-The fuzzer (`tests/fuzz/fuzz_parsers.mojo`) mutates valid inputs, structure-aware for
-DER, and feeds them to each parser. Raising is fine; an out-of-bounds read aborts the
-process through Mojo's bounds checks. `pixi run fuzz` saves a crashing input to
-`tests/fuzz/crashers/`. Commit it with the fix, and `pixi run test` replays it from then
-on. CI runs fixed seeds on every pull request and random seeds nightly.
+The other tasks, the test certificates, the fuzzer and the source layout are described in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
