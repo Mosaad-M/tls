@@ -110,35 +110,31 @@ def load_ca_bundle(path: String) raises -> List[X509Cert]   # any PEM file
 
 ### End of stream
 
-TLS marks the end of the data with an encrypted `close_notify` alert. A TCP close alone
-does not prove the stream is complete, because anyone on the network path can close the
-connection. So:
+TLS ends the data with an encrypted `close_notify` alert. A TCP close alone proves
+nothing, because anyone on the network path can close the connection. So:
 
-- `recv_all()` returns only after an authenticated `close_notify`. If TCP closes without
-  one it raises `tls: truncated: connection closed without close_notify`. Pass
-  `allow_truncation=True` to accept that when the protocol carries its own lengths (HTTP
-  `Content-Length` or chunked encoding) or the server skips `close_notify`. In an
-  October 2026 sample of 18 popular sites, Google and YouTube skipped it.
+- `recv_all()` returns only after an authenticated `close_notify`, and otherwise raises
+  `tls: truncated: connection closed without close_notify`. Pass `allow_truncation=True`
+  when the protocol carries its own lengths (HTTP `Content-Length` or chunked encoding) or
+  the server skips `close_notify`; Google and YouTube did in an October 2026 sample of 18
+  popular sites.
 - `recv()` and `recv_exact()` raise `tls: connection closed without close_notify` at a
-  bare TCP close, and `tls: close_notify` after an authenticated one.
+  bare TCP close and `tls: close_notify` after an authenticated one;
   `close_notify_received()` tells the two apart.
-- A record cut off part-way (`tls: truncated record`), a plaintext alert after the
-  handshake, or an alert that fails to decrypt is always an error.
+- A truncated record, a plaintext alert after the handshake, or an alert that fails to
+  decrypt is always an error.
 
 ### Timeouts and errors
 
-Sockets from the `tcp` package already have send and receive timeouts (its
-`timeout_secs`, 30 s by default). For another file descriptor, call `set_timeout`.
-`set_timeout_ms` does the same in milliseconds: a 200 ms receive timeout
-fires after about 200 ms, and a huge value means "very long" instead of wrapping.
+Sockets from the `tcp` package already have send and receive timeouts (30 s by default).
+For another file descriptor, call `set_timeout` or `set_timeout_ms`.
 
-- A receive timeout raises `tls: read timed out`. Nothing is lost: a partly received
-  record is kept, so you can call `recv()` again.
+- A receive timeout raises `tls: read timed out`. A partly received record is kept, so you
+  can call `recv()` again.
 - A send timeout raises `tls: write timed out`, and a peer that has gone away raises
-  `tls: connection closed by peer (write failed)`. Either way part of a record may have
-  been sent, so later sends raise `tls: connection broken by an earlier write failure`.
-- Writing to a closed connection never raises SIGPIPE, and system calls interrupted by a
-  signal (EINTR) are retried.
+  `tls: connection closed by peer (write failed)`. Part of a record may have been sent, so
+  later sends raise `tls: connection broken by an earlier write failure`.
+- Writing to a closed connection never raises SIGPIPE, and EINTR is retried.
 
 ### Trust anchors
 
@@ -163,8 +159,7 @@ connects. Set `SSL_CERT_FILE` to a fuller bundle, such as Mozilla's.
 | Cipher suites | AES-128-GCM, ChaCha20-Poly1305, AES-256-GCM | ECDHE-RSA and ECDHE-ECDSA with AES-128-GCM or AES-256-GCM |
 | Key exchange | X25519; P-256 or P-384 after a HelloRetryRequest | X25519, P-256, P-384 |
 | Server signatures | ECDSA P-256 and P-384, RSA-PSS (SHA-256/384/512) | ECDSA (SHA-256/384, either curve), RSA-PSS and RSA PKCS#1 v1.5 (SHA-256/384/512) |
-| SNI | yes | yes |
-| ALPN | yes | yes |
+| SNI and ALPN | yes | yes |
 | Client certificates | no | P-256 ECDSA |
 
 Not supported: TLS 1.1 and older, CBC and non-ECDHE cipher suites (never offered),
@@ -177,28 +172,21 @@ server's key changes and answers when the server asks it to update its own keys.
 Every handshake validates the server's chain against the trust anchors you pass. There is
 no option to skip it.
 
-- Path: the chain must lead to a trust anchor. A certificate carrying an anchor's key
-  counts as the anchor, which handles roots that a server sends cross-signed by an older
-  root. Signatures are verified top-down, and only after the path is anchored.
-- Issuers: must be CAs (basicConstraints `cA`) that may sign certificates (`keyCertSign`
-  when keyUsage is present), within their `pathLenConstraint`, with issuer and subject
-  names that chain. An intermediate's extendedKeyUsage must allow serverAuth.
-- Leaf: must allow server authentication (`serverAuth` when extendedKeyUsage is present)
-  and signing (`digitalSignature` when keyUsage is present).
-- Validity: every certificate below the anchor must be within its validity period, and
-  malformed dates are rejected. Certificates above the anchor are ignored, so an expired
-  cross-sign does not break a valid chain.
-- Extensions: certificates with critical extensions that are not processed are rejected,
-  including `policyConstraints` and `inhibitAnyPolicy`. `nameConstraints` are enforced for
-  DNS and IP names, and a chain constraining other name forms is rejected.
-- Hostname: matched case-insensitively against subjectAltName dNSName entries, or the
-  subject CN when there are none. A wildcard covers exactly one leftmost label, needs at
-  least two labels after it (`*.com` matches nothing), and never matches an IP address.
-  IP addresses match only iPAddress SANs, and no SNI is sent for them.
-- Algorithms: RSA (PKCS#1 v1.5 and PSS) and ECDSA (P-256, P-384) certificate signatures
-  with SHA-256, SHA-384 or SHA-512. RSA keys must be at least 2048 bits. SHA-1
-  signatures are rejected, and so are unsupported curves, non-minimal DER, trailing data
-  and mismatched signature algorithms.
+- Path: the chain must lead to a trust anchor, with signatures checked top-down after the
+  path is anchored. A certificate carrying an anchor's key counts as the anchor, so roots
+  that a server sends cross-signed by an older root work, and expired certificates above
+  the anchor are ignored.
+- Issuers must be CAs that may sign certificates, within their `pathLenConstraint`, and
+  an intermediate must allow serverAuth. The leaf must allow serverAuth and signing.
+  Every certificate below the anchor must be within its validity period.
+- Critical extensions that are not processed are rejected, including `policyConstraints`
+  and `inhibitAnyPolicy`. `nameConstraints` are enforced for DNS and IP names.
+- Hostname: matched against subjectAltName dNSName entries, or the subject CN when there
+  are none. A wildcard covers one leftmost label and never matches an IP address or
+  `*.com`. IP addresses match only iPAddress SANs, and no SNI is sent for them.
+- Algorithms: RSA (PKCS#1 v1.5 and PSS) and ECDSA (P-256, P-384) with SHA-256, SHA-384 or
+  SHA-512. RSA keys must be at least 2048 bits. SHA-1 signatures, unsupported curves and
+  non-minimal DER are rejected.
 
 ## Security status
 
